@@ -175,7 +175,7 @@ async function createApp() {
       `- If NO time digits or clock are visible anywhere in the photo, set hasVisibleTime=false, time24="", time12="", confidence="low", and explain in summary why no time could be read.\n` +
       `- NEVER invent or guess a time that is not visibly shown in the image.`;
 
-    const modelAttempts = ["gemini-4-hydrogen", "gemini-4-hydrogen", "gemini-3.1-flash-lite"];
+    const modelAttempts = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"];
     let lastErr: unknown = null;
 
     for (let idx = 0; idx < modelAttempts.length; idx++) {
@@ -339,4 +339,4 @@ async function createApp() {
   });
 }
 
-createApp();
+createApp().catch(err => {   console.error("Failed to start server:", err);   process.exit(1); });
