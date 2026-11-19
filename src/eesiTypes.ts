@@ -1,0 +1,1145 @@
+declare global {
+  interface Window {
+    supabase: any;
+    html2canvas: any;
+    [key: string]: any;
+  }
+}
+
+export const SUPABASE_URL = "https://subzomvuyxvzhhlpsyrf.supabase.co";
+export const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_0q5GP8Z8dgltw88xuLdg7g_T56LYzBX";
+export const VAPID_PUBLIC_KEY = "BNT3Q6NqxPufbX4RitFEzRCa3izXGcV3wYgP71J1hZfRmpvleiryAIFmW0rfB_kyaXywdWxJJ5dC2RVV1kER4iM";
+export const PUSH_READY = !!VAPID_PUBLIC_KEY && !VAPID_PUBLIC_KEY.startsWith("REPLACE_");
+export const BLANK_IMG = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+export const ROLE_LABELS: Record<string, string> = {
+  admin: "Administrator",
+  representative: "Selective Representative",
+  technician: "Technician",
+  employee: "Employee",
+};
+
+export const DAILY_VERSES = [
+  { text: "The Lord is my shepherd; I shall not want.", reference: "Psalm 23:1" },
+  { text: "Be strong and courageous. Do not be afraid.", reference: "Joshua 1:9" },
+  { text: "Trust in the Lord with all your heart.", reference: "Proverbs 3:5" },
+  { text: "I can do all things through Christ who strengthens me.", reference: "Philippians 4:13" },
+  { text: "For I know the plans I have for you, declares the Lord.", reference: "Jeremiah 29:11" },
+  { text: "Commit to the Lord whatever you do, and he will establish your plans.", reference: "Proverbs 16:3" },
+  { text: "The Lord is my light and my salvation—whom shall I fear?", reference: "Psalm 27:1" },
+];
+
+export const PMS_ITEMS: Record<"elevator" | "escalator", Array<[string, string[]]>> = {
+  elevator: [
+    ["1. Machine Room & Control", [
+      "Check controller panel indicators and fault log",
+      "Inspect main drive motor / traction machine",
+      "Check brake lining, coil, and plunger action",
+      "Inspect gear oil level and leaks",
+      "Verify governor overspeed switch and rope",
+      "Check machine room temperature & ventilation",
+    ]],
+    ["2. Hoistway & Car Top", [
+      "Inspect main hoist ropes and terminations",
+      "Check car & counterweight guide rail lubrication",
+      "Inspect door operator motor, belt, and rollers",
+      "Verify car top stop switch and inspection box",
+      "Check hoistway limit switches & vane alignment",
+    ]],
+    ["3. Car Interior & Landing Doors", [
+      "Test emergency alarm bell & intercom",
+      "Test emergency car lighting",
+      "Test door safety edge / light curtain",
+      "Inspect landing door locks & gibs at all floors",
+      "Check leveling accuracy at each floor",
+    ]],
+    ["4. Pit & Safety", [
+      "Inspect pit stop switch & pit lighting",
+      "Check buffers (oil level / spring condition)",
+      "Check governor tension sheave & switch",
+      "Clean pit floor and verify dry condition",
+    ]],
+  ],
+  escalator: [
+    ["1. Top & Bottom Machine Rooms", [
+      "Inspect main drive chain, sprockets, and tension",
+      "Check drive motor & brake assembly",
+      "Check gear reducer oil level & noise",
+      "Verify controller fault log & safety circuit",
+      "Clean machine spaces and check pit dryness",
+    ]],
+    ["2. Steps, Combplates & Skirt", [
+      "Inspect step treads, risers, and yellow demarcation",
+      "Check combplate teeth alignment and clearance",
+      "Verify combplate impact safety switch",
+      "Check skirt brush & skirt panel clearances",
+      "Check step chain tension and lubrication",
+    ]],
+    ["3. Handrails & Safety Switches", [
+      "Check handrail speed synchronization with steps",
+      "Inspect handrail belt surface & entry guards",
+      "Test handrail entry safety switches",
+      "Test emergency stop buttons (top & bottom)",
+      "Verify key switch, directional indicators & lighting",
+    ]],
+  ],
+};
+
+export interface AppState {
+  userId: string | null;
+  email: string | null;
+  role: string | null;
+  profile: any;
+  profiles: any[];
+  roles: Record<string, { app_role: string; area?: string; approval_status?: string }>;
+  presence: Record<string, any>;
+  announcements: any[];
+  pending: any[];
+  appNotifications: any[];
+  approvalNotifications: any[];
+  leaveRequests: any[];
+  pmsRecords: any[];
+  recentChatNotices: any[];
+  units: any[];
+  threads: any[];
+  unread: Record<string, number>;
+  previews: Record<string, any>;
+  chatFilter: string;
+  activeThread: string | null;
+  messages: any[];
+  sites: any[];
+  schedules: any[];
+  dtrs: any[];
+  dtrTimeLogs: any[];
+  notes: any[];
+  recs: any[];
+  reports: any[];
+  reportType: string;
+  setupIssue: string;
+  booted: boolean;
+  blockedUsers: string[];
+}
+
+export const state: AppState = {
+  userId: null,
+  email: null,
+  role: null,
+  profile: null,
+  profiles: [],
+  roles: {},
+  presence: {},
+  announcements: [],
+  pending: [],
+  appNotifications: [],
+  approvalNotifications: [],
+  leaveRequests: [],
+  pmsRecords: [],
+  recentChatNotices: [],
+  units: [],
+  threads: [],
+  unread: {},
+  previews: {},
+  chatFilter: "all",
+  activeThread: null,
+  messages: [],
+  sites: [],
+  schedules: [],
+  dtrs: [],
+  dtrTimeLogs: [],
+  notes: [],
+  recs: [],
+  reports: [],
+  reportType: "service",
+  setupIssue: "",
+  booted: false,
+  blockedUsers: [],
+};
+
+export const runtime = {
+  client: null as any,
+  APP_REDIRECT_URL: "",
+  editingReportId: null as string | null,
+  editingExistingUrls: [] as string[],
+  pendingReportFiles: [] as Array<{ file: File; previewUrl: string }>,
+  editingAnnouncementId: null as string | null,
+  editingUnitId: null as string | null,
+  editingMessageId: null as string | null,
+  replyingToMsg: null as any,
+  currentPage: "home",
+  currentNoteTab: "notes" as "notes" | "recs",
+  currentDtrTab: "fill" as "fill" | "time_log" | "preview",
+  timeLogMode: "time_in" as "time_in" | "time_out",
+  unitsRegion: "Luzon",
+  unitsTab: "list" as "list" | "manual",
+  manualUnitId: null as string | null,
+  pmsRegion: "Luzon",
+  pmsUnit: "elevator" as "elevator" | "escalator",
+  pmsSiteId: null as string | null,
+  reportsViewMode: "list" as "list" | "checklist" | "pms-records" | "search",
+  suppressNotificationsUntil: 0,
+  authRun: 0,
+  booting: false,
+  recoveryMode: false,
+  isRegistering: false,
+  dbReady: false,
+  restoringView: false,
+  locationWatchId: null as number | null,
+  lastWeatherLat: 14.5995,
+  lastWeatherLon: 120.9842,
+  liveMapFilter: "all",
+  isOnlineVerified: navigator.onLine,
+  dtrTimeLogsTableMissing: false,
+  dtrCutoffKey: "",
+};
+
+export const hooks: Record<string, (...args: any[]) => any> = {
+  go: () => {},
+  renderAll: () => {},
+  renderHome: () => {},
+  renderMembers: () => {},
+  renderOnline: () => {},
+  renderPending: () => {},
+  renderAdmin: () => {},
+  renderAnnouncements: () => {},
+  renderSchedules: () => {},
+  renderAssigneesPicker: () => {},
+  renderSites: () => {},
+  renderUnits: () => {},
+  renderUnitSiteOptions: () => {},
+  renderDtr: () => {},
+  renderDtrSiteOptions: () => {},
+  renderNotes: () => {},
+  renderRecs: () => {},
+  renderNotices: () => {},
+  renderReports: () => {},
+  renderReportSites: () => {},
+  renderSearchSiteOptions: () => {},
+  renderPmsSiteOptions: () => {},
+  renderPmsChecklist: () => {},
+  renderPmsRecordsFilters: () => {},
+  renderPmsRecords: () => {},
+  renderLeave: () => {},
+  renderLeaveBalances: () => {},
+  renderChatList: () => {},
+  renderMessages: () => {},
+  openThread: async () => {},
+  closeChat: () => {},
+  cancelReply: () => {},
+  updateSendBtn: () => {},
+  isMuted: () => false,
+  threadTitle: () => "Chat",
+  startCallListener: () => {},
+  stopCallListener: () => {},
+  endActiveCall: () => {},
+  hideIncoming: () => {},
+  clearTyping: () => {},
+  updateAccess: () => {},
+  updateAnnouncementTicker: () => {},
+  signOut: async () => {},
+  showAuth: () => {},
+  startLive: () => {},
+  reloadEverything: async () => {},
+  runSearch: () => {},
+  dtrTab: () => {},
+  switchNoteTab: () => {},
+  openPmsChecklist: () => {},
+  saveLastView: () => {},
+  visibleSchedules: () => [],
+  renderTimeLog: () => {},
+  loadTimeLogs: async () => {},
+  applyWatermark: () => {},
+  checkShiftReminders: () => {},
+  autoFillDtrFromSchedule: () => {},
+};
+
+export const $ = (id: string): HTMLElement | null => document.getElementById(id);
+
+export const val = (id: string): string =>
+  (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null)?.value ?? "";
+
+export const setVal = (id: string, v: string): void => {
+  const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null;
+  if (el) el.value = v;
+};
+
+export function esc(v: unknown): string {
+  return String(v ?? "").replace(/[&<>"']/g, c => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[c] || c));
+}
+
+export function isManager(): boolean {
+  return state.role === "admin" || state.role === "representative";
+}
+export function isAdmin(): boolean {
+  return state.role === "admin";
+}
+export function roleLabel(r: string | null | undefined): string {
+  return (r && ROLE_LABELS[r]) || r || "—";
+}
+export function suppressNotifications(ms = 5000): void {
+  runtime.suppressNotificationsUntil = Date.now() + ms;
+}
+export function isWithinSelfActionWindow(): boolean {
+  return Date.now() < runtime.suppressNotificationsUntil;
+}
+
+export function safeUrl(u: unknown): string | null {
+  if (!u || typeof u !== "string") return null;
+  if (/^data:image\/(jpeg|png|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(u)) return u;
+  if (u.startsWith(SUPABASE_URL + "/storage/v1/object/") && !/["'()\\\s<>]/.test(u)) return u;
+  if (/^https:\/\/[a-z0-9.-]+\/storage\/v1\/object\//i.test(u) && !/["'()\\\s<>]/.test(u)) return u;
+  return null;
+}
+
+export function isImageUrl(u: unknown): boolean {
+  return /\.(png|jpe?g|gif|webp|bmp|heic|heif)(\?|#|$)/i.test(String(u || "")) || /^data:image\//i.test(String(u || ""));
+}
+
+let toastTimer: any = null;
+export function toast(t: string): void {
+  const box = $("toastBox");
+  if (!box) return;
+  box.textContent = t;
+  box.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => box.classList.add("hidden"), 2600);
+}
+
+export function checkNetwork(): boolean {
+  if (!navigator.onLine) {
+    $("offlineOverlay")?.classList.remove("hidden");
+    $("offlineBanner")?.classList.remove("hidden");
+    toast("No internet connection. Can't continue offline.");
+    return false;
+  }
+  return true;
+}
+
+export function isImageFile(f: File): boolean {
+  return (f.type || "").startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|heic|heif|avif)$/i.test(f.name || "");
+}
+
+function loadBitmapOrImage(file: File): Promise<{ width: number; height: number; draw: (ctx: CanvasRenderingContext2D, w: number, h: number) => void; close?: () => void }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      resolve({
+        width: img.naturalWidth || img.width || 800,
+        height: img.naturalHeight || img.height || 600,
+        draw: (ctx, w, h) => ctx.drawImage(img, 0, 0, w, h),
+        close: () => URL.revokeObjectURL(url),
+      });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Could not decode image"));
+    };
+    img.src = url;
+  });
+}
+
+export async function prepareImageFile(file: File, maxDim = 1600, quality = 0.86): Promise<File> {
+  if (!isImageFile(file)) return file;
+  if (/\.gif$/i.test(file.name) && file.size <= 4 * 1024 * 1024) return file;
+  try {
+    const loaded = await loadBitmapOrImage(file);
+    try {
+      const scale = Math.min(1, maxDim / Math.max(loaded.width, loaded.height));
+      const w = Math.max(1, Math.round(loaded.width * scale));
+      const h = Math.max(1, Math.round(loaded.height * scale));
+      if (scale === 1 && file.size <= 1.2 * 1024 * 1024 && /^image\/(jpeg|png|webp)$/i.test(file.type)) {
+        return file;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return file;
+      loaded.draw(ctx, w, h);
+      const outType = file.type === "image/png" && file.size < 1.5 * 1024 * 1024 ? "image/png" : "image/jpeg";
+      const blob: Blob | null = await new Promise(res => canvas.toBlob(res, outType, quality));
+      if (!blob) return file;
+      const ext = outType === "image/png" ? ".png" : ".jpg";
+      const baseName = (file.name || "photo").replace(/\.[^.]+$/, "");
+      return new File([blob], baseName + ext, { type: outType, lastModified: Date.now() });
+    } finally {
+      loaded.close?.();
+    }
+  } catch {
+    return file;
+  }
+}
+
+export async function compressImageToDataUrl(file: File, maxW = 800, maxH = 360, quality = 0.85): Promise<string> {
+  try {
+    const loaded = await loadBitmapOrImage(file);
+    try {
+      const scale = Math.min(1, maxW / loaded.width, maxH / loaded.height);
+      const w = Math.max(1, Math.round(loaded.width * scale));
+      const h = Math.max(1, Math.round(loaded.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("No canvas");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, w, h);
+      loaded.draw(ctx, w, h);
+      return canvas.toDataURL("image/jpeg", quality);
+    } finally {
+      loaded.close?.();
+    }
+  } catch {
+    return await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ""));
+      r.onerror = () => reject(new Error("Could not read image"));
+      r.readAsDataURL(file);
+    });
+  }
+}
+
+export function confirmDialog(message: string, title = "Confirm"): Promise<boolean> {
+  return new Promise(resolve => {
+    const overlay = $("confirmOverlay");
+    const msgEl = $("confirmMessage");
+    const titleEl = $("confirmTitle");
+    const okBtn = $("confirmOkBtn");
+    const cancelBtn = $("confirmCancelBtn");
+    if (!overlay || !msgEl || !okBtn || !cancelBtn) {
+      resolve(false);
+      return;
+    }
+    if (titleEl) titleEl.textContent = title;
+    msgEl.textContent = message;
+    overlay.classList.remove("hidden");
+    const cleanup = (result: boolean) => {
+      overlay.classList.add("hidden");
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      overlay.removeEventListener("click", onBackdrop);
+      resolve(result);
+    };
+    const onOk = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    const onBackdrop = (e: Event) => { if (e.target === overlay) cleanup(false); };
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    overlay.addEventListener("click", onBackdrop);
+  });
+}
+
+export function openSheet(html: string): void {
+  const body = $("sheetBody");
+  const sheet = $("sheet");
+  if (body) body.innerHTML = html;
+  if (sheet) sheet.classList.remove("hidden");
+}
+export function closeSheet(): void {
+  const sheet = $("sheet");
+  const body = $("sheetBody");
+  if (sheet) sheet.classList.add("hidden");
+  if (body) body.innerHTML = "";
+}
+export function sheetClose(): string {
+  return '<button class="gray" style="width:100%;margin-top:10px" type="button" data-act="close-sheet">Close</button>';
+}
+export function openPhotoPreview(url: string, label = "Photo", deleteTimeLogId?: string): void {
+  const safe = safeUrl(url);
+  if (!safe) return;
+  openSheet(
+    `<h2>${esc(label)}</h2>` +
+    `<img src="${esc(safe)}" alt="${esc(label)}" style="width:100%;max-height:65vh;object-fit:contain;border-radius:10px;border:1px solid var(--border);background:#000;">` +
+    `<div class="inline-actions" style="margin-top:12px;">` +
+    `<a class="btn" style="text-decoration:none;display:inline-flex;align-items:center;" href="${esc(safe)}" target="_blank" rel="noopener">Open / Download</a>` +
+    (deleteTimeLogId
+      ? `<button class="red" type="button" onclick="closeSheet();deleteTimeLog('${esc(deleteTimeLogId)}')">🗑 Delete Photo</button>`
+      : "") +
+    `<button class="gray" type="button" data-act="close-sheet">Close</button>` +
+    `</div>`
+  );
+}
+
+export function fmtDate(v: unknown): string {
+  if (!v) return "";
+  const d = new Date(String(v));
+  return isNaN(d.getTime()) ? String(v) : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+export function fmtDay(v: unknown): string {
+  if (!v) return "";
+  const d = new Date(String(v) + "T00:00:00");
+  return isNaN(d.getTime()) ? String(v) : d.toLocaleDateString(undefined, { dateStyle: "medium" });
+}
+export function fmtTableDate(v: unknown): string {
+  if (!v) return "";
+  const d = new Date(String(v) + "T00:00:00");
+  return isNaN(d.getTime()) ? String(v) : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+export function fmtClock(v: unknown): string {
+  if (!v) return "";
+  const d = new Date(String(v));
+  return isNaN(d.getTime()) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+export function fmtShort(v: unknown): string {
+  if (!v) return "";
+  const d = new Date(String(v));
+  if (isNaN(d.getTime())) return "";
+  const diff = (Date.now() - d.getTime()) / 86400000;
+  return diff < 1
+    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+export function todayIso(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila" }).format(new Date());
+}
+export function localDateKey(d: Date): string {
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+
+export interface DtrCutoffPeriod {
+  key: string;
+  startDate: string;
+  endDate: string;
+  cycleType: "11-25" | "26-10";
+  label: string;
+}
+
+function formatCutoffShort(iso: string): string {
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return iso;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+export function getDtrCutoffForDate(dateIso?: string): DtrCutoffPeriod {
+  const ref = String(dateIso || "").trim();
+  const match = ref.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const now = new Date();
+  const y = match ? Number(match[1]) : now.getFullYear();
+  const m = match ? Number(match[2]) : now.getMonth() + 1; // 1-12
+  const day = match ? Number(match[3]) : now.getDate();
+
+  let startYear = y;
+  let startMonth = m;
+  let startDay = 11;
+  let endYear = y;
+  let endMonth = m;
+  let endDay = 25;
+  let cycleType: "11-25" | "26-10" = "11-25";
+
+  if (day >= 11 && day <= 25) {
+    startDay = 11;
+    endDay = 25;
+    cycleType = "11-25";
+  } else if (day >= 26) {
+    startDay = 26;
+    endDay = 10;
+    cycleType = "26-10";
+    if (m === 12) {
+      endYear = y + 1;
+      endMonth = 1;
+    } else {
+      endMonth = m + 1;
+    }
+  } else {
+    startDay = 26;
+    endDay = 10;
+    cycleType = "26-10";
+    if (m === 1) {
+      startYear = y - 1;
+      startMonth = 12;
+    } else {
+      startMonth = m - 1;
+    }
+  }
+
+  const startDate = `${startYear}-${String(startMonth).padStart(2, "0")}-${String(startDay).padStart(2, "0")}`;
+  const endDate = `${endYear}-${String(endMonth).padStart(2, "0")}-${String(endDay).padStart(2, "0")}`;
+  return {
+    key: `${startDate}_${endDate}`,
+    startDate,
+    endDate,
+    cycleType,
+    label: `${formatCutoffShort(startDate)} – ${formatCutoffShort(endDate)}, ${endYear} (${cycleType})`,
+  };
+}
+
+export function listAvailableDtrCutoffs(dtrs: any[]): DtrCutoffPeriod[] {
+  const map = new Map<string, DtrCutoffPeriod>();
+  const current = getDtrCutoffForDate(localDateKey(new Date()));
+  map.set(current.key, current);
+
+  // Include previous cutoff right before current
+  const cs = current.startDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (cs) {
+    const prevDay = new Date(Number(cs[1]), Number(cs[2]) - 1, Number(cs[3]) - 1);
+    const prev = getDtrCutoffForDate(localDateKey(prevDay));
+    map.set(prev.key, prev);
+  }
+
+  (dtrs || []).forEach(d => {
+    const wd = String(d?.work_date || "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(wd)) {
+      const p = getDtrCutoffForDate(wd);
+      if (!map.has(p.key)) map.set(p.key, p);
+    }
+  });
+
+  return [...map.values()].sort((a, b) => b.startDate.localeCompare(a.startDate));
+}
+
+export function sortDtrEntriesAscending(rows: any[]): any[] {
+  return [...(rows || [])].sort((a, b) => {
+    const dCmp = String(a?.work_date || "").localeCompare(String(b?.work_date || ""));
+    if (dCmp !== 0) return dCmp;
+    const tCmp = String(a?.time_in || "").localeCompare(String(b?.time_in || ""));
+    if (tCmp !== 0) return tCmp;
+    return String(a?.created_at || "").localeCompare(String(b?.created_at || ""));
+  });
+}
+
+export function filterDtrRowsByCutoff(rows: any[], cutoffKey?: string): { period: DtrCutoffPeriod | null; rows: any[] } {
+  const sorted = sortDtrEntriesAscending(rows);
+  if (cutoffKey === "all") {
+    return { period: null, rows: sorted };
+  }
+  const key = cutoffKey || getDtrCutoffForDate(localDateKey(new Date())).key;
+  const parts = key.split("_");
+  if (parts.length !== 2) {
+    const cur = getDtrCutoffForDate(localDateKey(new Date()));
+    return {
+      period: cur,
+      rows: sorted.filter(d => String(d?.work_date || "") >= cur.startDate && String(d?.work_date || "") <= cur.endDate),
+    };
+  }
+  const [startDate, endDate] = parts;
+  const period = getDtrCutoffForDate(startDate);
+  return {
+    period,
+    rows: sorted.filter(d => String(d?.work_date || "") >= startDate && String(d?.work_date || "") <= endDate),
+  };
+}
+
+export function calculateDtrHours(timeIn: string, timeOut: string, isApproved: boolean): number {
+  if (!timeIn || !timeOut) return 0;
+  const p = (t: string) => { const x = String(t).split(":").map(Number); return (x[0] || 0) * 60 + (x[1] || 0); };
+  let mins = p(timeOut) - p(timeIn);
+  if (mins < 0) mins += 1440;
+  const standardMins = 9 * 60;
+  if (isApproved) return mins / 60;
+  return (mins > standardMins ? standardMins : mins) / 60;
+}
+export function calculateOtMinutes(timeIn: string, timeOut: string): number {
+  if (!timeIn || !timeOut) return 0;
+  const p = (t: string) => { const x = String(t).split(":").map(Number); return (x[0] || 0) * 60 + (x[1] || 0); };
+  let mins = p(timeOut) - p(timeIn);
+  if (mins < 0) mins += 1440;
+  return Math.max(0, mins - 9 * 60);
+}
+
+export function profileOf(id: string | null | undefined): any {
+  if (!id) return null;
+  return state.profiles.find(p => String(p.user_id) === String(id)) || null;
+}
+export function profileName(id: string | null | undefined): string {
+  const p = profileOf(id);
+  return p && p.full_name ? p.full_name : "Unknown member";
+}
+export function face(p: any): string {
+  const src = safeUrl(p?.avatar_url);
+  const initial = esc(((p?.full_name || "?")[0] || "?").toUpperCase());
+  return src ? `<img class="avatar" src="${esc(src)}" alt="">` : `<span class="avatar initial">${initial}</span>`;
+}
+export function avatarHtml(userId: string | null | undefined, label?: string): string {
+  const p = profileOf(userId);
+  const av = safeUrl(p?.avatar_url);
+  const name = label || p?.full_name || "?";
+  const init = esc((name.trim()[0] || "?").toUpperCase());
+  if (av) return `<img class="avatar" src="${esc(av)}" alt="${esc(name)}">`;
+  return `<span class="avatar initial">${init}</span>`;
+}
+export function bigFace(p: any, label?: string): string {
+  const name = label || p?.full_name || "?";
+  const av = safeUrl(p?.avatar_url);
+  const init = esc((name.trim()[0] || "?").toUpperCase());
+  return av
+    ? `<img class="big-av" src="${esc(av)}" alt="${esc(name)}">`
+    : `<div class="big-av big-init">${init}</div>`;
+}
+
+export function setLive(ok: boolean): void {
+  const dot = $("liveDot");
+  if (dot) {
+    dot.dataset.live = ok ? "1" : "0";
+    dot.title = ok ? "Live sync on" : "Live sync offline — check connection";
+  }
+  runtime.dbReady = ok;
+}
+
+export function setupError(message: string, error: any): void {
+  console.error(message, error);
+  const msg = error && error.message ? error.message : String(error || "");
+  if (/does not exist|schema cache|could not find the table|relation/i.test(msg)) {
+    state.setupIssue = msg;
+    $("setupWarn")?.classList.remove("hidden");
+    const warnText = $("setupWarnText");
+    if (warnText) warnText.textContent = "Database notice: " + msg;
+  }
+}
+
+export async function deleteStorageFile(bucket: string, publicUrl: string): Promise<boolean> {
+  if (!publicUrl || typeof publicUrl !== "string" || !runtime.client) return false;
+  const prefix = SUPABASE_URL + "/storage/v1/object/public/" + bucket + "/";
+  if (!publicUrl.startsWith(prefix)) return false;
+  const path = decodeURIComponent(publicUrl.slice(prefix.length).split("?")[0]);
+  if (!path || path.includes("..")) return false;
+  try {
+    const { error } = await runtime.client.storage.from(bucket).remove([path]);
+    if (error) { console.warn("Storage cleanup failed:", error.message); return false; }
+    return true;
+  } catch (err) {
+    console.warn("Storage cleanup threw:", err);
+    return false;
+  }
+}
+
+export function extractReportPhotoUrls(details: string | null | undefined): string[] {
+  if (!details) return [];
+  const parts = String(details).split("\n\nPhotos:\n");
+  if (parts.length < 2) return [];
+  return parts[1].split("\n").map(s => s.trim()).filter(Boolean);
+}
+export function stripReportPhotos(details: string | null | undefined): string {
+  if (!details) return "";
+  return parseReportUnit(String(details).split("\n\nPhotos:\n")[0]).cleanDetails;
+}
+
+/* ==================== SIGNATURE STROKE-ONLY EXTRACTION ==================== */
+export async function extractSignatureStrokeOnly(file: File): Promise<string> {
+  const loaded = await loadBitmapOrImage(file);
+  try {
+    const maxW = 900;
+    const maxH = 380;
+    const scale = Math.min(1, maxW / loaded.width, maxH / loaded.height);
+    const w = Math.max(1, Math.round(loaded.width * scale));
+    const h = Math.max(1, Math.round(loaded.height * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) throw new Error("Canvas context unavailable");
+    loaded.draw(ctx, w, h);
+
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const d = imgData.data;
+
+    // Sample paper background luminance from edges + overall high-percentile brightness
+    let lumSum = 0;
+    let lumCount = 0;
+    const samples: number[] = [];
+    for (let y = 0; y < h; y += 2) {
+      for (let x = 0; x < w; x += 2) {
+        const idx = (y * w + x) * 4;
+        if (d[idx + 3] < 40) continue;
+        const l = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
+        samples.push(l);
+        if (x < 8 || x > w - 9 || y < 8 || y > h - 9) {
+          lumSum += l;
+          lumCount++;
+        }
+      }
+    }
+    samples.sort((a, b) => a - b);
+    const p80 = samples.length ? samples[Math.floor(samples.length * 0.8)] : 225;
+    const edgeAvg = lumCount ? lumSum / lumCount : p80;
+    const bgLum = Math.max(125, Math.min(255, Math.round(edgeAvg * 0.5 + p80 * 0.5)));
+    const cutoff = Math.max(70, bgLum - 34);
+    const softBand = 24;
+
+    let minX = w, minY = h, maxX = -1, maxY = -1;
+    let strokePixels = 0;
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const origA = d[i + 3];
+        if (origA < 25) {
+          d[i + 3] = 0;
+          continue;
+        }
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+        if (lum >= cutoff) {
+          d[i + 3] = 0;
+        } else {
+          // Pure dark crisp stroke with smooth anti-aliased alpha
+          const strength = Math.min(1, (cutoff - lum) / softBand);
+          const alpha = Math.round(Math.min(255, strength * 255 * (origA / 255)));
+          if (alpha < 20) {
+            d[i + 3] = 0;
+          } else {
+            // Keep deep charcoal/black stroke so it looks clean on white DTR sheet
+            d[i] = Math.min(35, Math.round(r * 0.25));
+            d[i + 1] = Math.min(35, Math.round(g * 0.25));
+            d[i + 2] = Math.min(45, Math.round(b * 0.25));
+            d[i + 3] = alpha;
+            strokePixels++;
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+
+    // If image already had transparent background & sparse strokes or threshold cropped all, fallback cleanly
+    if (strokePixels < 15 || maxX < minX || maxY < minY) {
+      return canvas.toDataURL("image/png");
+    }
+
+    // Tight crop around extracted signature strokes with neat padding
+    const pad = 10;
+    const cx = Math.max(0, minX - pad);
+    const cy = Math.max(0, minY - pad);
+    const cw = Math.min(w - cx, maxX - minX + 1 + pad * 2);
+    const ch = Math.min(h - cy, maxY - minY + 1 + pad * 2);
+    const out = document.createElement("canvas");
+    out.width = Math.max(1, cw);
+    out.height = Math.max(1, ch);
+    const octx = out.getContext("2d");
+    if (!octx) return canvas.toDataURL("image/png");
+    octx.drawImage(canvas, cx, cy, cw, ch, 0, 0, cw, ch);
+    return out.toDataURL("image/png");
+  } finally {
+    loaded.close?.();
+  }
+}
+
+/* ==================== CONNECTED METADATA HELPERS ==================== */
+export function parseReportUnit(details: string | null | undefined): { unitId: string; unitName: string; cleanDetails: string } {
+  const raw = String(details || "");
+  const m = raw.match(/^\[UNIT:\s*([^\]|]+?)(?:\|([^\]]*))?\]\s*\n?/);
+  if (!m) return { unitId: "", unitName: "", cleanDetails: raw };
+  return {
+    unitName: m[1].trim(),
+    unitId: (m[2] || "").trim(),
+    cleanDetails: raw.slice(m[0].length),
+  };
+}
+
+export function buildReportDetailsWithUnit(unitId: string, unitName: string, cleanDetails: string): string {
+  const clean = String(cleanDetails || "").trim();
+  const uName = String(unitName || "").trim();
+  const uId = String(unitId || "").trim();
+  if (!uName && !uId) return clean;
+  const tag = `[UNIT: ${uName || "Unit"}${uId ? "|" + uId : ""}]`;
+  return clean ? `${tag}\n${clean}` : tag;
+}
+
+export function isMissingTableError(error: any): boolean {
+  const code = String(error?.code || "");
+  const msg = String(error?.message || "");
+  return code === "PGRST205" || code === "42P01" || /schema cache|could not find the table|does not exist/i.test(msg);
+}
+
+export interface TimeLogNoticeMeta {
+  user_id: string | null;
+  sender_name: string;
+  mode: "time_in" | "time_out";
+  work_date: string;
+  time_24?: string | null;
+  time_12?: string | null;
+  location?: string | null;
+  unit?: string | null;
+  note?: string | null;
+  ai_summary?: string | null;
+  image_url?: string | null;
+  dtr_entry_id?: string | null;
+}
+
+export function buildTimeLogAppNoticeBody(displayBody: string, meta: TimeLogNoticeMeta): string {
+  const clean = String(displayBody || "").trim();
+  return `${clean}\n[[TIME_LOG_META:${JSON.stringify(meta)}]]`;
+}
+
+export function stripTimeLogMeta(body: string | null | undefined): string {
+  return String(body || "").replace(/\s*\[\[TIME_LOG_META:[\s\S]*?\]\]/g, "").trim();
+}
+
+export function parseTimeLogFromAppNotice(n: any): any | null {
+  const raw = String(n?.body || "");
+  const match = raw.match(/\[\[TIME_LOG_META:([\s\S]*?)\]\]/);
+  if (!match) return null;
+  try {
+    const meta = JSON.parse(match[1]);
+    return {
+      id: `notice:${n.id}`,
+      app_notification_id: n.id,
+      user_id: meta.user_id || "",
+      sender_name: meta.sender_name || "",
+      mode: meta.mode === "time_out" ? "time_out" : "time_in",
+      work_date: meta.work_date || "",
+      time_24: meta.time_24 || null,
+      time_12: meta.time_12 || null,
+      location: meta.location || null,
+      unit: meta.unit || null,
+      note: meta.note || null,
+      ai_summary: meta.ai_summary || null,
+      image_url: meta.image_url || null,
+      dtr_entry_id: meta.dtr_entry_id || null,
+      created_at: n.created_at || new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function parseRecMeta(reason: string | null | undefined): {
+  siteUnit: string;
+  assignedNames: string[];
+  cleanReason: string;
+} {
+  let text = String(reason || "");
+  let siteUnit = "";
+  let assignedNames: string[] = [];
+
+  const unitMatch = text.match(/^\[UNIT:\s*([^\]]+)\]\s*\n?/);
+  if (unitMatch) {
+    siteUnit = unitMatch[1].trim();
+    text = text.slice(unitMatch[0].length);
+  }
+  const assignMatch = text.match(/^\[ASSIGNED:\s*([^\]]+)\]\s*\n?/);
+  if (assignMatch) {
+    assignedNames = assignMatch[1].split(",").map(s => s.trim()).filter(Boolean);
+    text = text.slice(assignMatch[0].length);
+  }
+  return { siteUnit, assignedNames, cleanReason: text };
+}
+
+export function buildRecReasonWithMeta(siteUnit: string, assignedNames: string[], cleanReason: string): string {
+  const lines: string[] = [];
+  if (siteUnit.trim()) lines.push(`[UNIT: ${siteUnit.trim()}]`);
+  if (assignedNames.length) lines.push(`[ASSIGNED: ${assignedNames.join(", ")}]`);
+  if (cleanReason.trim()) lines.push(cleanReason.trim());
+  return lines.join("\n");
+}
+
+export function canCommentOnRec(rec: any): boolean {
+  if (!state.userId || !rec) return false;
+  // Admin & Selective Representative can comment
+  if (state.role === "admin" || state.role === "representative") return true;
+  // Uploader can comment
+  if (String(rec.user_id) === String(state.userId)) return true;
+  // Mentioned / Assigned personnel can comment
+  const myName = (state.profile?.full_name || "").trim().toLowerCase();
+  const myEmail = (state.email || "").trim().toLowerCase();
+  if (!myName && !myEmail) return false;
+  const { assignedNames, cleanReason } = parseRecMeta(rec.reason);
+  if (myName && assignedNames.some(n => n.toLowerCase() === myName)) return true;
+  const fullReason = String(rec.reason || "") + " " + cleanReason;
+  if (myName) {
+    const escaped = myName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`@${escaped}\\b`, "i").test(fullReason)) return true;
+    // Also match if first+last or exact name appears in [ASSIGNED: ...]
+    if (new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i").test(assignedNames.join(", "))) return true;
+  }
+  if (myEmail && fullReason.toLowerCase().includes(myEmail)) return true;
+  return false;
+}
+
+export function parseUnitManualMeta(notes: string | null | undefined): {
+  cleanNotes: string;
+  manualUrl: string;
+  manualText: string;
+} {
+  let text = String(notes || "");
+  let manualUrl = "";
+  let manualText = "";
+
+  const urlMatch = text.match(/\[MANUAL_URL:\s*([^\]]+)\]/);
+  if (urlMatch) {
+    manualUrl = urlMatch[1].trim();
+    text = text.replace(urlMatch[0], "").trim();
+  }
+  const textMatch = text.match(/\[MANUAL_TEXT:\s*([\s\S]*?)\s*\[\/MANUAL_TEXT\]/);
+  if (textMatch) {
+    manualText = textMatch[1].trim();
+    text = text.replace(textMatch[0], "").trim();
+  }
+  return { cleanNotes: text.trim(), manualUrl, manualText };
+}
+
+export function buildUnitNotesWithManual(cleanNotes: string, manualUrl: string, manualText: string): string {
+  const parts: string[] = [];
+  if (cleanNotes.trim()) parts.push(cleanNotes.trim());
+  if (manualUrl.trim()) parts.push(`[MANUAL_URL: ${manualUrl.trim()}]`);
+  if (manualText.trim()) parts.push(`[MANUAL_TEXT:\n${manualText.trim()}\n[/MANUAL_TEXT]`);
+  return parts.join("\n\n");
+}
+
+export const UNIT_MANUAL_DEFAULTS: Record<string, { title: string; sections: Array<{ heading: string; steps: string[] }> }> = {
+  elevator: {
+    title: "Passenger / Service Elevator Standard Operations & PMS Manual",
+    sections: [
+      {
+        heading: "1. Lockout / Tagout (LOTO) & Pre-Service Safety",
+        steps: [
+          "Place warning barricades and 'Unit Under Maintenance' signage at Ground and affected landings.",
+          "Switch main breaker/disconnect OFF and apply personal padlock & LOTO tag before entering hoistway or pit.",
+          "Verify zero voltage using a calibrated multimeter and confirm car top/pit stop switches engage properly.",
+        ],
+      },
+      {
+        heading: "2. Machine Room, Brake & Traction Inspection",
+        steps: [
+          "Check controller fault logs, power supply voltage balance, and thermal fan operation.",
+          "Inspect traction sheave grooves, hoist ropes for broken wires/rust, and check brake shoe clearance & coil action.",
+          "Check gear reducer oil sight glass (if geared) and ensure machine room temperature stays below 40°C.",
+        ],
+      },
+      {
+        heading: "3. Hoistway, Doors, Safety Gear & Pit",
+        steps: [
+          "Clean car top, verify door operator belt tension, rollers, and door safety light curtain sensitivity.",
+          "Test landing door interlock contacts, emergency alarm bell, intercom, and emergency car lighting.",
+          "Keep pit dry and clean; verify oil buffer levels, governor tension switch, and pit stop switch.",
+        ],
+      },
+    ],
+  },
+  escalator: {
+    title: "Escalator Standard Operations & PMS Manual",
+    sections: [
+      {
+        heading: "1. Barricading & Power Isolation",
+        steps: [
+          "Install safety barricades at both upper and lower landings before opening floor access plates.",
+          "Engage emergency stop button and turn main disconnect OFF with LOTO lock before accessing drive pit.",
+        ],
+      },
+      {
+        heading: "2. Drive Chain, Steps & Combplates",
+        steps: [
+          "Inspect main drive chain tension, sprocket wear, brake stopping distance, and gear reducer oil level.",
+          "Check step treads, risers, yellow demarcation lines, step chain tension, and combplate teeth clearance.",
+          "Test combplate impact switches, broken step chain switches, and skirt panel deflection switches.",
+        ],
+      },
+      {
+        heading: "3. Handrails & Operational Checks",
+        steps: [
+          "Verify handrail speed synchronization with step speed and inspect handrail entry finger guards.",
+          "Test top and bottom Emergency Stop buttons, key start switches, and landing lighting before reopening.",
+        ],
+      },
+    ],
+  },
+  "moving-walkway": {
+    title: "Moving Walkway Standard Operations & PMS Manual",
+    sections: [
+      {
+        heading: "1. Safety Isolation & Access",
+        steps: [
+          "Place landing barriers at entry and exit zones and isolate main electrical supply via LOTO.",
+        ],
+      },
+      {
+        heading: "2. Pallets, Combplates & Handrails",
+        steps: [
+          "Inspect pallet surface alignment, combplate tooth clearance, handrail synchronization, and entry switches.",
+          "Check drive motor, brake response, pallet chain lubrication, and pit cleanliness.",
+        ],
+      },
+    ],
+  },
+  dumbwaiter: {
+    title: "Dumbwaiter Standard Operations & PMS Manual",
+    sections: [
+      {
+        heading: "1. Interlocks & Hoistway Check",
+        steps: [
+          "Isolate power before servicing hoistway; never allow personnel inside the dumbwaiter car.",
+          "Test every landing gate interlock, overload switch, call/send pushbuttons, and slack-rope/limit switches.",
+        ],
+      },
+    ],
+  },
+};
+
+/* ==================== LEAVE BALANCE HELPERS ==================== */
+export function leaveDaysCount(a: string, b: string): number {
+  if (!a || !b) return 0;
+  const start = new Date(a + "T00:00:00");
+  const end = new Date(b + "T00:00:00");
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || end < start) return 0;
+  return Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
+}
+
+export function getUserLeaveBalances(userId: string) {
+  const year = String(new Date().getFullYear());
+  const approved = (state.leaveRequests || []).filter(
+    r => String(r.user_id) === String(userId) && r.status === "approved" && String(r.start_date || "").startsWith(year)
+  );
+  const quotas: Record<"sick" | "emergency" | "vacation", number> = { sick: 15, emergency: 5, vacation: 15 };
+  const result = (["sick", "emergency", "vacation"] as const).map(type => {
+    const used = approved
+      .filter(r => r.leave_type === type)
+      .reduce((s, r) => s + (r.calendar_days || leaveDaysCount(r.start_date, r.end_date) || r.workdays || 0), 0);
+    const total = quotas[type];
+    return {
+      type,
+      label: type[0].toUpperCase() + type.slice(1) + " Leave",
+      total,
+      used,
+      left: Math.max(0, total - used),
+    };
+  });
+  return { year, items: result };
+}
+
+export function renderUserLeaveBalanceHtml(userId: string): string {
+  const { year, items } = getUserLeaveBalances(userId);
+  return (
+    `<div class="muted" style="font-size:11px;margin-bottom:6px;">Calendar Year ${esc(year)}</div>` +
+    items
+      .map(
+        it =>
+          `<div class="pv-row"><span>${esc(it.label)}</span><span><b>${it.left}</b> / ${it.total} left (${it.used} used)</span></div>`
+      )
+      .join("")
+  );
+}
+
+/* ==================== CHAT DELETE FOR ME STORAGE ==================== */
+function deletedForMeKey(): string {
+  return "eesi-msg-deleted-me:" + (state.userId || "anon");
+}
+export function getDeletedForMeSet(): Set<string> {
+  try {
+    const raw = localStorage.getItem(deletedForMeKey());
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(arr) ? arr.map(String) : []);
+  } catch {
+    return new Set();
+  }
+}
+export function markDeletedForMe(msgId: string): void {
+  const set = getDeletedForMeSet();
+  set.add(String(msgId));
+  const arr = [...set].slice(-1000);
+  try {
+    localStorage.setItem(deletedForMeKey(), JSON.stringify(arr));
+  } catch {}
+}
+

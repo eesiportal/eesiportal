@@ -1,0 +1,1601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#060e1f">
+<title>EESI Elevators</title>
+<meta name="description" content="EESI Elevators operations console with reports, DTR half-sheet export, scheduling, PMS checklists, live GPS map, and realtime chat.">
+<meta property="og:title" content="EESI Elevators">
+<meta property="og:description" content="EESI Elevators operations console with reports, DTR half-sheet export, scheduling, PMS checklists, live GPS map, and realtime chat.">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:ital,wght@0,400;0,600;0,700;1,400&family=Dancing+Script:wght@500;700&family=Inter:wght@300;400;500;600;700;800&family=Montserrat:ital,wght@0,400;0,600;0,700;1,400&family=Orbitron:wght@400;500;700;900&family=Pacifico&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Poppins:ital,wght@0,300;0,400;0,600;0,700;1,400&family=Rajdhani:wght@400;500;600;700&family=Roboto+Mono:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="EESI Ops">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{
+  --cyan:#2f8cff;
+  --pink:#5aa9ff;
+  --violet:#1e6cf2;
+  --gold:#f5a623;
+  --ember:#f59e0b;
+  --void:#060e1f;
+  --void-2:#0a1730;
+  --panel:rgba(12,27,56,.92);
+  --panel-2:rgba(9,21,44,.96);
+  --border:rgba(47,140,255,.28);
+  --border-hot:rgba(47,140,255,.7);
+  --text:#e8f0ff;
+  --muted:#8ea6cc;
+  --red:#ef4444;
+  --green:#22c55e;
+  --amber:#f5a623;
+  --blue:#2f8cff;
+  --navy:#0a1a36;
+  --sh:0 4px 14px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+html,body{height:100%;overflow-x:hidden;-webkit-tap-highlight-color:transparent;overscroll-behavior:none;scroll-behavior:smooth;max-width:100vw}
+body{
+  margin:0;
+  padding-top:env(safe-area-inset-top);
+  padding-bottom:calc(70px + env(safe-area-inset-bottom));
+  min-height:100dvh;
+  color:var(--text);
+  font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  font-size:15px;
+  font-weight:500;
+  position:relative;
+  isolation:isolate;
+  --deco-icon:"✨";
+  background:linear-gradient(180deg,#0a1426 0%,#050b18 100%)!important;
+}
+.hidden{display:none!important}
+.sr-file-input{position:fixed!important;left:-9999px!important;top:0!important;width:1px!important;height:1px!important;opacity:0!important;pointer-events:none!important}
+.muted{color:var(--muted);font-size:13px}
+.tap{cursor:pointer;display:inline-block;flex:0 0 auto}
+h1,h2,h3,.title{font-weight:700;text-transform:uppercase;color:#fff}
+.title{font-size:22px;margin:0 0 16px;position:relative;display:inline-block}
+img,video,canvas,iframe{max-width:100%}
+
+header{
+  position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:10px;padding:12px 14px;
+  background:linear-gradient(180deg,#0f2448 0%,#0b1b38 100%);
+  border-bottom:1px solid rgba(47,140,255,.25);
+  backdrop-filter:blur(20px) saturate(160%);-webkit-backdrop-filter:blur(20px) saturate(160%);
+}
+.brand,.brand-long{white-space:nowrap;font-size:14px;overflow:visible;color:#fff}
+.brand{flex:1;font-weight:700}
+.brand-long{display:inline}
+.hdr-logo{display:block;height:34px;width:auto;flex:none;overflow:visible}
+.logo-wrap{position:relative;display:inline-block;flex:none;line-height:0}
+.logo-deco{position:absolute;top:-14px;right:-12px;font-size:16px;line-height:1;transform:rotate(16deg);pointer-events:none;filter:drop-shadow(0 2px 3px rgba(0,0,0,.35))}
+.auth-logo{width:88px;height:50px;flex:none;display:block}
+.auth-logo .logo-wrap{display:block;width:100%;height:100%}
+.auth-logo svg{width:100%;height:100%;overflow:visible}
+.auth-logo .logo-deco{font-size:22px;top:-18px;right:-16px}
+.hbtn{border-radius:10px;padding:8px 10px;font-size:13px;min-width:auto;min-height:38px;position:relative;overflow:visible}
+.live-dot{width:10px;height:10px;border-radius:50%;background:var(--amber);flex:none;display:inline-block;animation:pulseDot 2s ease-in-out infinite}
+.live-dot[data-live="1"]{background:var(--green)}
+.live-dot[data-live="0"]{background:var(--red)}
+@keyframes pulseDot{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.25);opacity:.7}}
+
+.ticker{overflow:hidden;white-space:nowrap;padding:8px 10px;font-size:12px;background:#0b1b38;color:#cfe0ff;border-bottom:1px solid rgba(47,140,255,.2)}
+.ticker span{display:inline-block;padding-left:100%;animation:marquee 40s linear infinite;will-change:transform;color:#cfe0ff}
+@keyframes marquee{to{transform:translateX(-100%)}}
+
+main{max-width:860px;margin:auto;position:relative}
+.ct{padding:16px}
+.card,.item,.stat,.tile,.person,table{
+  background:linear-gradient(180deg,rgba(14,30,62,.95),rgba(9,21,44,.95));
+  border:1px solid rgba(47,140,255,.22);
+  border-radius:14px;
+  box-shadow:var(--sh);
+  position:relative;
+  transition:border-color .25s,box-shadow .25s;
+}
+.card:hover,.item:hover,.person:hover,.tile:hover,.stat:hover{border-color:rgba(47,140,255,.5);box-shadow:0 6px 20px rgba(30,108,242,.18)}
+.card{padding:16px;margin-bottom:14px}
+.item{padding:14px;margin-bottom:10px}
+.item.unread-notice{border-left:4px solid var(--cyan);box-shadow:0 0 18px rgba(47,140,255,.32)}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.stat,.tile{padding:14px 10px;text-align:center;cursor:pointer;position:relative;overflow:hidden}
+.stat strong{display:block;font-size:24px;color:#2f8cff;font-weight:800}
+.stat span{font-size:12px;display:block;margin-top:4px;color:#8ea6cc}
+.tile{font-weight:600;font-size:13px;padding:14px 8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:#e8f0ff}
+.tile .ic{display:block;font-size:22px}
+.stat:active,.tile:active{transform:scale(.96)}
+
+/* Big Local Time & Weather (no title) */
+#liveInfoCard{text-align:center;padding:20px 16px}
+#liveClock{font-size:clamp(22px,5vw,32px);font-weight:800;line-height:1.25;color:#e8f0ff}
+#liveWeather{font-size:clamp(18px,3.8vw,24px);font-weight:700;margin-top:8px;color:#2f8cff}
+
+/* Buttons with Shadow & Daily/Session Decoration */
+button{
+  cursor:pointer;position:relative;overflow:hidden;min-height:42px;min-width:42px;padding:10px 14px;
+  border-radius:10px;box-shadow:0 4px 12px rgba(0,0,0,.45);
+  color:#cfe0ff;background:rgba(47,140,255,.08);border:1px solid rgba(47,140,255,.3);
+  font-weight:600;transition:transform .18s,box-shadow .22s,background .2s;
+}
+button:hover:not(:disabled){background:rgba(47,140,255,.16);box-shadow:0 6px 16px rgba(30,108,242,.35);transform:translateY(-1px)}
+button:active:not(:disabled){transform:translateY(1px) scale(.97)}
+button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+button:disabled{opacity:.45;cursor:not-allowed}
+.btn,.chat-send{background:#1e6cf2;color:#fff;border:1px solid #1e6cf2;font-weight:700;box-shadow:0 4px 14px rgba(30,108,242,.45)}
+.btn:hover:not(:disabled){background:#2f7cff;border-color:#2f7cff;box-shadow:0 6px 20px rgba(30,108,242,.6)}
+.red{background:rgba(239,68,68,.14);color:#ff6b6b;border:1px solid rgba(239,68,68,.45);box-shadow:0 4px 12px rgba(239,68,68,.25)}
+.green{background:#22c55e;color:#06210f;border:0;box-shadow:0 4px 14px rgba(34,197,94,.4)}
+.gray{background:rgba(148,163,184,.12);color:#cfe0ff;border:1px solid rgba(148,163,184,.3);box-shadow:0 3px 10px rgba(0,0,0,.35)}
+.small-btn{padding:6px 10px;font-size:11px;min-height:32px;border-radius:8px}
+.tab,.filter,.chip{padding:8px 14px;font-size:11px;min-height:38px;background:rgba(12,27,56,.9);color:#8ea6cc;border:1px solid rgba(47,140,255,.2);border-radius:999px;font-weight:600;box-shadow:0 3px 10px rgba(0,0,0,.35)}
+.tab.active,.filter.active,.chip.active{background:#1e3f7a;color:#fff;border-color:rgba(47,140,255,.6);box-shadow:0 4px 14px rgba(30,108,242,.45)}
+.text-button,.composer-btn,.composer-emoji,.story,.info-row,.thread-row,.msg-context-btn{box-shadow:none}
+.text-button:hover:not(:disabled),.composer-btn:hover:not(:disabled),.story:hover:not(:disabled),.info-row:hover:not(:disabled){box-shadow:none;transform:none}
+
+body:not(.no-decor) button:not(.text-button):not(.composer-btn):not(.composer-emoji):not(.story):not(.info-row):not(.thread-row):not(.msg-context-btn):not(.report-att-del):not(.msgr-icon){padding-right:22px}
+body:not(.no-decor) .seg button{padding-right:16px!important}
+body:not(.no-decor) nav.bottom button{padding-right:0}
+body:not(.no-decor) button:not(.text-button):not(.composer-btn):not(.composer-emoji):not(.story):not(.info-row):not(.thread-row):not(.msg-context-btn):not(.report-att-del)::after{
+  content:var(--deco-icon);position:absolute;top:3px;right:5px;font-size:10px;line-height:1;opacity:.85;pointer-events:none;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35));
+}
+body:not(.no-decor) nav.bottom button:not(.active)::after{opacity:.45;top:4px;right:8px;font-size:9px}
+body:not(.no-decor) nav.bottom button.active::after{opacity:.95;top:4px;right:8px;font-size:10px}
+body:not(.no-decor) .msgr-icon::after{top:2px;right:2px;font-size:9px}
+body.no-decor button::after{content:none!important}
+
+.badge,.badge-role{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;margin-left:6px;background:rgba(47,140,255,.1);border:1px solid rgba(47,140,255,.5);color:#7fb8ff}
+.field{margin-bottom:12px;position:relative}
+label{display:block;margin-bottom:6px;color:#8ea6cc;text-transform:uppercase;font-size:11px;font-weight:600}
+input,select,textarea{width:100%;padding:11px 12px;font-size:16px!important;font-weight:500;touch-action:manipulation;transition:border-color .2s,box-shadow .22s;background:rgba(6,14,31,.8);color:#e8f0ff;border:1px solid rgba(47,140,255,.25);border-radius:10px}
+input:focus,select:focus,textarea:focus{outline:none;border-color:#2f8cff;box-shadow:0 0 0 3px rgba(47,140,255,.18)}
+textarea{resize:vertical;min-height:80px}
+.check-row{display:flex;gap:8px;align-items:center;padding:8px 0}
+.check-row input{width:auto}
+.tabs,.filters{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+
+nav.bottom{position:fixed;bottom:0;left:0;right:0;height:calc(68px + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);display:flex;z-index:30;backdrop-filter:blur(22px) saturate(150%);-webkit-backdrop-filter:blur(22px) saturate(150%);background:linear-gradient(180deg,#0c1d3d,#081429);border-top:1px solid rgba(47,140,255,.25)}
+nav.bottom button{flex:1;min-height:68px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;position:relative;background:transparent;border:0;border-radius:0;box-shadow:none;color:#7d93b8;font-size:11px;font-weight:600}
+nav.bottom button:hover:not(:disabled){background:transparent;box-shadow:none;transform:none}
+nav.bottom button span{font-size:22px}
+nav.bottom button.active{color:#fff;background:rgba(30,108,242,.35);border-radius:999px}
+nav.bottom button.active::before{content:"";position:absolute;top:6px;width:30px;height:3px;border-radius:0 0 3px 3px;background:#2f8cff}
+@supports(padding:max(0px)){nav.bottom{padding-bottom:max(6px,env(safe-area-inset-bottom))}}
+
+.person{display:flex;align-items:center;gap:12px;width:100%;padding:12px;margin:6px 0;text-align:left}
+.avatar{width:44px;height:44px;flex:0 0 44px;border-radius:50%;object-fit:cover;background:#1e6cf2;color:#fff;border:2px solid rgba(47,140,255,.6);font-weight:700}
+.initial{display:grid;place-items:center;font-weight:900;font-size:16px}
+.person-info{flex:1;min-width:0}
+.person-info b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:700}
+.person-group-title{font-size:11px;font-weight:800;color:var(--gold);text-transform:uppercase;margin:12px 0 6px;border-bottom:1px dashed rgba(255,215,0,.25);padding-bottom:4px}
+
+.cover{height:150px;display:grid;place-items:center;background:linear-gradient(135deg,var(--violet) 0%,var(--pink) 50%,var(--cyan) 100%);background-size:cover;background-position:center;border-radius:14px;color:#fff;overflow:hidden;position:relative}
+.photo-row{display:flex;gap:12px;align-items:center;position:relative;margin:-40px 10px 0}
+.photo{width:88px;height:88px;border-radius:50%;object-fit:cover;background:var(--panel);border:2px solid rgba(47,140,255,.4)}
+.photo-fields{flex:1;padding-top:40px}
+.map{width:100%;height:320px;border:0;border-radius:10px}
+
+table{width:100%;border-collapse:collapse;overflow:hidden}
+th,td{padding:9px 8px;border:1px solid rgba(47,140,255,.18);text-align:left;font-size:13px}
+th{background:rgba(47,140,255,.08);color:#8ea6cc;text-transform:uppercase;font-size:11px;font-weight:600}
+td{color:#e8f0ff}
+.dtr-tabs{display:flex;gap:8px;margin:0 0 12px}
+.dtr-paper{background:#fff;color:#000;border:0;padding:8px;width:100%;max-width:1000px;aspect-ratio:17/11;margin:0 auto 12px;overflow:auto;border-radius:4px;box-shadow:0 12px 40px rgba(0,0,0,.45)}
+.dp-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:11px;font-weight:700;background:#fff!important;border-radius:0!important;box-shadow:none!important;border:1px solid #000!important}
+.dp-table th,.dp-table td{border:1px solid #000!important;padding:4px 3px;text-align:center;overflow-wrap:anywhere;color:#000!important;background:#fff!important}
+.dp-table .dp-sheet-title{font-size:19px!important;line-height:1.2;font-style:normal;padding:5px}
+.dp-col-head th{font-style:italic;font-size:11px!important}
+.dp-empty{padding:14px!important;font-weight:400}
+.dp-employee-sign{width:34%;min-width:210px;text-align:center;margin-top:4px;color:#000}
+.dp-employee-sign img{display:block;width:180px;height:65px;object-fit:contain;margin:0 auto;border:0}
+.dp-employee-name{font-weight:bold;font-size:13px;margin-top:2px;padding-bottom:4px;border-bottom:3px double #000;color:#000}
+.dp-employee-caption{font-weight:bold;font-style:italic;font-size:11px;margin-top:4px;color:#000}
+.dtr-actions{display:flex;gap:8px;max-width:1000px;margin:0 auto}
+.dtr-actions button{flex:1;white-space:normal}
+.dtr-sign{background:#fff;border-radius:6px;border:1px solid var(--border);max-width:100%}
+#signaturePhotoPreview{background:repeating-conic-gradient(#e5e7eb 0% 25%,#ffffff 0% 50%) 50%/12px 12px;border:1px solid var(--border);border-radius:6px;padding:4px}
+.time-chat-log{max-height:360px;min-height:200px;overflow-y:auto;padding:10px;border:1px solid var(--border);border-radius:12px;background:rgba(4,8,24,.55);margin:10px 0}
+body.light .time-chat-log{background:#f8fbff}
+#appWatermark{position:fixed;inset:0;z-index:0;pointer-events:none;background-size:cover;background-position:center;background-repeat:no-repeat;opacity:.14}
+header,.ticker,main,nav.bottom{position:relative;z-index:1}
+header{z-index:20}
+nav.bottom{z-index:30}
+.person-picker{max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:10px;background:rgba(4,8,24,.7)}
+
+.chat-page .chat-ct{display:flex;flex-direction:column;height:calc(100dvh - 158px);padding:8px 14px 0}
+#chatBrowser,#chatCompose,#activeChat,#chatInfo{display:flex;flex-direction:column;flex:1;min-height:0}
+.msgr-head{display:flex;align-items:center;gap:10px;margin:0 0 12px;flex:none}
+.msgr-title{font-size:26px;font-weight:800;margin:0;flex:1;color:#fff}
+.msgr-icon{width:40px;height:40px;border-radius:50%;font-size:16px;display:grid;place-items:center;flex:none;padding:0;background:rgba(47,140,255,.1);color:#7fb8ff;border:1px solid rgba(47,140,255,.3);box-shadow:0 3px 10px rgba(0,0,0,.4)}
+.msgr-search,.composer-input{display:flex;align-items:center;background:rgba(6,14,31,.85);border:1px solid rgba(47,140,255,.22);border-radius:999px}
+.msgr-search{gap:9px;padding:10px 16px;margin-bottom:12px;flex:none}
+.msgr-search input{border:0;background:transparent;padding:0;flex:1;font-size:15px;outline:none;width:auto;box-shadow:none}
+.msgr-search span{opacity:.6;font-size:14px}
+.msgr-stories{display:flex;gap:14px;overflow-x:auto;padding:2px 0 12px;flex:none;scrollbar-width:none}
+.msgr-stories::-webkit-scrollbar{display:none}
+.story{flex:0 0 auto;width:70px;text-align:center;background:none;border:0;padding:0}
+.story .bubble-av{position:relative;width:60px;height:60px;margin:0 auto 6px;border-radius:50%;border:2px solid var(--cyan);display:grid;place-items:center;font-size:22px}
+.story .bubble-av .avatar{width:100%;height:100%;border:0}
+.story small{display:block;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.story .presdot{position:absolute;right:2px;bottom:2px;width:14px;height:14px;border-radius:50%;background:var(--green);border:2px solid var(--void);animation:pulseDot 2s infinite}
+.msgr-chips{display:flex;gap:8px;overflow-x:auto;margin:0 0 4px;padding-bottom:6px;flex:none;scrollbar-width:none}
+.msgr-chips::-webkit-scrollbar{display:none}
+.msgr-list{flex:1;min-height:0;overflow:auto;margin-top:4px}
+.thread-row{display:flex;gap:12px;align-items:center;width:100%;padding:10px 8px;background:none;border:0;border-radius:10px;text-align:left}
+.thread-row:active{background:rgba(47,140,255,.1)}
+.thread-av{position:relative;flex:0 0 54px;display:block}
+.thread-av .avatar{width:54px;height:54px;font-size:21px}
+.thread-av .online-dot{position:absolute;right:0;bottom:0;width:14px;height:14px;border:2px solid var(--void);border-radius:50%;background:var(--green)}
+.thread-txt{flex:1;min-width:0}
+.thread-top{display:flex;align-items:baseline;gap:8px}
+.thread-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:500}
+.thread-row.is-unread .thread-name{font-weight:800}
+.thread-time{color:var(--muted);flex:none;font-size:10px}
+.thread-sub{display:flex;align-items:center;gap:6px;margin-top:2px}
+.thread-preview{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:var(--muted)}
+.thread-row.is-unread .thread-preview{font-weight:600}
+.msgr-dot{width:10px;height:10px;border-radius:50%;background:var(--cyan);flex:none}
+
+.chat-head{display:flex;align-items:center;gap:8px;padding:0 0 10px;border-bottom:1px solid var(--border);margin-bottom:8px;flex:none}
+.chat-head .thread-av{flex:0 0 38px}
+.chat-head .thread-av .avatar{width:38px;height:38px;font-size:15px}
+.chat-head b{display:block;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700}
+.chat-head small{color:var(--muted);font-size:12px}
+.msgr-msgs{flex:1;min-height:0;overflow:auto;padding:4px 0 6px}
+.msgr-row{display:flex;gap:8px;align-items:flex-end;margin:2px 0 16px;animation:msgIn .24s ease-out}
+@keyframes msgIn{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}
+.msgr-row.mine{flex-direction:row-reverse}
+.msgr-row .avatar{width:30px;height:30px;font-size:13px;flex:0 0 30px}
+.msgr-bub{max-width:76%;padding:10px 14px;border-radius:14px;font-size:15px;line-height:1.4;overflow-wrap:anywhere;position:relative;cursor:pointer;background:rgba(14,30,62,.95);border:1px solid rgba(47,140,255,.22);color:#e8f0ff}
+.msgr-row.mine .msgr-bub{background:#1e6cf2;color:#fff;border:0}
+.msgr-time{display:block;font-size:10px;opacity:.7;margin-top:3px;text-align:right}
+.chat-img{max-width:220px;border-radius:10px;display:block;margin-top:6px;border:1px solid var(--border)}
+.chat-plus{display:flex;flex-direction:column;gap:2px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:6px;margin:0 0 6px;flex:none}
+.chat-plus button{background:none;border:0;box-shadow:none;text-align:left;padding:10px 12px;border-radius:6px;font-size:14px}
+.emoji-pop{display:flex;flex-wrap:wrap;gap:6px;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:10px;margin:0 0 6px;font-size:22px;flex:none}
+.emoji-pop span{cursor:pointer;padding:2px;border-radius:6px}
+.chat-composer{display:flex;align-items:center;gap:6px;padding:8px 0 4px;flex:none}
+.composer-btn{width:36px;height:36px;border-radius:50%;border:0;background:none;font-size:20px;display:grid;place-items:center;flex:none;padding:0}
+.composer-input{flex:1;padding:0 4px 0 14px}
+.composer-input input{flex:1;border:0;background:transparent;padding:10px 0;border-radius:0;font-size:15px;box-shadow:none}
+.composer-emoji{border:0;background:none;font-size:19px;padding:4px}
+.chat-send{width:44px;height:44px;border-radius:50%;border:0;font-size:18px;flex:none;padding:0}
+.reply-header{font-size:12px;opacity:.85;margin-bottom:6px;display:flex;align-items:center;gap:4px;font-weight:600;border-left:2px solid currentColor;padding-left:6px}
+.msg-reaction-badge{position:absolute;bottom:-12px;right:8px;background:var(--panel-2);border:1px solid var(--border-hot);border-radius:12px;padding:2px 8px;font-size:13px;display:flex;align-items:center;gap:2px;z-index:10;cursor:pointer;color:var(--text)}
+.pin-above{font-size:11px;font-weight:700;color:var(--gold);padding:0 40px;margin:0 0 4px;display:flex}
+.pin-above.mine{justify-content:flex-end}
+
+#messageContextMenu{position:fixed;z-index:9999;background:var(--panel-2);border:1px solid var(--border-hot);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.6);display:flex;flex-direction:column;overflow:hidden;width:172px;backdrop-filter:blur(16px)}
+.msg-reactions{display:flex;justify-content:space-between;padding:8px 10px;border-bottom:1px solid var(--border);background:rgba(47,140,255,.08)}
+.msg-reactions span{font-size:20px;cursor:pointer;padding:2px;border-radius:50%}
+.msg-context-btn{display:flex;align-items:center;gap:8px;padding:10px 14px;background:none;border:0;border-bottom:1px solid rgba(47,140,255,.15);border-radius:0;text-align:left;font-size:14px;cursor:pointer;min-height:38px}
+.msg-context-btn:last-child{border-bottom:0}
+
+.toast{position:fixed;bottom:88px;left:50%;transform:translateX(-50%);z-index:100;padding:14px 22px;max-width:90vw;text-align:center;font-weight:700;font-size:14px;animation:toastIn .32s ease-out;background:#0f2448;color:#fff;border:1px solid rgba(47,140,255,.5);border-radius:10px}
+@keyframes toastIn{from{transform:translateX(-50%) translateY(28px) scale(.9);opacity:0}to{transform:translateX(-50%) translateY(0) scale(1);opacity:1}}
+
+.dialog{position:fixed;inset:0;z-index:90;display:grid;place-items:center;padding:20px;background:rgba(2,3,10,.8);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.dialog .card{width:min(440px,100%);animation:dialogPop .3s ease-out}
+@keyframes dialogPop{from{transform:scale(.88) translateY(14px);opacity:0}to{transform:scale(1) translateY(0);opacity:1}}
+
+.sheet-back{position:fixed;inset:0;background:rgba(2,3,10,.82);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);z-index:80;display:flex;align-items:flex-end;justify-content:center}
+.sheet{width:100%;max-width:540px;max-height:88vh;overflow:auto;padding:20px 16px calc(20px + env(safe-area-inset-bottom));animation:sheetSlide .34s ease-out;position:relative;background:#0b1b38;color:#e8f0ff;border:1px solid rgba(47,140,255,.3);border-radius:18px 18px 0 0}
+.sheet::before{content:"";display:block;width:48px;height:4px;border-radius:4px;margin:-6px auto 16px;background:#2f8cff}
+@keyframes sheetSlide{from{transform:translateY(100%)}to{transform:translateY(0)}}
+.sheet h2{margin:8px 0 8px;font-size:20px}
+.sheet-text{line-height:1.55;white-space:pre-wrap}
+.big-av{width:96px;height:96px;border-radius:50%;object-fit:cover;display:block;margin:0 auto;border:2px solid var(--cyan)}
+.big-init{display:grid;place-items:center;background:#1e6cf2;color:#fff;font-weight:900;font-size:36px}
+.info-head{text-align:center;padding:10px 0 14px}
+.info-head h2{margin:10px 0 2px;font-size:20px}
+.info-section{margin:14px 0}
+.info-label{font-size:11px;color:var(--cyan);font-weight:700;margin:0 0 6px;text-transform:uppercase}
+.info-row{display:flex;gap:12px;align-items:center;width:100%;padding:12px 6px;background:none;border:0;border-bottom:1px dashed rgba(47,140,255,.2);border-radius:0;text-align:left;font-weight:500;font-size:14px}
+.info-row.danger{color:var(--red)}
+.info-ic{width:26px;text-align:center;flex:0 0 26px;font-size:16px}
+.info-txt{display:flex;flex-direction:column;min-width:0}
+.media-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px}
+.media-grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;border:1px solid var(--border);cursor:pointer}
+.member-strip{display:flex;gap:8px;overflow-x:auto;padding:4px 0 8px}
+.mini-av{flex:0 0 auto}
+.mini-av .avatar{width:48px;height:48px;flex:0 0 48px}
+.media-item{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px dashed rgba(47,140,255,.15)}
+.media-item img{width:56px;height:56px;object-fit:cover;border-radius:6px;border:1px solid var(--border)}
+.media-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pv-row{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px dashed rgba(47,140,255,.15)}
+.pv-row span:last-child{text-align:right;overflow-wrap:anywhere}
+
+.call-screen{position:fixed;inset:0;z-index:200;background:radial-gradient(ellipse at center,#0d1740 0%,#02030a 100%);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:24px 16px calc(24px + env(safe-area-inset-bottom));overflow:hidden}
+.call-screen video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
+.call-screen.audio #callRemote{opacity:0;pointer-events:none}
+#callLocal{position:absolute;right:12px;top:72px;width:110px;height:150px;object-fit:cover;border-radius:10px;border:2px solid var(--cyan);z-index:1}
+.call-top,.call-controls{position:relative;z-index:2;text-align:center}
+.call-top{display:flex;flex-direction:column;align-items:center;gap:6px}
+.call-top b{font-size:22px;text-shadow:0 1px 4px #000}
+.call-top small{opacity:.9;text-shadow:0 1px 4px #000}
+.call-top .big-av{width:130px;height:130px}
+.call-controls{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+.call-controls button{border:0;border-radius:999px;padding:14px 22px;background:rgba(255,255,255,.18);color:#fff;font-weight:800;min-width:100px;backdrop-filter:blur(12px)}
+.call-controls .call-end,.call-controls .call-decline{background:linear-gradient(135deg,#ff3366,#b91c40)}
+.call-controls .call-accept{background:linear-gradient(135deg,#00ffa3,#00b374);color:#021a11}
+
+.auth-screen{position:fixed;inset:0;z-index:300;display:grid;place-items:center;padding:24px 18px;overflow:auto;background:radial-gradient(900px 480px at 50% -12%,#1a2050 0%,#0d1229 55%,#02030a 100%)}
+.auth-wrap{width:100%;max-width:420px;margin:auto;position:relative;z-index:1}
+.auth-brand{display:flex;align-items:center;gap:12px;margin:0 0 20px;color:#fff}
+.auth-brand-name{font-size:15px;font-weight:900;color:#fff}
+.auth-brand-sub{font-size:12px;color:#9fb0cc;margin-top:3px}
+.auth-card{background:linear-gradient(160deg,rgba(10,16,42,.96),rgba(4,8,24,.98));color:#e8f4ff;border-radius:20px;padding:26px;box-shadow:0 0 60px rgba(0,240,255,.25);position:relative}
+.auth-card h2{font-size:20px;margin:0 0 6px;font-weight:800}
+.auth-card .lede{color:#8fa3c9;font-size:13px;margin:0 0 18px;line-height:1.5}
+.auth-card .status{color:#7fb8ff;text-align:center;font-size:13px;margin:16px 0 0;min-height:18px}
+.auth-links{display:flex;justify-content:space-between;gap:10px;margin:14px 0 0}
+.text-button{background:none;border:none;color:var(--cyan);padding:6px 0;font-size:13px;font-weight:700;min-height:auto;min-width:auto}
+.divider{display:flex;align-items:center;gap:10px;margin:20px 0 14px;color:#8fa3c9;font-size:11px;text-transform:uppercase}
+.divider::before,.divider::after{content:"";height:1px;flex:1;background:rgba(47,140,255,.35)}
+.social-button{display:flex;align-items:center;justify-content:center;gap:10px;font-size:14px;font-weight:700;width:100%;margin-bottom:8px;border-radius:10px;padding:12px}
+.social-button svg{width:18px;height:18px;flex:none}
+.full{width:100%;margin-top:14px}
+
+.settings-row{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px dashed rgba(47,140,255,.2)}
+.settings-nav-btn{width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;margin:6px 0!important;padding:11px 12px!important;font-size:13px!important}
+.settings-subpanel{padding:8px 10px 10px;margin:4px 0 8px;border:1px solid var(--border);border-radius:10px;background:rgba(0,0,0,.14)}
+#settingsMenu{position:fixed;right:10px;top:60px;z-index:60;width:min(310px,calc(100vw - 20px))!important;max-height:calc(100dvh - 80px);overflow-y:auto;padding:14px;border-radius:12px;background:#0b1b38;color:#e8f0ff;border:1px solid rgba(47,140,255,.3)}
+#settingsMenu h2{font-size:17px;margin:0 0 10px}
+#settingsMenu h3{font-size:11px;margin:16px 0 8px;text-transform:uppercase;color:var(--cyan)}
+#settingsMenu label{margin-bottom:4px;font-size:11px}
+#settingsMenu select,#settingsMenu input:not([type="checkbox"]):not([type="file"]){padding:8px;font-size:13px;margin-bottom:8px}
+#settingsMenu input[type="checkbox"]{width:auto;margin-right:6px;accent-color:var(--cyan)}
+#settingsMenu button{padding:8px 10px;font-size:12px;margin:4px 0}
+#settingSoundFile{flex:1;min-width:0}
+#clearSoundFileButton{flex:0 0 auto}
+
+#pmsReportContent:not(.hidden){display:block;position:relative;inset:auto;z-index:auto;overflow:visible;background:transparent;padding:0}
+#pmsReportContent .ct{max-width:800px;margin:0 auto;padding:0}
+#pmsChecklistPanel:not(.hidden){display:block;position:fixed;inset:0;z-index:81;overflow-y:auto;background:var(--void-2);padding:16px}
+#pmsChecklistPanel > *{max-width:800px;margin-left:auto;margin-right:auto}
+#pmsRecordOverlay:not(.hidden){position:fixed;inset:0;z-index:85;overflow-y:auto;background:rgba(2,3,10,.95);padding:16px;backdrop-filter:blur(8px)}
+#pmsRecordOverlay > .card{max-width:800px;margin:0 auto}
+
+.report-att-item{position:relative;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--panel);aspect-ratio:1;display:flex;align-items:center;justify-content:center;padding:4px}
+.report-att-item img{width:100%;height:100%;object-fit:cover;border:0;border-radius:6px}
+.report-att-file{font-size:11px;text-align:center;word-break:break-word;padding:4px;color:var(--text)}
+.report-att-del{position:absolute;top:4px;right:4px;width:24px;height:24px;min-width:24px;min-height:24px;padding:0;border-radius:50%!important;font-size:13px;line-height:1;display:grid;place-items:center;background:rgba(0,0,0,.75)!important;color:#fff!important;border:1px solid rgba(255,255,255,.35)!important;z-index:2}
+
+.site-header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
+.site-header .title{margin:0}
+.site-header .btn,.site-header .gray{flex:0 0 auto}
+.page{animation:pageFade .32s ease-out}
+@keyframes pageFade{from{opacity:0;transform:translateY(10px) scale(.99)}to{opacity:1;transform:none}}
+.page.hidden{animation:none}
+.online-dot{width:9px;height:9px;border-radius:50%;background:#5a6480;display:inline-block;margin-right:4px}
+.online-dot.on{background:var(--green)}
+.warn{background:rgba(245,166,35,.1);color:#fcd34d;border-color:rgba(245,166,35,.4)}
+#offlineBanner{position:fixed;top:0;left:0;right:0;background:linear-gradient(120deg,#ef4444,#991b1b);color:white;text-align:center;padding:12px;font-weight:800;font-size:14px;z-index:9997}
+#offlineOverlay{position:fixed;inset:0;z-index:9998;display:grid;place-items:center;padding:20px;background:rgba(4,9,22,.94);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+#offlineOverlay .card{width:min(420px,100%);text-align:center;border:1px solid rgba(239,68,68,.55);box-shadow:0 16px 48px rgba(0,0,0,.65)}
+::-webkit-scrollbar{width:0;height:0;background:transparent}
+*{scrollbar-width:none}
+header,nav,.msgr-head,.chat-head,.page>h1.title,.tile,.stat,.chip,.tab,.filter{user-select:none;-webkit-user-select:none}
+.msgr-bub,.item,.card p,textarea,input{user-select:text;-webkit-user-select:text}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.inline-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+
+section.page:not(#page-chat)>.ct{display:flex;flex-direction:column;min-height:calc(100dvh - 210px)}
+section.page:not(#page-chat)>.ct>.deco-band{margin-top:auto}
+.deco-band{position:relative;overflow:hidden;margin:16px 0 8px;border-radius:14px;border:1px solid rgba(47,140,255,.28);background:linear-gradient(135deg,var(--dg1),var(--dg2));padding:14px 14px 18px;min-height:150px;display:flex;flex-direction:column;justify-content:center;gap:12px;box-shadow:var(--sh)}
+.verse-decor{position:relative;overflow:hidden;border-radius:12px;padding:12px;margin-bottom:14px;background:linear-gradient(135deg,var(--dg1,#0a1a36),var(--dg2,#1e4f9c));border:1px solid rgba(255,255,255,.18);text-align:center}
+.deco-ribbon{color:#fff;font-weight:800;text-transform:uppercase;letter-spacing:.14em;font-size:12px;text-align:center;opacity:.92}
+.verse-decor .deco-ribbon{margin-bottom:8px}
+.deco-icons{display:flex;flex-wrap:wrap;justify-content:center;gap:16px 22px}
+.verse-decor .deco-icons{gap:12px 16px}
+.deco-icons .d{font-size:30px;line-height:1.1;animation:decoFloat 3.2s ease-in-out infinite alternate;filter:drop-shadow(0 3px 6px rgba(0,0,0,.35))}
+.verse-decor .deco-icons .d{font-size:24px}
+@keyframes decoFloat{from{transform:translateY(0) rotate(-5deg)}to{transform:translateY(-7px) rotate(5deg)}}
+@media(prefers-reduced-motion:reduce){.deco-icons .d{animation:none}}
+
+.live-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}
+.seg{display:inline-flex;border:1px solid rgba(47,140,255,.35);border-radius:10px;overflow:hidden;box-shadow:0 3px 10px rgba(0,0,0,.3)}
+.seg button{border:0!important;border-radius:0!important;margin:0!important;min-height:34px;box-shadow:none!important}
+.seg button.active{background:#1e6cf2!important;color:#fff!important}
+#liveMap{height:min(62vh,460px)!important;width:100%;border-radius:8px;z-index:0}
+.gm-style-iw,.gm-style-iw *{color:#0f1f3d!important}
+
+.item.sess-now{border-color:#22c55e!important;box-shadow:0 0 0 1px #22c55e,0 0 22px rgba(34,197,94,.35)!important}
+.item.sess-soon{border-color:#f59e0b!important;box-shadow:0 0 0 1px #f59e0b,0 0 18px rgba(245,158,11,.3)!important}
+.sess-badge{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;margin-left:6px;color:#04110a;vertical-align:middle}
+.sess-badge.now{background:#22c55e;animation:pulseDot 1.6s ease-in-out infinite}
+.sess-badge.soon{background:#f59e0b;color:#1f1300}
+.pin-dots{display:flex;justify-content:center;gap:10px;margin:14px 0}
+.pin-dots span{width:14px;height:14px;border-radius:50%;border:2px solid var(--cyan);background:transparent}
+.pin-dots span.on{background:var(--cyan)}
+.pin-input{width:100%;text-align:center;font-size:24px;letter-spacing:.5em!important;padding:10px}
+.pin-shake{animation:pinShake .4s}
+@keyframes pinShake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
+
+.ptr-banner{position:fixed;left:50%;top:calc(12px + env(safe-area-inset-top));transform:translate(-50%,-90px);z-index:250;padding:9px 18px;border-radius:999px;font-size:13px;font-weight:700;background:var(--panel);color:var(--text);border:1px solid var(--border-hot);box-shadow:0 8px 24px rgba(0,0,0,.45);backdrop-filter:blur(12px);pointer-events:none;transition:transform .2s ease,opacity .2s ease;opacity:0;display:flex;align-items:center;gap:8px;white-space:nowrap}
+.ptr-banner.visible{opacity:1}
+.ptr-banner.ready{background:#1e6cf2;color:#fff;border-color:#1e6cf2;box-shadow:0 6px 20px rgba(30,108,242,.5)}
+
+body.compact header{padding:8px 10px;gap:6px}
+body.compact .ct{padding:10px}
+body.compact .title{font-size:17px;margin-bottom:10px}
+body.compact .card{padding:10px 12px;margin-bottom:8px}
+body.compact .item{padding:8px 10px;margin-bottom:6px}
+body.compact .person{padding:6px;margin:3px 0}
+body.compact .field{margin-bottom:8px}
+body.compact .muted{font-size:12px}
+body.compact input,body.compact select,body.compact textarea{padding:7px 9px;font-size:15px}
+body.compact button,body.compact .btn{padding:7px 12px;font-size:13px}
+body.compact .small-btn{padding:4px 8px;font-size:12px}
+body.compact .grid{gap:6px}
+body.compact .inline-actions{gap:6px}
+body.compact nav.bottom button{padding:4px 0;font-size:11px}
+body.compact nav.bottom button span{font-size:16px}
+@media(max-width:540px){
+  .grid{grid-template-columns:repeat(2,1fr)}
+  .row{grid-template-columns:1fr;gap:0}
+  .title{font-size:19px}
+  .dtr-paper{overflow-x:auto}
+  .dp-table{min-width:760px}
+  .dp-employee-sign{min-width:240px}
+}
+@media(max-width:380px){
+  .grid{grid-template-columns:1fr 1fr}
+  nav.bottom button{font-size:10px}
+  .ct{padding:10px}
+}
+@media print{
+  header,.ticker,nav.bottom,#toastBox,.ptr-banner{display:none!important}
+  main{max-width:none}
+  body{background:#fff!important;color:#000!important}
+  @page{size:8.5in 5.5in;margin:0.2in}
+  .page{display:none!important}
+  #page-dtr{display:block!important}
+  #dtrFill,.dtr-tabs,.dtr-actions,#dtrExportHint{display:none!important}
+  #dtrPreview{display:block!important}
+  .dtr-paper{width:8.1in;height:5.1in;max-width:none;aspect-ratio:auto;overflow:hidden;box-shadow:none;border:0}
+  .dp-table{min-width:0}
+  #page-dtr .title{display:none}
+}
+@media(display-mode:standalone){
+  header{padding-top:calc(12px + env(safe-area-inset-top))}
+  body{padding-top:0}
+}
+
+/* ===== LIGHT THEME ONLY ===== */
+body.light{background:linear-gradient(180deg,#f3f7fc,#e4edf8)!important;color:#0f1f3d!important}
+body.light header{background:#ffffff;color:#0f1f3d;border-bottom:1px solid rgba(30,108,242,.22);box-shadow:0 2px 10px rgba(19,35,63,.06)}
+body.light header .brand,body.light .brand,body.light .brand-long{color:#0f1f3d}
+body.light nav.bottom{background:#ffffff;border-top:1px solid rgba(30,108,242,.22);box-shadow:0 -2px 10px rgba(19,35,63,.06)}
+body.light nav.bottom button{color:#4a5a78;background:transparent;border-color:transparent;box-shadow:none}
+body.light nav.bottom button.active{color:#1e6cf2;background:rgba(30,108,242,.10);border-radius:999px}
+body.light nav.bottom button.active::before{background:#1e6cf2}
+body.light .card,body.light .item,body.light .stat,body.light .tile,body.light .person,body.light table{background:#ffffff;color:#0f1f3d;border-color:rgba(30,108,242,.22);box-shadow:0 2px 10px rgba(19,35,63,.08)}
+body.light .msgr-bub,body.light .sheet,body.light #settingsMenu,body.light .toast,body.light .ticker,body.light .emoji-pop,body.light .msg-context-btn,body.light .chat-plus{background:#ffffff;color:#0f1f3d;border-color:rgba(30,108,242,.22);box-shadow:0 4px 14px rgba(19,35,63,.1)}
+body.light .sheet::before{background:#1e6cf2}
+body.light button{color:#1d4f9c;background:rgba(30,108,242,.08);border:1px solid rgba(30,108,242,.3);box-shadow:0 3px 10px rgba(19,35,63,.16)}
+body.light button:hover:not(:disabled){background:rgba(30,108,242,.15);box-shadow:0 5px 14px rgba(30,108,242,.26)}
+body.light .btn,body.light .chat-send{background:#1e6cf2;color:#ffffff;border:1px solid #1e6cf2;box-shadow:0 4px 14px rgba(30,108,242,.38)}
+body.light .btn:hover:not(:disabled){background:#2f7cff;box-shadow:0 6px 18px rgba(30,108,242,.48)}
+body.light .red{background:rgba(239,68,68,.12);color:#c81e1e;border:1px solid rgba(239,68,68,.45);box-shadow:0 3px 10px rgba(239,68,68,.2)}
+body.light .green{background:#22c55e;color:#06210f;border:0;box-shadow:0 4px 12px rgba(34,197,94,.35)}
+body.light .gray{background:#e6ecf5;color:#0f1f3d;border:1px solid rgba(30,108,242,.22);box-shadow:0 3px 8px rgba(19,35,63,.12)}
+body.light .tab,body.light .filter,body.light .chip{background:#ffffff;color:#4d6283;border:1px solid rgba(30,108,242,.22);box-shadow:0 2px 8px rgba(19,35,63,.1)}
+body.light .tab.active,body.light .filter.active,body.light .chip.active,body.light .seg button.active{background:#1e6cf2;color:#fff;border-color:#1e6cf2;box-shadow:0 4px 12px rgba(30,108,242,.35)}
+body.light .text-button,body.light .composer-btn,body.light .composer-emoji,body.light .story,body.light .info-row,body.light .thread-row,body.light .msg-context-btn{box-shadow:none;background:transparent;border-color:transparent}
+body.light .msgr-icon{background:rgba(30,108,242,.08);color:#1d5fc4;border:1px solid rgba(30,108,242,.3);box-shadow:0 3px 10px rgba(19,35,63,.14)}
+body.light input,body.light select,body.light textarea,body.light .msgr-search,body.light .composer-input,body.light .person-picker{background:#ffffff;color:#0f1f3d;border:1px solid rgba(30,108,242,.22);box-shadow:none}
+body.light input::placeholder,body.light textarea::placeholder{color:#4a5a78}
+body.light label{color:#4a5a78}
+body.light .muted,body.light .stat span,body.light .thread-preview,body.light .thread-time,body.light .msgr-time,body.light .chat-head small,body.light .story small{color:#4a5a78}
+body.light h1,body.light h2,body.light h3,body.light .title,body.light .msgr-title,body.light .sheet h2,body.light .info-head h2,body.light .auth-card h2{color:#0f1f3d}
+body.light .stat strong{color:#1e6cf2}
+body.light .tile{color:#13233f}
+body.light th{background:rgba(30,108,242,.10);color:#4a5a78}
+body.light td{color:#0f1f3d}
+body.light .msgr-row.mine .msgr-bub{background:#1e6cf2;color:#ffffff;border-color:transparent}
+body.light .badge,body.light .badge-role{background:rgba(30,108,242,.10);border:1px solid rgba(30,108,242,.22);color:#1e6cf2}
+body.light .avatar{background:#1e6cf2;color:#ffffff}
+body.light .photo{border:2px solid rgba(30,108,242,.35)}
+body.light .ticker span{color:#0f1f3d}
+body.light .warn{background:rgba(245,166,35,.12);color:#8a5a00;border-color:rgba(245,166,35,.5)}
+body.light .deco-band{filter:saturate(.95)}
+body.light .settings-subpanel{background:rgba(30,108,242,.04)}
+body.light #liveClock{color:#0f1f3d}
+body.light #liveWeather{color:#1e6cf2}
+body.light .ptr-banner{background:#ffffff;color:#0f1f3d;border-color:rgba(30,108,242,.35);box-shadow:0 6px 20px rgba(19,35,63,.18)}
+body.light .ptr-banner.ready{background:#1e6cf2;color:#fff}
+
+/* ===== FONT FAMILY, WEIGHT & ALL FONT STYLES ===== */
+*:not(svg):not(svg *){font-family:inherit!important}
+body.fw-light *:not(svg):not(svg *){font-weight:300!important}
+body.fw-regular *:not(svg):not(svg *){font-weight:400!important}
+body.fw-regular h1,body.fw-regular h2,body.fw-regular h3,body.fw-regular .title,body.fw-regular b,body.fw-regular strong{font-weight:600!important}
+body.fw-semibold *:not(svg):not(svg *){font-weight:600!important}
+body.fw-bold *:not(svg):not(svg *){font-weight:700!important}
+
+body.fs-regular *:not(svg):not(svg *){font-style:normal!important}
+body.fs-italic *:not(svg):not(svg *){font-style:italic!important}
+body.fs-oblique *:not(svg):not(svg *){font-style:oblique 12deg!important}
+body.fs-uppercase *:not(svg):not(svg *):not(input):not(textarea){text-transform:uppercase!important}
+body.fs-capitalize *:not(svg):not(svg *):not(input):not(textarea){text-transform:capitalize!important}
+body.fs-wide *:not(svg):not(svg *){letter-spacing:.07em!important}
+body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
+
+/* DTR Half-Sheet always Times New Roman, black-on-white */
+.dtr-paper,.dtr-paper *{font-family:"Times New Roman",Times,serif!important;font-style:normal!important;text-transform:none!important;font-variant:normal!important;letter-spacing:normal!important}
+.dp-col-head th,.dp-employee-caption{font-style:italic!important}
+.dp-employee-name,.dp-employee-caption{font-family:Arial,sans-serif!important}
+.dp-table th,.dp-table td,body.light .dp-table th,body.light .dp-table td{color:#000!important;background:#fff!important;font-size:11px!important}
+</style>
+</head>
+<body>
+
+<div id="appWatermark" class="hidden" aria-hidden="true"></div>
+<div id="offlineBanner" class="hidden">⚠️ No Internet Connection. Please check your network.</div>
+<div id="ptrBanner" class="ptr-banner" aria-live="polite">↓ Pull to reload</div>
+
+<svg width="0" height="0" style="position:absolute;overflow:hidden" aria-hidden="true" focusable="false">
+  <symbol id="eesiLogo" viewBox="0 0 356 196">
+    <polygon points="10,58 178,14 346,58" fill="#1e6cf2" stroke="#111" stroke-width="2" stroke-linejoin="miter"/>
+    <rect x="3" y="58" width="350" height="134" fill="#ffe500" stroke="#111" stroke-width="2"/>
+    <g fill="#1e6cf2">
+      <rect x="11" y="66" width="76.75" height="118"/>
+      <rect x="96.75" y="66" width="76.75" height="118"/>
+      <rect x="182.5" y="66" width="76.75" height="118"/>
+      <rect x="268.25" y="66" width="76.75" height="118"/>
+    </g>
+    <g fill="#fff" font-family="Arial Black,Helvetica Neue,Arial,sans-serif" font-weight="900" font-size="96" text-anchor="middle">
+      <text x="49.4" y="159">E</text>
+      <text x="135.1" y="159">E</text>
+      <text x="220.9" y="159">S</text>
+      <text x="306.6" y="159">I</text>
+    </g>
+  </symbol>
+</svg>
+
+<section id="authScreen" class="auth-screen">
+  <div class="auth-wrap">
+    <div class="auth-brand">
+      <div class="auth-logo"><span class="logo-wrap"><svg viewBox="0 0 356 196" role="img" aria-label="EESI Elevators"><use href="#eesiLogo"/></svg><span class="logo-deco" aria-hidden="true"></span></span></div>
+      <div>
+        <div class="auth-brand-name">EESI ELEVATORS</div>
+        <div class="auth-brand-sub">Operations console</div>
+      </div>
+    </div>
+    <div class="auth-card">
+      <form id="loginForm">
+        <h2>Sign in</h2>
+        <p class="lede">Use your approved company account.</p>
+        <div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></div>
+        <div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required></div>
+        <button id="loginButton" class="btn full" type="submit">Log in</button>
+      </form>
+      <form id="registerForm" class="hidden">
+        <h2>Register</h2>
+        <p class="lede">Registration requires administrator approval.</p>
+        <div class="field"><label for="regName">Full name</label><input id="regName" autocomplete="name" required></div>
+        <div class="field"><label for="regId">ID No.</label><input id="regId"></div>
+        <div class="field"><label for="regAddress">Address</label><textarea id="regAddress"></textarea></div>
+        <div class="field"><label for="regTeam">Team</label><input id="regTeam"></div>
+        <div class="field"><label for="regPhone">Contact / cellphone</label><input id="regPhone" type="tel" autocomplete="tel"></div>
+        <div class="field"><label for="regArea">Area / Region</label><select id="regArea" required><option value="">Select area</option><option>Visayas</option><option>Luzon</option><option>Mindanao</option></select></div>
+        <div class="field"><label for="regEmail">Email</label><input id="regEmail" type="email" autocomplete="email" required></div>
+        <div class="field"><label for="regPassword">Password</label><input id="regPassword" type="password" minlength="8" autocomplete="new-password" required></div>
+        <div class="field"><label for="regRole">Requested designation</label><select id="regRole" required><option value="technician">Technician</option><option value="representative">Selective Representative</option></select></div>
+        <button id="registerButton" class="btn full" type="submit">Submit registration</button>
+        <button id="backLoginButton" class="gray full" type="button">Back to log in</button>
+      </form>
+      <form id="resetForm" class="hidden">
+        <h2>Choose a new password</h2>
+        <p class="lede">Enter a new password for your account.</p>
+        <div class="field"><label for="newPassword">New password</label><input id="newPassword" type="password" minlength="8" autocomplete="new-password" required></div>
+        <button class="btn full" type="submit">Update password</button>
+        <button id="resetBackButton" class="gray full" type="button">Back to log in</button>
+      </form>
+      <div id="loginOptions">
+        <div class="auth-links">
+          <button id="forgotButton" class="text-button" type="button">Forgot password?</button>
+          <button id="showRegisterButton" class="text-button" type="button">Register</button>
+        </div>
+        <div class="divider">or continue with</div>
+        <button id="googleButton" class="social-button" type="button">
+          <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M43.6 24.5c0-1.4-.1-2.8-.4-4.1H24v7.8h11a9.4 9.4 0 0 1-4.1 6.2v5h6.6c3.9-3.6 6.1-8.8 6.1-14.9z"/><path fill="#34A853" d="M24 44c5.5 0 10.1-1.8 13.5-4.8l-6.6-5c-1.8 1.2-4 2-6.9 2-5.3 0-9.8-3.6-11.4-8.5H5.8v5.2A20 20 0 0 0 24 44z"/><path fill="#FBBC05" d="M12.6 27.7a12 12 0 0 1 0-7.4v-5.2H5.8a20 20 0 0 0 0 17.8l6.8-5.2z"/><path fill="#EA4335" d="M24 11.8c3 0 5.7 1 7.8 3.1l5.8-5.8C34.1 5.8 29.5 4 24 4A20 20 0 0 0 5.8 15.1l6.8 5.2c1.6-4.9 6.1-8.5 11.4-8.5z"/></svg>
+          Continue with Google
+        </button>
+        <button id="facebookButton" class="social-button" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#1877F2" d="M24 12a12 12 0 1 0-13.875 11.85v-8.38H7.078V12h3.047V9.356c0-3.007 1.791-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953h-1.513c-1.49 0-1.954.925-1.954 1.874V12h3.328l-.532 3.47h-2.796v8.38A12.002 12.002 0 0 0 24 12"/></svg>
+          Continue with Facebook
+        </button>
+      </div>
+      <button id="authInstallBtn" class="gray full hidden" type="button" onclick="triggerPwaInstall()">📲 Install App on Phone</button>
+      <p id="authStatus" class="status" role="status">Loading…</p>
+    </div>
+  </div>
+</section>
+
+<div id="app" class="hidden">
+  <header>
+    <span class="logo-wrap"><svg class="hdr-logo" viewBox="0 0 356 196" role="img" aria-label="EESI Elevators"><use href="#eesiLogo"/></svg><span class="logo-deco" aria-hidden="true"></span></span>
+    <div class="brand">EESI<span class="brand-long"> ELEVATORS INC.</span></div>
+    <span id="liveDot" class="live-dot" data-live="0" title="Live sync status"></span>
+    <button id="headerInstallBtn" class="btn small-btn hidden" type="button" onclick="triggerPwaInstall()" aria-label="Install app">📲 Install</button>
+    <button id="headerThemeBtn" class="hbtn" type="button" onclick="toggleTheme()" aria-label="Toggle light or dark theme" title="Switch theme">☀️</button>
+    <button class="hbtn" type="button" onclick="go('notices')" aria-label="Notifications">🔔 <span id="bell"></span></button>
+    <button class="hbtn" type="button" onclick="toggleSettingsMenu()" aria-label="Settings">⋮</button>
+  </header>
+
+  <div id="settingsMenu" class="card hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <h2 style="margin:0;">Settings</h2>
+      <button id="closeSettingsButton" class="gray" type="button" style="min-height:32px;min-width:32px;padding:4px;font-size:16px;border-radius:50%;display:grid;place-items:center;" aria-label="Close settings">✕</button>
+    </div>
+
+    <button class="gray settings-nav-btn" type="button" onclick="go('profile')"><span>👤 Profile</span><span>›</span></button>
+
+    <button id="displaySettingsBtn" class="gray settings-nav-btn" type="button"><span>🎨 Display</span><span>▾</span></button>
+    <div id="displaySettingsPanel" class="settings-subpanel hidden">
+      <label for="settingTheme">Theme</label>
+      <select id="settingTheme"><option value="dark">Dark</option><option value="light">Light</option></select>
+      <label for="settingDecor">Decoration</label>
+      <select id="settingDecor"><option value="auto">Auto (by date)</option><option value="off">Off</option><option value="christmas">Christmas</option><option value="holyweek">Holy Week</option><option value="newyear">New Year</option><option value="valentine">Valentine's</option><option value="allsaints">All Saints</option><option value="session">Session</option><option value="event">Event</option></select>
+      <label for="settingFont">Font</label>
+      <select id="settingFont">
+        <option value="system">Inter (Default)</option>
+        <option value="poppins">Poppins (Modern)</option>
+        <option value="montserrat">Montserrat (Geometric)</option>
+        <option value="rajdhani">Rajdhani</option>
+        <option value="orbitron">Orbitron (Robotic)</option>
+        <option value="cinzel">Cinzel (Classic Serif)</option>
+        <option value="playfair">Playfair Display (Editorial)</option>
+        <option value="robotomono">Roboto Mono (Technical)</option>
+        <option value="dancing">Dancing Script (Handwritten)</option>
+        <option value="pacifico">Pacifico (Brush Script)</option>
+        <option value="segoe">Segoe UI / System</option>
+        <option value="arial">Arial</option>
+        <option value="verdana">Verdana</option>
+        <option value="trebuchet">Trebuchet MS</option>
+        <option value="georgia">Georgia</option>
+        <option value="times">Times New Roman</option>
+        <option value="courier">Courier New</option>
+      </select>
+      <label for="settingWeight">Font weight</label>
+      <select id="settingWeight">
+        <option value="light">Light</option>
+        <option value="regular">Regular</option>
+        <option value="semibold">Semi-Bold</option>
+        <option value="bold">Bold</option>
+      </select>
+      <label for="settingStyle">Font style</label>
+      <select id="settingStyle">
+        <option value="regular">Regular</option>
+        <option value="italic">Italic</option>
+        <option value="oblique">Oblique (Slanted)</option>
+        <option value="uppercase">All Caps</option>
+        <option value="capitalize">Title Case</option>
+        <option value="wide">Wide Spacing</option>
+        <option value="smallcaps">Small Caps</option>
+      </select>
+      <label for="settingTextSize">Text size</label>
+      <select id="settingTextSize"><option value="xs">Extra small</option><option value="small">Small</option><option value="regular">Regular</option><option value="large">Large</option></select>
+      <label><input id="settingCompact" type="checkbox"> Compact layout</label>
+      <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);">
+        <label for="settingWatermarkFile">Background watermark (<span id="watermarkStatus">None selected</span>)</label>
+        <input id="settingWatermarkFile" type="file" accept="image/*" style="margin-bottom:6px;width:100%">
+        <label for="settingWatermarkOpacity">Watermark opacity: <span id="watermarkOpacityLabel">14%</span></label>
+        <input id="settingWatermarkOpacity" type="range" min="4" max="45" value="14" style="padding:0;margin-bottom:6px;">
+        <button id="clearWatermarkBtn" class="red small-btn hidden" type="button" style="width:100%" onclick="clearWatermark()">Remove watermark</button>
+      </div>
+      <button class="gray" type="button" style="width:100%" onclick="resetDisplaySettings()">Reset display settings</button>
+    </div>
+
+    <button id="appSettingsBtn" class="gray settings-nav-btn" type="button"><span>⚙️ App Settings</span><span>▾</span></button>
+    <div id="appSettingsPanel" class="settings-subpanel hidden">
+      <h3 style="margin-top:4px">App Lock &amp; Biometrics</h3>
+      <div class="settings-row" style="padding:8px 0">
+        <span>App Lock (6-digit PIN)</span>
+        <span id="appLockState" class="muted">Off</span>
+      </div>
+      <button id="setPinBtn" class="gray" type="button" style="width:100%" onclick="openPinSetup(false)">Set PIN</button>
+      <button id="changePinBtn" class="gray hidden" type="button" style="width:100%" onclick="openPinSetup(true)">Change PIN</button>
+      <button id="removePinBtn" class="red hidden" type="button" style="width:100%" onclick="openPinSetup('remove')">Turn off PIN</button>
+      <div class="settings-row" style="padding:8px 0">
+        <span>Biometric Unlock (Fingerprint / Face)</span>
+        <span id="biometricLockState" class="muted">Off</span>
+      </div>
+      <button id="enableBiometricBtn" class="btn" type="button" style="width:100%" onclick="enableBiometricLock()">👆 Enable Fingerprint / Face Unlock</button>
+      <button id="disableBiometricBtn" class="red hidden" type="button" style="width:100%" onclick="disableBiometricLock()">Turn off Biometric Unlock</button>
+
+      <h3>Notifications</h3>
+      <button id="enablePushBtn" class="btn" type="button" style="width:100%;margin:8px 0">Enable background notifications</button>
+      <label><input id="settingNotifications" type="checkbox" checked> In-app notifications</label>
+      <label><input id="settingVibration" type="checkbox"> Vibration (with or without sound)</label>
+      <div style="display:flex;gap:8px;margin:8px 0">
+        <button id="builtInSoundChoice" class="btn" type="button" style="flex:1">Built-in sounds</button>
+        <button id="customSoundChoice" class="gray" type="button" style="flex:1">Custom ringtone</button>
+      </div>
+      <div id="builtInSoundPanel">
+        <label for="settingSound">Sound</label>
+        <select id="settingSound">
+          <option value="off">Off (Silent / Vibration only)</option>
+          <option value="classic">Classic polyphonic</option>
+          <option value="bright">Bright chime</option>
+          <option value="digital">Digital pulse</option>
+          <option value="retro">Retro ringtone</option>
+          <option value="soft">Soft marimba</option>
+          <option value="bell">Warm bell</option>
+        </select>
+        <label for="settingAlertDuration">Alert duration</label>
+        <select id="settingAlertDuration">
+          <option value="0">Off</option>
+          <option value="5">5 seconds</option>
+          <option value="10">10 seconds</option>
+          <option value="15">15 seconds</option>
+          <option value="30">30 seconds</option>
+          <option value="60">1 minute</option>
+        </select>
+      </div>
+      <div id="customSoundPanel" class="hidden">
+        <label for="settingCustomAlertDuration">Custom ringtone duration</label>
+        <select id="settingCustomAlertDuration">
+          <option value="0">Off</option>
+          <option value="10">10 seconds</option>
+          <option value="15">15 seconds</option>
+          <option value="30">30 seconds</option>
+          <option value="60">1 minute</option>
+        </select>
+        <label for="settingSoundFile">Custom ringtone file</label>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input id="settingSoundFile" type="file" accept="audio/*">
+          <button id="clearSoundFileButton" class="gray" type="button" aria-label="Clear custom ringtone" title="Clear custom ringtone">×</button>
+        </div>
+      </div>
+      <button class="gray" type="button" style="width:100%" onclick="previewNotificationSound()">Preview sound / vibration</button>
+    </div>
+
+    <h3>Phone App &amp; Account</h3>
+    <button id="settingsInstallBtn" class="btn" type="button" style="width:100%" onclick="triggerPwaInstall()">📲 Install App on Phone</button>
+    <button class="gray" type="button" style="width:100%" onclick="changePassword()">Change password</button>
+    <button class="red" type="button" style="width:100%" onclick="signOut()">Sign out</button>
+  </div>
+
+  <div id="ticker" class="ticker"><span id="tickerText"></span></div>
+
+  <main>
+    <section class="page" id="page-home"><div class="ct">
+      <h1 class="title">Welcome, <span id="welcome"></span></h1>
+      <div class="card">Designation: <b id="roleLabel"></b></div>
+      <div id="liveInfoCard" class="card">
+        <div id="liveClock">Loading time…</div>
+        <div id="liveWeather">Loading weather…</div>
+        <p id="locationStatus" class="muted hidden"></p>
+      </div>
+      <div id="homeDtrStatusCard" class="card hidden"></div>
+      <div id="setupWarn" class="card warn hidden">
+        <b>Database setup needed</b>
+        <div id="setupWarnText" class="muted"></div>
+      </div>
+      <div class="grid">
+        <div class="stat clickable manager-only hidden" onclick="go('members')"><strong id="memberCount">0</strong><span>👥 Members</span></div>
+        <div class="stat clickable" onclick="go('online')"><strong id="onlineCount">0</strong><span>🟢 Online / Offline</span></div>
+        <div class="stat clickable manager-only hidden" onclick="go('pending')"><strong id="pendingCount">0</strong><span>⏳ Pending</span></div>
+        <div class="stat clickable" onclick="go('sites')"><strong id="siteCount">0</strong><span>📍 Sites</span></div>
+        <div class="stat clickable" onclick="go('dtr')"><strong id="dtrCount">0</strong><span>⏰ DTR</span></div>
+        <div class="stat clickable" onclick="go('notices')"><strong id="noticeCount">0</strong><span>🔔 Notifications</span></div>
+      </div>
+      <h2>Timeline</h2>
+      <div id="homeTimeline" class="card"><p class="muted">Timeline items will appear here.</p></div>
+      <h2>Quick access</h2>
+      <div class="grid">
+        <div class="tile clickable admin-only hidden" onclick="go('admin')"><span class="ic">⚙️</span>Admin</div>
+        <div class="tile clickable admin-only hidden" onclick="go('live-map')"><span class="ic">🗺️</span>Live Map</div>
+        <div class="tile clickable" onclick="go('units')"><span class="ic">🛗</span>Units</div>
+        <div class="tile clickable" onclick="go('reports')"><span class="ic">📄</span>Reports</div>
+        <div class="tile clickable" onclick="go('announcements')"><span class="ic">📢</span>Announcements</div>
+        <div class="tile clickable" onclick="go('schedule')"><span class="ic">📅</span>Schedule</div>
+        <div class="tile clickable" onclick="go('sites')"><span class="ic">📍</span>Sites</div>
+        <div class="tile clickable" onclick="go('dtr')"><span class="ic">⏰</span>DTR</div>
+        <div class="tile clickable" onclick="go('dtr');dtrTab('time_log')"><span class="ic">📸</span>Time In / Out</div>
+        <div class="tile clickable" onclick="go('notes')"><span class="ic">📌</span>Notes &amp; Recs</div>
+        <div class="tile clickable" onclick="go('profile')"><span class="ic">👤</span>Profile</div>
+        <div class="tile clickable" onclick="go('reports');setTimeout(function(){var b=document.getElementById('reportSearchTab');if(b)b.click();},80)"><span class="ic">🔍</span>Search</div>
+        <div class="tile clickable" onclick="go('leave')"><span class="ic">🌴</span>Leave</div>
+      </div>
+    </div></section>
+
+    <section class="page hidden" id="page-members"><div class="ct">
+      <h1 class="title">👥 Members</h1>
+      <div id="members"></div>
+    </div></section>
+
+    <section class="page hidden" id="page-online"><div class="ct">
+      <h1 class="title">🟢 Online / Offline</h1>
+      <h2>Online</h2><div id="online"></div>
+      <h2>Offline</h2><div id="offline"></div>
+    </div></section>
+
+    <section class="page hidden" id="page-pending"><div class="ct">
+      <h1 class="title">⏳ Pending registrations</h1>
+      <div id="pending"></div>
+    </div></section>
+
+    <section class="page hidden" id="page-announcements"><div class="ct">
+      <h1 class="title">📢 Announcements</h1>
+      <div class="card manager-only hidden">
+        <div class="field"><label for="annTitle">Title</label><input id="annTitle" maxlength="120"></div>
+        <div class="field"><label for="annBody">Message</label><textarea id="annBody"></textarea></div>
+        <div class="inline-actions">
+          <button id="postAnnouncementBtn" class="btn" type="button" onclick="postAnnouncement()">Post announcement</button>
+          <button id="cancelAnnouncementBtn" class="red hidden" type="button" onclick="cancelEditAnnouncement()">Cancel Edit</button>
+        </div>
+      </div>
+      <div id="annList"></div>
+    </div></section>
+
+    <section class="page hidden" id="page-schedule"><div class="ct">
+      <div class="site-header">
+        <h1 class="title">📅 Schedule</h1>
+        <button class="btn manager-only hidden" type="button" id="toggleScheduleFormBtn" style="font-size:20px;width:44px;padding:0;display:grid;place-items:center;">＋</button>
+      </div>
+      <div id="scheduleFormCard" class="card hidden">
+        <div class="field"><label for="schRegion">Region</label><select id="schRegion" onchange="renderScheduleSiteOptions();renderAssigneesPicker()"><option>Visayas</option><option>Luzon</option><option>Mindanao</option></select></div>
+        <div class="row">
+          <div class="field"><label for="schSite">Work site (connected)</label><select id="schSite"><option value="">Select work site (optional)</option></select></div>
+          <div class="field"><label for="schUnit">Unit (connected)</label><select id="schUnit"><option value="">General / All Units</option></select></div>
+        </div>
+        <div class="field"><label for="schTitle">Job / site</label><input id="schTitle"></div>
+        <div class="row">
+          <div class="field"><label for="schDate">Date</label><input id="schDate" type="date"></div>
+          <div class="field"><label for="schPriority">Priority</label><select id="schPriority"><option>Normal</option><option>High</option><option>Urgent</option></select></div>
+        </div>
+        <div class="row">
+          <div class="field"><label for="schIn">Time in</label><input id="schIn" type="time"></div>
+          <div class="field"><label for="schOut">Time out</label><input id="schOut" type="time"></div>
+        </div>
+        <div class="field"><label>Assign Personnel (Multi-select categorized by Region / Team)</label><div id="assigneesPicker" class="person-picker"></div></div>
+        <div class="field"><label for="schNotes">Notes</label><textarea id="schNotes"></textarea></div>
+        <button class="btn" type="button" onclick="saveSchedule()">Save schedule</button>
+      </div>
+      <div id="scheduleList"></div>
+    </div></section>
+
+    <section class="page hidden" id="page-units"><div class="ct">
+      <div class="site-header">
+        <h1 class="title">🛗 Units</h1>
+        <button class="btn" type="button" id="toggleUnitFormBtn" style="font-size:20px;width:44px;padding:0;display:grid;place-items:center;" aria-label="Add unit">＋</button>
+      </div>
+      <div id="unitFormCard" class="card hidden">
+        <h2 id="unitFormTitle" style="margin-top:0">Add unit</h2>
+        <div class="field"><label for="unitSite">Work site</label><select id="unitSite" required><option value="">Select a work site</option></select></div>
+        <div class="row">
+          <div class="field"><label for="unitName">Unit name / No.</label><input id="unitName" placeholder="e.g. Passenger Elevator 1"></div>
+          <div class="field"><label for="unitType">Unit type</label><select id="unitType"><option value="elevator">Elevator</option><option value="escalator">Escalator</option><option value="moving-walkway">Moving Walkway</option><option value="dumbwaiter">Dumbwaiter</option></select></div>
+        </div>
+        <div class="row">
+          <div class="field"><label for="unitStatus">Status</label><select id="unitStatus"><option>Operational</option><option>Under Maintenance</option><option>Needs Repair</option><option>Shutdown</option></select></div>
+          <div class="field"><label for="unitBrand">Brand / Model</label><input id="unitBrand" placeholder="e.g. Mitsubishi / Kone"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label for="unitSerial">Serial / Permit No.</label><input id="unitSerial"></div>
+          <div class="field"><label for="unitCapacity">Floors / Capacity</label><input id="unitCapacity" placeholder="e.g. 12F / 1000kg"></div>
+        </div>
+        <div class="field"><label for="unitNotes">Notes</label><textarea id="unitNotes"></textarea></div>
+        <div class="inline-actions">
+          <button class="btn" type="button" onclick="saveUnit()">Save unit</button>
+          <button class="gray" type="button" onclick="cancelUnitForm()">Cancel</button>
+        </div>
+      </div>
+      <div class="tabs" id="unitsModeTabs">
+        <button class="tab active" type="button" data-units-tab="list">🛗 Units by Site &amp; Location</button>
+        <button class="tab" type="button" data-units-tab="manual">📖 Unit Manuals</button>
+      </div>
+      <div class="tabs" id="unitsRegionTabs">
+        <button class="tab active" type="button" data-units-region="Luzon">Luzon</button>
+        <button class="tab" type="button" data-units-region="Visayas">Visayas</button>
+        <button class="tab" type="button" data-units-region="Mindanao">Mindanao</button>
+      </div>
+      <div class="card" style="padding:12px;">
+        <div class="row">
+          <div class="field" style="margin-bottom:0;"><label for="unitsSearch">Search unit / site name / location</label><input id="unitsSearch" type="search" placeholder="e.g. Elevator 1, Cebu, SM…"></div>
+          <div class="field" style="margin-bottom:0;"><label for="unitsSort">Sort by</label><select id="unitsSort"><option value="site">Site Name &amp; Unit Name</option><option value="location">Site Location (City / Address)</option><option value="status">Unit Status</option></select></div>
+        </div>
+      </div>
+      <div id="unitsSetupHint" class="card warn hidden"></div>
+      <div id="unitsListView"><div id="unitsList"></div></div>
+      <div id="unitsManualView" class="hidden"></div>
+      <input id="unitManualFile" type="file" class="sr-file-input" accept="image/*,.pdf,.doc,.docx,.txt">
+    </div></section>
+
+    <section class="page hidden" id="page-reports">
+      <div class="ct">
+        <div class="tabs" id="reportTypeTabs">
+          <button class="tab active" type="button" data-report-type="service">Services Report</button>
+          <button class="tab" type="button" data-report-type="delivery">Delivery Report</button>
+          <button class="tab" type="button" data-report-type="checklist">PMS Checklist</button>
+          <button class="tab manager-only hidden" type="button" id="pmsRecordsTab">📋 PMS Records</button>
+          <button class="tab" type="button" id="reportSearchTab">🔍 Search</button>
+        </div>
+
+        <div id="pmsReportContent" class="hidden">
+          <div class="ct">
+            <div id="pmsRecordsView" class="hidden">
+              <div class="site-header">
+                <h1 class="title">📋 PMS Records</h1>
+                <div class="inline-actions" style="margin-top:0">
+                  <button class="gray small-btn" type="button" onclick="exportData('pms',{format:'xlsx'})">📊 Export XLSX</button>
+                  <button class="gray small-btn" type="button" onclick="exportPmsRecords('doc')">📝 Export DOC</button>
+                </div>
+              </div>
+              <div id="pmsRecordOverlay" class="hidden" role="dialog" aria-modal="true">
+                <div class="card">
+                  <button id="closePmsRecordOverlay" class="gray" type="button">Close</button>
+                  <div id="pmsRecordDetails"></div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="row">
+                  <div class="field"><label for="pmsRecordsTeam">Team</label><select id="pmsRecordsTeam"><option value="">All teams</option></select></div>
+                  <div class="field"><label for="pmsRecordsLocation">Location</label><select id="pmsRecordsLocation"><option value="">All locations</option></select></div>
+                </div>
+                <div class="field"><label for="pmsRecordsSite">Site</label><select id="pmsRecordsSite"><option value="">All sites</option></select></div>
+              </div>
+              <div id="pmsRecordsList"></div>
+            </div>
+            <div id="pmsChecklistView">
+              <h1 class="title">✅ PMS Checklist</h1>
+              <p class="muted">Select an area, then a site. Follow approved PMS procedures and company safety rules.</p>
+              <div class="tabs" id="pmsRegionTabs">
+                <button class="tab active" type="button" data-pms-region="Luzon">Luzon</button>
+                <button class="tab" type="button" data-pms-region="Visayas">Visayas</button>
+                <button class="tab" type="button" data-pms-region="Mindanao">Mindanao</button>
+              </div>
+              <div id="pmsSitePicker" class="card">
+                <h2 id="pmsSitePickerTitle">Choose a site</h2>
+                <div id="pmsSitePickerOptions"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="searchView" class="hidden">
+          <div class="site-header">
+            <h1 class="title">🔍 Search Postings &amp; Uploads</h1>
+            <button id="searchFilterToggleBtn" class="gray" type="button" aria-label="Filter postings and uploads" aria-expanded="false">⋮</button>
+          </div>
+          <div id="searchFilterPanel" class="card hidden">
+            <h3 style="margin-top:0">Filter Postings &amp; Uploads</h3>
+            <div class="row">
+              <div class="field"><label for="searchRegion">Region</label><select id="searchRegion"><option value="">All regions</option><option value="Luzon">Luzon</option><option value="Visayas">Visayas</option><option value="Mindanao">Mindanao</option></select></div>
+              <div class="field"><label for="searchSite">Site</label><select id="searchSite"><option value="">All sites</option></select></div>
+            </div>
+            <div class="row">
+              <div class="field"><label for="searchEquipment">Equipment</label><select id="searchEquipment"><option value="">All equipment</option><option value="elevator">Elevator</option><option value="escalator">Escalator / Moving walkway</option></select></div>
+              <div class="field"><label for="searchType">Posting type</label><select id="searchType"><option value="">All postings &amp; uploads</option><option value="service-report">Service Report</option><option value="delivery-report">Delivery Report</option><option value="pms">PMS Checklist Record</option></select></div>
+            </div>
+            <div class="row">
+              <div class="field"><label for="searchDateFrom">Date from</label><input id="searchDateFrom" type="date"></div>
+              <div class="field"><label for="searchDateTo">Date to</label><input id="searchDateTo" type="date"></div>
+            </div>
+            <label class="check-row"><input id="searchUploadsOnly" type="checkbox"> Only postings with uploaded photos / files</label>
+            <div class="inline-actions">
+              <button class="btn" type="button" id="searchApplyFilters">Apply filters</button>
+              <button class="gray" type="button" id="searchClear">Clear filters</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="field"><label for="searchQuery">Search posted reports &amp; uploaded files</label><input id="searchQuery" type="search" autocomplete="off" placeholder="e.g. escalator handrail, elevator 1, Mall A, brake"></div>
+            <div class="inline-actions">
+              <button class="btn" type="button" id="searchRunBtn">Search</button>
+            </div>
+          </div>
+          <div id="searchResults"></div>
+        </div>
+
+        <div id="reportContent">
+          <div id="managerReportListOnly" class="hidden">
+            <div class="site-header">
+              <h2 id="managerReportListTitle" style="margin:0">Service Reports</h2>
+              <div class="inline-actions" style="margin-top:0">
+                <button class="gray small-btn" type="button" onclick="exportData('reports',{format:'xlsx'})">📊 Export XLSX</button>
+                <button class="gray small-btn" type="button" onclick="exportReports('doc')">📝 Export DOC</button>
+              </div>
+            </div>
+            <div id="managerReportList"></div>
+          </div>
+          <div id="reportHeaderRow" class="site-header">
+            <h2 id="reportListTitle" style="margin:0">Service Reports</h2>
+            <div class="inline-actions" style="margin-top:0;align-items:center;">
+              <button class="gray small-btn" type="button" onclick="exportData('reports',{format:'xlsx'})">📊 XLSX</button>
+              <button class="gray small-btn" type="button" onclick="exportReports('doc')">📝 DOC</button>
+              <button class="btn" type="button" id="toggleReportFormBtn" style="font-size:20px;width:44px;padding:0;display:grid;place-items:center;" aria-label="Create report">＋</button>
+            </div>
+          </div>
+          <div id="reportFormCard" class="card hidden">
+            <div class="row">
+              <div class="field"><label for="reportSite">Site</label><select id="reportSite" required><option value="">Select a site</option></select></div>
+              <div class="field"><label for="reportUnit">Unit (connected to site)</label><select id="reportUnit"><option value="">General / All Units on Site</option></select></div>
+            </div>
+            <div class="field"><label for="reportDate">Report date</label><input id="reportDate" type="date" required></div>
+            <div class="field"><label for="reportTitle">Title</label><input id="reportTitle" maxlength="200" required></div>
+            <div class="field"><label for="reportDetails">Details</label><textarea id="reportDetails" maxlength="10000" required></textarea></div>
+            <div class="field"><label for="reportPhotos">Attach photos / files (one or multiple)</label><input id="reportPhotos" type="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt" multiple></div>
+            <div id="reportPhotoPreview" class="media-grid"></div>
+            <div class="inline-actions">
+              <button class="btn" type="button" id="submitReportButton">Submit report</button>
+              <button class="gray" type="button" id="cancelReportFormBtn">Cancel</button>
+            </div>
+            <p id="reportStatus" class="muted" role="status"></p>
+          </div>
+          <div id="reportList"></div>
+        </div>
+
+        <div id="pmsChecklistPanel" class="hidden">
+          <button id="pmsBackToSites" class="gray" type="button">← Back to site selection</button>
+          <div class="tabs" id="pmsUnitTabs" style="margin-top:12px">
+            <button class="tab active" type="button" data-pms-unit="elevator">Elevator Unit</button>
+            <button class="tab" type="button" data-pms-unit="escalator">Escalator Unit</button>
+          </div>
+          <div class="card">
+            <h2 id="pmsSelectedSite"></h2>
+            <div class="row">
+              <div class="field"><label for="pmsChecklistUnit">Unit (connected to site)</label><select id="pmsChecklistUnit"><option value="">General / Site-wide Unit</option></select></div>
+              <div class="field"><label for="pmsChecklistDate">Checklist date</label><input id="pmsChecklistDate" type="date"></div>
+            </div>
+            <p class="muted">Complete the checklist, then save or export the checklist.</p>
+            <div class="inline-actions">
+              <button class="btn" type="button" id="savePmsRecordButton">Save checklist record</button>
+              <button class="gray" type="button" onclick="exportCurrentChecklist('xls')">📊 Export XLS</button>
+              <button class="gray" type="button" onclick="exportCurrentChecklist('doc')">📝 Export DOC</button>
+            </div>
+            <p id="pmsRecordStatus" class="muted" role="status"></p>
+          </div>
+          <div id="pmsCategories"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page hidden" id="page-sites"><div class="ct">
+      <div class="site-header">
+        <h1 class="title">📍 Work sites</h1>
+        <button class="btn manager-only hidden" type="button" id="openAddSite">Add site</button>
+      </div>
+      <div id="siteMapCard" class="card hidden">
+        <h2 id="siteMapTitle" style="margin-top:0">Selected site</h2>
+        <div id="siteGoogleMap" class="map"></div>
+        <p id="siteMapStatus" class="muted" style="margin:6px 0 0;"></p>
+      </div>
+      <h2>All sites</h2><div id="siteList"></div>
+    </div></section>
+
+    <section class="page hidden" id="page-dtr"><div class="ct">
+      <div class="site-header">
+        <h1 class="title">⏰ Daily Time Record</h1>
+        <div class="inline-actions" style="margin-top:0;">
+          <button class="btn small-btn" type="button" onclick="exportData('dtr',{format:'pdf'})">📑 Export PDF</button>
+          <button class="gray small-btn" type="button" onclick="exportData('dtr',{format:'xlsx'})">📊 Export XLSX</button>
+        </div>
+      </div>
+      <div class="dtr-tabs" style="flex-wrap:wrap;">
+        <button id="dtrFillTab" class="chip active" type="button" onclick="dtrTab('fill')">✏️ Fill DTR</button>
+        <button id="dtrTimeLogTab" class="chip" type="button" onclick="dtrTab('time_log')">📸 Time In / Out</button>
+        <button id="dtrPrevTab" class="chip" type="button" onclick="dtrTab('preview')">📄 Preview Half-Sheet</button>
+      </div>
+      <div id="dtrFill">
+        <div class="card">
+          <div class="field"><label for="dtrDate">Date</label><input id="dtrDate" type="date"></div>
+          <div class="row">
+            <div class="field"><label for="dtrLocation">Work location</label><input id="dtrLocation" list="dtrSiteDatalist" placeholder="Select or type site"><datalist id="dtrSiteDatalist"></datalist></div>
+            <div class="field"><label for="dtrUnit">Unit (connected)</label><select id="dtrUnit"><option value="">General / All Units</option></select></div>
+          </div>
+          <div class="field"><label for="dtrJob">Work description</label><input id="dtrJob"></div>
+          <div class="row">
+            <div class="field"><label for="dtrIn">Time in</label><input id="dtrIn" type="time"></div>
+            <div class="field"><label for="dtrOut">Time out</label><input id="dtrOut" type="time"></div>
+          </div>
+          <div class="field manager-only hidden">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+              <input type="checkbox" id="dtrOvertimeApproved" style="width:auto;"> Overtime Approved by Manager/Admin
+            </label>
+          </div>
+          <div class="inline-actions">
+            <button class="btn" type="button" onclick="addDtr()">Add entry</button>
+            <button class="gray" type="button" onclick="clearDtrForm()">Clear form</button>
+            <button class="gray" type="button" onclick="exportData('dtr',{format:'pdf'})">📑 Export PDF</button>
+            <button class="gray" type="button" onclick="exportData('dtr',{format:'xlsx'})">📊 Export XLSX</button>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:8px;flex-wrap:wrap;margin:10px 0 8px;">
+          <div class="field" style="margin:0;min-width:240px;flex:1;">
+            <label for="dtrCutoffFilter">Payroll Cutoff Period (Previous → Newest)</label>
+            <select id="dtrCutoffFilter"></select>
+          </div>
+          <span id="dtrCutoffSummary" class="badge" style="margin-left:0;margin-bottom:4px;"></span>
+        </div>
+        <div style="overflow:auto"><table>
+          <thead><tr><th>Date</th><th>Employee</th><th>Site / job</th><th>Time In</th><th>Time Out</th><th>Hrs</th><th></th></tr></thead>
+          <tbody id="dtrRows"></tbody>
+        </table></div>
+        <h2>Signature</h2>
+        <canvas id="signature" class="dtr-sign" width="500" height="130"></canvas>
+        <p><button class="gray small-btn" type="button" onclick="clearSignature()">Clear drawn signature</button></p>
+        <div class="field"><label for="signaturePhoto">Upload signature picture (Stroke-only transparent output)</label><input id="signaturePhoto" type="file" accept="image/*"></div>
+        <img id="signaturePhotoPreview" class="hidden" alt="Uploaded signature preview" style="max-width:250px;max-height:100px;object-fit:contain;display:block;margin-bottom:8px;">
+        <button class="gray small-btn" type="button" onclick="clearSignaturePhoto()">Remove uploaded picture</button>
+      </div>
+      <div id="dtrTimeLog" class="hidden">
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+            <h2 style="margin:0">📸 Time In / Out (AI Photo Reader &amp; Shared Feed)</h2>
+            <span id="timeLogModeBadge" class="badge">🟢 Time In Selected</span>
+          </div>
+          <p class="muted" style="margin-top:0">Choose <b>Time In</b> or <b>Time Out</b>, then capture or upload a timestamped photo. All members can see uploaded entries &amp; AI readings in this feed and in Notifications, AI automatically fills your DTR slot, and uploaded pictures can be deleted anytime.</p>
+          <div class="seg" id="timeLogModeToggle" style="margin-bottom:10px;width:100%;">
+            <button type="button" class="active" style="flex:1" data-time-mode="time_in" onclick="setTimeLogMode('time_in')">🟢 Time In</button>
+            <button type="button" style="flex:1" data-time-mode="time_out" onclick="setTimeLogMode('time_out')">🔴 Time Out</button>
+          </div>
+          <div class="row">
+            <div class="field"><label for="timeLogSite">Work site (auto from schedule or select)</label><select id="timeLogSite"><option value="">Auto-detect or select site</option></select></div>
+            <div class="field"><label for="timeLogUnit">Unit (optional)</label><select id="timeLogUnit"><option value="">Unit (optional)</option></select></div>
+          </div>
+          <div id="timeLogMessages" class="time-chat-log"></div>
+          <div class="inline-actions" style="margin-top:8px;">
+            <label for="timeLogCam" class="btn small-btn" style="margin:0;cursor:pointer;display:inline-flex;align-items:center;">📷 Camera</label>
+            <label for="timeLogPhoto" class="gray small-btn" style="margin:0;cursor:pointer;display:inline-flex;align-items:center;">🖼 Upload Photo</label>
+          </div>
+          <div class="chat-composer" style="margin-top:8px;">
+            <div class="composer-input"><input id="timeLogNoteInput" placeholder="Optional Time In / Out note…" autocomplete="off"></div>
+            <button class="chat-send" type="button" onclick="sendTimeLogNote()" aria-label="Send note">➤</button>
+          </div>
+          <p id="timeLogStatus" class="muted" role="status" style="margin-bottom:0;"></p>
+          <input id="timeLogCam" type="file" class="sr-file-input" accept="image/*" capture="environment">
+          <input id="timeLogPhoto" type="file" class="sr-file-input" accept="image/*">
+        </div>
+      </div>
+      <div id="dtrPreview" class="hidden">
+        <div class="row" style="max-width:1000px;margin:0 auto 10px;">
+          <div class="field">
+            <label for="dtrPreviewCutoff">Half-Sheet Cutoff Period (11–25 / 26–10)</label>
+            <select id="dtrPreviewCutoff"></select>
+          </div>
+          <div class="field manager-only hidden" id="dtrPreviewEmployeeWrap">
+            <label for="dtrPreviewEmployee">Employee DTR Sheet</label>
+            <select id="dtrPreviewEmployee"></select>
+          </div>
+        </div>
+        <div id="dtrPaper" class="dtr-paper"></div>
+        <div class="dtr-actions">
+          <button class="green" type="button" onclick="downloadDtr()">📷 Download &amp; Share JPEG</button>
+          <button class="btn" type="button" onclick="printDtr()">🖨️ Print DTR</button>
+          <button class="gray" type="button" onclick="exportData('dtr',{format:'pdf'})">📑 Full History PDF</button>
+        </div>
+        <p class="muted" id="dtrExportHint"></p>
+      </div>
+    </div></section>
+
+    <section class="page hidden" id="page-notes"><div class="ct">
+      <h1 class="title">📌 Notes &amp; recommendations</h1>
+      <div class="tabs">
+        <button id="notesTab" class="tab active" type="button" onclick="switchNoteTab('notes')">Notes</button>
+        <button id="recsTab" class="tab" type="button" onclick="switchNoteTab('recs')">Recommendations</button>
+      </div>
+      <div id="notesPanel">
+        <div class="card">
+          <div class="field"><label for="noteTitle">Title</label><input id="noteTitle" maxlength="150"></div>
+          <div class="field"><label for="noteBody">Content</label><textarea id="noteBody"></textarea></div>
+          <button class="btn" type="button" onclick="saveNote()">Save note</button>
+        </div>
+        <div id="noteList"></div>
+      </div>
+      <div id="recsPanel" class="hidden">
+        <div class="card">
+          <div class="field"><label for="recCondition">Condition</label><select id="recCondition"><option value="">Select</option><option>Good</option><option>Fair</option><option>Needs Replacement</option></select></div>
+          <div class="field"><label for="recPart">Part</label><input id="recPart"></div>
+          <div class="field"><label for="recReason">Reason / Findings</label><textarea id="recReason"></textarea></div>
+          <div class="row">
+            <div class="field"><label for="recSite">Site (connected)</label><select id="recSite"><option value="">Select work site</option></select></div>
+            <div class="field"><label for="recUnit">Unit (connected)</label><select id="recUnit"><option value="">General / All Units</option></select></div>
+          </div>
+          <div class="field"><label for="recLocation">Specific location</label><input id="recLocation" placeholder="e.g. Machine room / 5F landing"></div>
+          <div class="field"><label>Mention / Assign Personnel (Allowed to comment)</label><div id="recAssignees" class="person-picker"></div></div>
+          <div class="inline-actions">
+            <button class="btn" type="button" onclick="saveRec()">Submit recommendation</button>
+            <button class="gray" type="button" onclick="exportData('recommendations',{format:'xlsx'})">📊 Export XLSX</button>
+            <button class="gray" type="button" onclick="exportRecommendations('doc')">📝 Export DOC</button>
+          </div>
+        </div>
+        <div id="recList"></div>
+      </div>
+    </div></section>
+
+    <section class="page hidden" id="page-admin"><div class="ct">
+      <h1 class="title">⚙️ Admin</h1>
+      <div class="card">
+        <p class="muted" style="margin-top:0">Approve new accounts from the <b>Pending</b> page. Change designations and areas below — changes apply immediately on the member's device.</p>
+        <button class="btn" type="button" onclick="go('pending')">Open pending registrations</button>
+      </div>
+      <div id="adminList"></div>
+    </div></section>
+
+    <section class="page hidden" id="page-profile"><div class="ct">
+      <h1 class="title">👤 Personal information</h1>
+      <div class="card">
+        <div id="coverPreview" class="cover"><span>Cover picture</span></div>
+        <div class="photo-row">
+          <img id="profilePreview" class="photo" alt="Profile picture">
+          <div class="photo-fields">
+            <label for="profileFile">Profile picture</label>
+            <input id="profileFile" type="file" accept="image/*">
+            <div class="inline-actions" style="margin-top:6px">
+              <label for="profileFile" class="btn small-btn" style="margin:0;cursor:pointer;display:inline-flex;align-items:center;">📷 Choose Profile Photo</label>
+              <button class="gray small-btn" type="button" onclick="removePhoto('avatar_url')">Remove</button>
+            </div>
+            <label for="coverFile" style="margin-top:10px">Cover picture</label>
+            <input id="coverFile" type="file" accept="image/*">
+            <div class="inline-actions" style="margin-top:6px">
+              <label for="coverFile" class="btn small-btn" style="margin:0;cursor:pointer;display:inline-flex;align-items:center;">🖼 Choose Cover Photo</label>
+              <button class="gray small-btn" type="button" onclick="removePhoto('cover_url')">Remove</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="field"><label for="pName">Full name</label><input id="pName"></div>
+        <div class="field"><label for="pId">ID No.</label><input id="pId"></div>
+        <div class="field"><label for="pAddress">Address</label><textarea id="pAddress"></textarea></div>
+        <div class="field"><label for="pTeam">Team</label><input id="pTeam"></div>
+        <div class="field"><label for="pPhone">Contact / cellphone</label><input id="pPhone"></div>
+        <div class="field"><label for="pArea">Area / Region</label><select id="pArea"><option value="">Select</option><option>Visayas</option><option>Luzon</option><option>Mindanao</option></select></div>
+        <div class="field"><label for="pEmail">Email</label><input id="pEmail" type="email" readonly></div>
+        <button class="btn" type="button" onclick="saveProfile()">Save profile</button>
+      </div>
+      <div class="card">
+        <h2 style="margin-top:0">Annual leave balance</h2>
+        <p class="muted">Approved leave for the current calendar year. Every day (including weekends and holidays) counts toward the selected leave.</p>
+        <div id="leaveBalances"><p class="muted">Loading balances…</p></div>
+        <div class="inline-actions">
+          <button class="btn" type="button" onclick="go('leave')">Request leave</button>
+          <button class="gray small-btn" type="button" onclick="refreshLeaveBalances()">Refresh balance</button>
+        </div>
+      </div>
+    </div></section>
+
+    <section class="page hidden" id="page-leave">
+      <div class="ct">
+        <div class="site-header">
+          <h1 class="title">🌴 Leave</h1>
+          <button id="toggleLeaveFormBtn" class="btn" type="button" style="font-size:20px;width:44px;padding:0;display:grid;place-items:center;" aria-label="Request leave">＋</button>
+        </div>
+        <div class="card">
+          <h2 style="margin-top:0">Annual leave balance</h2>
+          <div id="leavePageBalances"><p class="muted">Loading balances…</p></div>
+        </div>
+        <div id="leaveFormCard" class="card hidden">
+          <h2 style="margin-top:0">Request leave</h2>
+          <div class="field"><label for="leaveType">Leave type</label><select id="leaveType"><option value="sick">Sick leave</option><option value="emergency">Emergency leave</option><option value="vacation">Vacation leave</option></select></div>
+          <div class="row">
+            <div class="field"><label for="leaveStart">Start date</label><input id="leaveStart" type="date"></div>
+            <div class="field"><label for="leaveEnd">End date</label><input id="leaveEnd" type="date"></div>
+          </div>
+          <div class="field"><label for="leaveReason">Reason</label><textarea id="leaveReason" maxlength="1000"></textarea></div>
+          <div class="inline-actions">
+            <button class="btn" type="button" onclick="submitLeaveRequest()">Submit request</button>
+            <button id="cancelLeaveFormBtn" class="gray" type="button">Cancel</button>
+          </div>
+          <p id="leaveDaysPreview" class="muted"></p>
+          <p id="leaveFormStatus" class="muted" role="status"></p>
+          <p class="muted">Every day from start date to end date (including weekends and holidays) counts toward your selected leave once approved.</p>
+        </div>
+        <div class="card">
+          <h2 style="margin-top:0">My leave requests</h2>
+          <div id="myLeaveRequests"></div>
+        </div>
+        <div class="card manager-only hidden">
+          <h2 style="margin-top:0">Requests to review</h2>
+          <div id="leaveReviewList"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page hidden" id="page-notices"><div class="ct">
+      <h1 class="title">🔔 Notifications</h1>
+      <div id="noticeList"></div>
+    </div></section>
+
+    <section class="page hidden chat-page" id="page-chat"><div class="ct chat-ct">
+      <div id="chatBrowser">
+        <div class="msgr-head">
+          <h1 class="msgr-title">Chats</h1>
+          <button class="msgr-icon" type="button" onclick="openCompose()" aria-label="New message">✎</button>
+        </div>
+        <div class="msgr-search">
+          <span aria-hidden="true">🔍</span>
+          <input id="chatSearch" placeholder="Search chats" autocomplete="off" aria-label="Search chats">
+        </div>
+        <div class="msgr-stories" id="chatPeopleRow"></div>
+        <div class="msgr-chips" id="chatChips">
+          <button class="chip active" type="button" data-filter="all" onclick="setChatFilter('all')">All</button>
+          <button class="chip" type="button" data-filter="unread" onclick="setChatFilter('unread')">Unread</button>
+          <button class="chip" type="button" data-filter="groups" onclick="setChatFilter('groups')">Groups</button>
+          <button class="chip" type="button" data-filter="archived" onclick="setChatFilter('archived')">Archived</button>
+        </div>
+        <div id="chatList" class="msgr-list"></div>
+      </div>
+
+      <div id="chatCompose" class="hidden">
+        <div class="msgr-head">
+          <button class="msgr-icon" type="button" onclick="closeCompose()" aria-label="Back">←</button>
+          <h1 class="msgr-title" style="font-size:21px">New message</h1>
+          <button class="msgr-icon" type="button" onclick="showGroupForm()" aria-label="New group">👥</button>
+        </div>
+        <div id="groupForm" class="card hidden">
+          <div class="field"><label for="groupName">Group name</label><input id="groupName"></div>
+          <div class="field"><label>Members</label><div id="groupChoices"></div></div>
+          <div class="inline-actions">
+            <button class="btn" type="button" onclick="createGroup()">Create group</button>
+            <button class="gray" type="button" onclick="hideGroupForm()">Cancel</button>
+          </div>
+        </div>
+        <div class="msgr-list" id="peopleList"></div>
+      </div>
+
+      <div id="activeChat" class="hidden">
+        <div class="chat-head">
+          <button class="msgr-icon" type="button" onclick="closeChat()" aria-label="Back">←</button>
+          <span class="thread-av" id="chatHeadAv"></span>
+          <div style="flex:1;min-width:0;cursor:pointer;" onclick="openActiveChatProfile()">
+            <b id="chatTitle"></b><small id="chatStatus"></small>
+          </div>
+          <button id="callAudioBtn" class="msgr-icon" type="button" data-act="call-start" data-id="audio" aria-label="Audio call">📞</button>
+          <button id="callVideoBtn" class="msgr-icon" type="button" data-act="call-start" data-id="video" aria-label="Video call">🎥</button>
+          <button class="msgr-icon" type="button" onclick="openChatInfo()" aria-label="Info">ⓘ</button>
+        </div>
+        <div class="msgr-search">
+          <span aria-hidden="true">🔍</span>
+          <input id="messageSearch" placeholder="Search this conversation" autocomplete="off" aria-label="Search this conversation">
+        </div>
+        <div id="messages" class="msgr-msgs"></div>
+        <div id="chatPlus" class="chat-plus hidden">
+          <button type="button" onclick="document.getElementById('chatCam').click()">📷 Camera</button>
+          <button type="button" onclick="document.getElementById('chatImage').click()">🖼 Photo</button>
+          <button type="button" onclick="document.getElementById('chatFile').click()">📎 File</button>
+        </div>
+        <div id="replyingIndicator" class="chat-plus hidden" style="flex-direction:row;justify-content:space-between;align-items:center;padding:8px 12px;border-left:3px solid var(--green);margin-bottom:8px;">
+          <div style="flex:1;min-width:0;">
+            <b style="font-size:12px;color:var(--green);">Replying to <span id="replyName"></span></b>
+            <div id="replyPreview" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted);"></div>
+          </div>
+          <button type="button" onclick="cancelReply()" style="min-height:28px;min-width:28px;padding:0;border-radius:50%;font-size:16px;display:grid;place-items:center;">✕</button>
+        </div>
+        <div id="emojiPop" class="emoji-pop hidden">
+          <span onclick="pickEmoji('😀')">😀</span><span onclick="pickEmoji('😂')">😂</span>
+          <span onclick="pickEmoji('😅')">😅</span><span onclick="pickEmoji('😊')">😊</span>
+          <span onclick="pickEmoji('😍')">😍</span><span onclick="pickEmoji('👍')">👍</span>
+          <span onclick="pickEmoji('🙏')">🙏</span><span onclick="pickEmoji('🎉')">🎉</span>
+          <span onclick="pickEmoji('🔥')">🔥</span>
+        </div>
+        <form id="messageForm" class="chat-composer">
+          <button class="composer-btn" type="button" onclick="toggleChatPlus()" aria-label="More">＋</button>
+          <button class="composer-btn" type="button" onclick="document.getElementById('chatCam').click()" aria-label="Camera">📷</button>
+          <button class="composer-btn" type="button" onclick="document.getElementById('chatImage').click()" aria-label="Photos">🖼</button>
+          <div class="composer-input">
+            <input id="messageText" placeholder="Message" autocomplete="off" aria-label="Message">
+            <button type="button" class="composer-emoji" onclick="toggleEmoji()" aria-label="Emoji">😊</button>
+          </div>
+          <button class="chat-send" type="submit" id="sendBtn" aria-label="Send">👍</button>
+        </form>
+        <input id="chatCam" type="file" class="sr-file-input" accept="image/*" capture="environment">
+        <input id="chatImage" type="file" class="sr-file-input" accept="image/*">
+        <input id="chatFile" type="file" class="sr-file-input">
+      </div>
+
+      <div id="chatInfo" class="hidden">
+        <div class="msgr-head">
+          <button class="msgr-icon" type="button" onclick="closeChatInfo()" aria-label="Back">←</button>
+          <h1 class="msgr-title" style="font-size:20px">Conversation info</h1>
+        </div>
+        <div class="msgr-list" id="chatInfoBody"></div>
+      </div>
+    </div></section>
+
+    <section class="page hidden" id="page-live-map">
+      <div class="ct">
+        <h1 class="title">🗺️ Live employee locations</h1>
+        <p class="muted">Administrators only. Refreshes every 10 seconds. Green dot = updated in the last 5 minutes, grey = stale. Monitors Technicians, Selective Representatives &amp; Employees.</p>
+        <div class="tabs" style="margin-bottom:8px;">
+          <button type="button" class="tab active" data-livemap-filter="all" onclick="setLiveMapFilter('all')">All Staff</button>
+          <button type="button" class="tab" data-livemap-filter="live" onclick="setLiveMapFilter('live')">🟢 Live Only</button>
+          <button type="button" class="tab" data-livemap-filter="technician" onclick="setLiveMapFilter('technician')">Technicians</button>
+          <button type="button" class="tab" data-livemap-filter="representative" onclick="setLiveMapFilter('representative')">Representatives</button>
+          <button type="button" class="tab" data-livemap-filter="employee" onclick="setLiveMapFilter('employee')">Employees</button>
+        </div>
+        <div class="live-tools">
+          <div class="seg">
+            <button type="button" class="active" data-basemap="map" onclick="setBasemap('map')">Map</button>
+            <button type="button" data-basemap="satellite" onclick="setBasemap('satellite')">Satellite</button>
+            <button type="button" data-basemap="terrain" onclick="setBasemap('terrain')">Terrain</button>
+          </div>
+          <button type="button" class="gray small-btn" onclick="fitLiveMapAll()">Fit all</button>
+          <button type="button" class="gray small-btn" onclick="loadLiveMap({ fit: false })">Refresh now</button>
+        </div>
+        <div class="card" style="padding:8px"><div id="liveMap"></div></div>
+        <p id="liveLocationStatus" class="muted"></p>
+        <div id="liveLocationList"></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="dailyVerseOverlay" class="dialog hidden" role="dialog" aria-modal="true" aria-labelledby="dailyVerseTitle">
+    <div class="card">
+      <div id="dailyVerseDecor" class="verse-decor"></div>
+      <h2 id="dailyVerseTitle">Daily Bible verse</h2>
+      <p id="dailyVerseText"></p>
+      <p id="dailyVerseReference" class="muted"></p>
+      <button id="closeDailyVerseButton" class="btn" type="button">Close</button>
+    </div>
+  </div>
+
+  <nav class="bottom">
+    <button type="button" data-page="home" class="active" onclick="go('home')"><span>🏠</span>Home</button>
+    <button type="button" data-page="schedule" onclick="go('schedule')"><span>📅</span>Schedule</button>
+    <button type="button" data-page="units" onclick="go('units')"><span>🛗</span>Units</button>
+    <button type="button" data-page="reports" onclick="go('reports')"><span>📄</span>Reports</button>
+    <button type="button" data-page="chat" onclick="go('chat')"><span>💬</span>Chat</button>
+  </nav>
+</div>
+
+<div id="callScreen" class="call-screen hidden">
+  <video id="callRemote" autoplay playsinline></video>
+  <video id="callLocal" autoplay playsinline muted></video>
+  <div class="call-top"><div id="callFace"></div><b id="callName"></b><small id="callStatus"></small></div>
+  <div class="call-controls">
+    <button id="callMuteBtn" type="button" data-act="call-mute">Mute</button>
+    <button id="callCamBtn" type="button" data-act="call-cam">Camera off</button>
+    <button class="call-end" type="button" data-act="call-end">End</button>
+  </div>
+</div>
+
+<div id="incomingCall" class="call-screen call-incoming hidden">
+  <div class="call-top"><div id="incomingFace"></div><b id="incomingName"></b><small id="incomingKind"></small></div>
+  <div class="call-controls">
+    <button class="call-decline" type="button" data-act="call-decline">Decline</button>
+    <button class="call-accept" type="button" data-act="call-accept">Accept</button>
+  </div>
+</div>
+
+<div id="sheet" class="sheet-back hidden" data-act="close-sheet">
+  <div class="sheet" data-act="noop"><div id="sheetBody"></div></div>
+</div>
+
+<div id="toastBox" class="toast hidden" role="status"></div>
+
+<div id="messageContextMenu" class="hidden">
+  <div class="msg-reactions">
+    <span data-react="👍">👍</span><span data-react="❤️">❤️</span>
+    <span data-react="😂">😂</span><span data-react="😮">😮</span>
+    <span data-react="😢">😢</span><span data-react="🙏">🙏</span>
+  </div>
+  <button class="msg-context-btn" data-msg-act="copy">📋 Copy</button>
+  <button class="msg-context-btn" data-msg-act="reply">↩️ Reply</button>
+  <button class="msg-context-btn" data-msg-act="pin">📌 Pin message</button>
+  <button class="msg-context-btn hidden" data-msg-act="edit" id="ctxEditBtn">✏️ Edit Message</button>
+  <button class="msg-context-btn hidden" data-msg-act="delete" id="ctxDeleteBtn" style="color:var(--red);">🗑 Delete</button>
+</div>
+
+<div id="pinSetupOverlay" class="dialog hidden" style="z-index:250" role="dialog" aria-modal="true" aria-labelledby="pinSetupTitle">
+  <div class="card">
+    <h2 id="pinSetupTitle" style="margin-top:0;">Set PIN</h2>
+    <div id="pinCurrentField" class="field"><label for="pinCurrent">Current 6-digit PIN</label><input id="pinCurrent" class="pin-input" type="password" inputmode="numeric" autocomplete="off" maxlength="6"></div>
+    <div id="pinNewFields">
+      <div class="field"><label for="pinNew">New 6-digit PIN</label><input id="pinNew" class="pin-input" type="password" inputmode="numeric" autocomplete="off" maxlength="6"></div>
+      <div class="field"><label for="pinConfirm">Re-type new PIN</label><input id="pinConfirm" class="pin-input" type="password" inputmode="numeric" autocomplete="off" maxlength="6"></div>
+    </div>
+    <p id="pinSetupStatus" class="muted" role="status" style="min-height:20px;"></p>
+    <div class="inline-actions" style="justify-content:flex-end;margin-top:16px;">
+      <button class="gray" type="button" onclick="closePinSetup()">Cancel</button>
+      <button class="btn" type="button" onclick="submitPinSetup()">Save</button>
+    </div>
+  </div>
+</div>
+<div id="pinLockOverlay" class="dialog hidden" style="z-index:300" role="dialog" aria-modal="true" aria-labelledby="pinLockTitle">
+  <div class="card" style="text-align:center;">
+    <h2 id="pinLockTitle" style="margin-top:0;">App locked</h2>
+    <p id="pinLockSubtitle" class="muted">Enter your 6-digit PIN or use Biometrics to continue.</p>
+    <div id="pinEntryBlock">
+      <div class="pin-dots" id="pinDots"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+      <input id="pinLockInput" class="pin-input" type="password" inputmode="numeric" autocomplete="off" maxlength="6" aria-label="PIN">
+    </div>
+    <button id="pinLockBiometricBtn" class="btn hidden" type="button" style="width:100%;margin-top:12px;" onclick="unlockWithBiometrics(false)">👆 Unlock with Fingerprint / Face</button>
+    <p id="pinLockStatus" class="muted" role="status" style="min-height:20px;"></p>
+    <button class="gray" type="button" onclick="signOut()">Forgot PIN? Sign out</button>
+  </div>
+</div>
+<div id="changePasswordOverlay" class="dialog hidden" role="dialog" aria-modal="true" aria-labelledby="changePasswordTitle">
+  <div class="card">
+    <h2 id="changePasswordTitle" style="margin-top:0;">Change Password</h2>
+    <div class="field"><label for="currentPassword">Current Password</label><input id="currentPassword" type="password" autocomplete="current-password" required></div>
+    <div class="field"><label for="newPasswordModal">New Password</label><input id="newPasswordModal" type="password" minlength="8" autocomplete="new-password" required></div>
+    <div class="field"><label for="retypeNewPassword">Re-type New Password</label><input id="retypeNewPassword" type="password" minlength="8" autocomplete="new-password" required></div>
+    <p id="changePasswordStatus" class="muted" role="status" style="min-height:20px;"></p>
+    <div class="inline-actions" style="justify-content:flex-end;margin-top:16px;">
+      <button class="gray" type="button" onclick="closeChangePasswordModal()">Cancel</button>
+      <button class="btn" type="button" id="submitChangePasswordBtn" onclick="submitChangePassword()">Update Password</button>
+    </div>
+  </div>
+</div>
+
+<div id="addSiteOverlay" class="dialog hidden" role="dialog" aria-modal="true" aria-labelledby="addSiteTitle">
+  <div class="card">
+    <h2 id="addSiteTitle">Add site</h2>
+    <div class="field"><label for="siteName">Site name</label><input id="siteName"></div>
+    <div class="field"><label for="siteAddress">Address / map search</label><input id="siteAddress"></div>
+    <div class="field"><label for="siteRegion">Area</label><select id="siteRegion"><option>Visayas</option><option>Luzon</option><option>Mindanao</option></select></div>
+    <div class="field"><label for="siteCity">City / Province</label><input id="siteCity"></div>
+    <div class="inline-actions">
+      <button class="btn" type="button" onclick="addSite()">Add site</button>
+      <button class="gray" type="button" id="cancelAddSite">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="confirmOverlay" class="dialog hidden" style="z-index:350" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+  <div class="card">
+    <h2 id="confirmTitle" style="margin-top:0;">Confirm</h2>
+    <p id="confirmMessage" style="margin:8px 0 16px;"></p>
+    <div class="inline-actions" style="justify-content:flex-end;">
+      <button id="confirmCancelBtn" class="gray" type="button">Cancel</button>
+      <button id="confirmOkBtn" class="red" type="button">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div id="deleteMessageOverlay" class="dialog hidden" style="z-index:355" role="dialog" aria-modal="true" aria-labelledby="deleteMessageTitle">
+  <div class="card">
+    <h2 id="deleteMessageTitle" style="margin-top:0;">Delete message</h2>
+    <p id="deleteMessageDesc" class="muted" style="margin:6px 0 14px;">Choose how you want to delete this message:</p>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <button id="deleteForEveryoneBtn" class="red" type="button" onclick="confirmDeleteForEveryone()">Delete for everyone</button>
+      <button id="deleteForYouBtn" class="btn" type="button" onclick="confirmDeleteForYou()">Delete for you</button>
+      <button class="gray" type="button" onclick="closeDeleteMessageModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="iosInstallOverlay" class="dialog hidden" style="z-index:360" role="dialog" aria-modal="true" aria-labelledby="iosInstallTitle">
+  <div class="card">
+    <h2 id="iosInstallTitle" style="margin-top:0;">📲 Install EESI Elevators on Your Phone</h2>
+    <p class="muted" style="line-height:1.55;">Install this app to your Home Screen for full-screen access, instant launch, and device biometrics:</p>
+    <div class="item" style="text-align:left;line-height:1.6;">
+      <b>Android (Chrome / Edge):</b><br>
+      Tap browser menu <b>⋮</b> → <b>Install app</b> or <b>Add to Home screen</b>.<br><br>
+      <b>iPhone / iPad (Safari):</b><br>
+      1. Tap the <b>Share</b> button (square with arrow ↑).<br>
+      2. Scroll down and tap <b>Add to Home Screen</b>.<br>
+      3. Tap <b>Add</b> in the top-right corner.
+    </div>
+    <button class="btn" type="button" style="width:100%" onclick="closeIosInstallModal()">Got it</button>
+  </div>
+</div>
+
+<div id="offlineOverlay" class="hidden" role="alertdialog" aria-modal="true" aria-labelledby="offlineOverlayTitle">
+  <div class="card">
+    <div style="font-size:44px;margin-bottom:8px;">📡</div>
+    <h2 id="offlineOverlayTitle" style="margin:0 0 8px;color:#ff6b6b;">No Internet Connection</h2>
+    <p style="margin:0 0 14px;line-height:1.5;">EESI Elevators operates in strict online mode. You can't continue without an internet connection. Please turn on Wi-Fi or mobile data.</p>
+    <p id="offlineOverlayStatus" class="muted" style="min-height:18px;margin-bottom:14px;"></p>
+    <button id="retryOnlineBtn" class="btn" type="button" style="width:100%" onclick="checkConnectionNow()">🔄 Retry Connection</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" defer></script>
+<script type="module" src="/src/main.tsx"></script>
+</body>
+</html>
