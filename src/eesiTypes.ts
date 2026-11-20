@@ -118,6 +118,7 @@ export interface AppState {
   setupIssue: string;
   booted: boolean;
   blockedUsers: string[];
+  stories: any[];
 }
 
 export const state: AppState = {
@@ -153,6 +154,7 @@ export const state: AppState = {
   setupIssue: "",
   booted: false,
   blockedUsers: [],
+  stories: [],
 };
 
 export const runtime = {
@@ -161,6 +163,7 @@ export const runtime = {
   editingReportId: null as string | null,
   editingExistingUrls: [] as string[],
   pendingReportFiles: [] as Array<{ file: File; previewUrl: string }>,
+  pendingPmsFiles: [] as Array<{ file: File; previewUrl: string }>,
   editingAnnouncementId: null as string | null,
   editingUnitId: null as string | null,
   editingMessageId: null as string | null,
@@ -169,9 +172,11 @@ export const runtime = {
   currentNoteTab: "notes" as "notes" | "recs",
   currentDtrTab: "fill" as "fill" | "time_log" | "preview",
   timeLogMode: "time_in" as "time_in" | "time_out",
-  unitsRegion: "Luzon",
+  unitsRegion: "ALL",
   unitsTab: "list" as "list" | "manual",
   manualUnitId: null as string | null,
+  expandedUnitSiteIds: {} as Record<string, boolean>,
+  editingDtrId: null as string | null,
   pmsRegion: "Luzon",
   pmsUnit: "elevator" as "elevator" | "escalator",
   pmsSiteId: null as string | null,
@@ -189,7 +194,14 @@ export const runtime = {
   liveMapFilter: "all",
   isOnlineVerified: navigator.onLine,
   dtrTimeLogsTableMissing: false,
+  dtrApprovedByColMissing: false,
+  storiesTableMissing: false,
+  amcbSeedAttempted: false,
   dtrCutoffKey: "",
+  tickerIndex: 0,
+  tickerQueueKey: "",
+  selectedSiteId: null as string | null,
+  siteMapTravelMode: "DRIVING" as "DRIVING" | "WALKING" | "TWO_WHEELER",
 };
 
 export const hooks: Record<string, (...args: any[]) => any> = {
@@ -250,6 +262,10 @@ export const hooks: Record<string, (...args: any[]) => any> = {
   applyWatermark: () => {},
   checkShiftReminders: () => {},
   autoFillDtrFromSchedule: () => {},
+  loadStories: async () => {},
+  ensureAmcbUnitsSeeded: async () => {},
+  openEditDtr: () => {},
+  openTimemarkCamera: () => {},
 };
 
 export const $ = (id: string): HTMLElement | null => document.getElementById(id);
@@ -1142,4 +1158,161 @@ export function markDeletedForMe(msgId: string): void {
     localStorage.setItem(deletedForMeKey(), JSON.stringify(arr));
   } catch {}
 }
+
+/* ==================== MEDIA / DTR / LEAVE / STORY / UNIT HELPERS ==================== */
+export function isVideoUrl(u: unknown): boolean {
+  const s = String(u || "");
+  return /\.(mp4|webm|mov|m4v|3gp|mkv)(\?|#|$)/i.test(s) || /^data:video\//i.test(s);
+}
+
+export function fmtHalfSheetDate(v: unknown): string {
+  const s = String(v || "").trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return s;
+  return `${m[2]}/${m[3]}/${m[1].slice(2)}`;
+}
+
+export function fmtTime12h(t: unknown): string {
+  const s = String(t || "").trim();
+  if (!s) return "";
+  if (/[ap]m$/i.test(s)) return s.toUpperCase();
+  const m = s.match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return s;
+  let h = Number(m[1]);
+  const suf = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return `${h}:${m[2]} ${suf}`;
+}
+
+export function parseDtrJobMeta(
+  job: unknown,
+  approvedByCol?: unknown
+): { unitName: string; approvedBy: string; cleanJob: string } {
+  let text = String(job || "").trim();
+  let unitName = "";
+  let approvedBy = String(approvedByCol || "").trim();
+
+  const unitMatch = text.match(/^\[Unit:\s*([^\]]+)\]\s*/i);
+  if (unitMatch) {
+    unitName = unitMatch[1].trim();
+    text = text.slice(unitMatch[0].length).trim();
+  }
+  const apprMatch = text.match(/\s*\[APPR:\s*([^\]]+)\]\s*$/i);
+  if (apprMatch) {
+    if (!approvedBy) approvedBy = apprMatch[1].trim();
+    text = text.slice(0, apprMatch.index).trim();
+  }
+  return { unitName, approvedBy, cleanJob: text };
+}
+
+export function buildDtrJobWithApproval(
+  unitName: string,
+  cleanJob: string,
+  approvedBy: string,
+  includeApprTag = true
+): string {
+  let out = String(cleanJob || "").trim();
+  if (unitName && unitName.trim() && !out.toLowerCase().startsWith("[unit:")) {
+    out = `[Unit: ${unitName.trim()}] ${out}`.trim();
+  }
+  if (includeApprTag && approvedBy && approvedBy.trim()) {
+    out = `${out} [APPR: ${approvedBy.trim()}]`.trim();
+  }
+  return out;
+}
+
+export interface LeaveSheetMeta {
+  filingDate?: string;
+  lastName?: string;
+  firstName?: string;
+  middleName?: string;
+  displayType?: "vacation" | "sick" | "others" | "emergency";
+  othersSpecify?: string;
+  vacationPlace?: "within" | "outside" | "";
+  outsideSpecify?: string;
+  inHospital?: boolean;
+  hospitalSpecify?: string;
+  workingDays?: string;
+  applicantName?: string;
+  reasonText?: string;
+}
+
+export function parseLeaveMeta(reason: unknown): LeaveSheetMeta & { cleanReason: string } {
+  const raw = String(reason || "");
+  const m = raw.match(/\[\[LEAVE_META:([\s\S]*?)\]\]/);
+  if (!m) {
+    return { cleanReason: raw.trim(), reasonText: raw.trim() };
+  }
+  const cleanReason = raw.replace(m[0], "").trim();
+  try {
+    const parsed = JSON.parse(m[1]) || {};
+    return {
+      ...parsed,
+      cleanReason,
+      reasonText: parsed.reasonText || cleanReason,
+    };
+  } catch {
+    return { cleanReason, reasonText: cleanReason };
+  }
+}
+
+export function buildLeaveReasonWithMeta(meta: LeaveSheetMeta): string {
+  const clean = String(meta.reasonText || "").trim();
+  const compact: LeaveSheetMeta = { ...meta };
+  delete compact.reasonText;
+  return `${clean}\n[[LEAVE_META:${JSON.stringify(compact)}]]`.trim();
+}
+
+export interface StoryNoticeMeta {
+  id?: string;
+  user_id: string;
+  sender_name: string;
+  caption?: string;
+  media_url?: string | null;
+  media_type?: "image" | "video" | "text";
+  bg_style?: string;
+  expires_at: string;
+}
+
+export function isStoryNotice(n: any): boolean {
+  return String(n?.body || "").includes("[[STORY_META:");
+}
+
+export function buildStoryAppNoticeBody(caption: string, meta: StoryNoticeMeta): string {
+  return `${String(caption || "My Day Story").trim()}\n[[STORY_META:${JSON.stringify(meta)}]]`;
+}
+
+export function parseStoryFromAppNotice(n: any): any | null {
+  const raw = String(n?.body || "");
+  const match = raw.match(/\[\[STORY_META:([\s\S]*?)\]\]/);
+  if (!match) return null;
+  try {
+    const meta = JSON.parse(match[1]);
+    return {
+      id: `notice:${n.id}`,
+      app_notification_id: n.id,
+      user_id: meta.user_id || "",
+      sender_name: meta.sender_name || "",
+      caption: meta.caption ?? raw.replace(match[0], "").trim(),
+      media_url: meta.media_url || null,
+      media_type: meta.media_type || "text",
+      bg_style: meta.bg_style || "linear-gradient(135deg,#0d254d,#1e6cf2)",
+      expires_at: meta.expires_at || new Date(Date.now() + 86400000).toISOString(),
+      created_at: n.created_at || new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function parseUnitSideTag(notes: unknown): { side: string; cleanNotes: string } {
+  const raw = String(notes || "");
+  const m = raw.match(/\[SIDE:\s*([^\]]+)\]\s*/i);
+  if (!m) return { side: "", cleanNotes: raw.trim() };
+  return {
+    side: m[1].trim().toUpperCase(),
+    cleanNotes: raw.replace(m[0], "").trim(),
+  };
+}
+
 

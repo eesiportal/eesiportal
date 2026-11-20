@@ -410,7 +410,35 @@ let settingSoundTimeout: any = null;
 let customSoundUrl: string | null = null;
 let customSoundAudio: HTMLAudioElement | null = null;
 let settingVibrationTimer: any = null;
-let settingSoundContext: AudioContext | null = null;
+let sharedAudioContext: AudioContext | null = null;
+let audioUnlockWired = false;
+
+function getOrCreateAudioContext(): AudioContext | null {
+  const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+  if (!AudioContextClass) return null;
+  if (!sharedAudioContext || sharedAudioContext.state === "closed") {
+    sharedAudioContext = new AudioContextClass();
+  }
+  return sharedAudioContext;
+}
+
+export function unlockSharedAudio(): void {
+  const ctx = getOrCreateAudioContext();
+  if (ctx && ctx.state === "suspended") {
+    ctx.resume().catch(() => {});
+  }
+}
+
+function wireAudioGestureUnlock(): void {
+  if (audioUnlockWired) return;
+  audioUnlockWired = true;
+  const unlock = () => {
+    unlockSharedAudio();
+  };
+  document.addEventListener("pointerdown", unlock, { passive: true });
+  document.addEventListener("touchstart", unlock, { passive: true });
+  document.addEventListener("keydown", unlock, { passive: true });
+}
 
 export function stopSettingSound(): void {
   clearInterval(settingSoundTimer);
@@ -420,7 +448,6 @@ export function stopSettingSound(): void {
   settingSoundTimeout = null;
   settingVibrationTimer = null;
   if ("vibrate" in navigator) navigator.vibrate(0);
-  if (settingSoundContext) { settingSoundContext.close().catch(() => {}); settingSoundContext = null; }
   if (customSoundAudio) { customSoundAudio.pause(); customSoundAudio.currentTime = 0; customSoundAudio = null; }
   if (customSoundUrl) { URL.revokeObjectURL(customSoundUrl); customSoundUrl = null; }
 }
@@ -428,7 +455,7 @@ export function stopSettingSound(): void {
 export function notificationSettings() {
   return {
     enabled: localStorage.getItem("eesi-notifications") !== "off",
-    vibration: localStorage.getItem("eesi-vibration") === "on",
+    vibration: localStorage.getItem("eesi-vibration") !== "off",
   };
 }
 
@@ -482,17 +509,17 @@ async function playCustomSettingSound(): Promise<boolean> {
 
 export function playSettingSound(silent = false): void {
   stopSettingSound();
-  const choice = ($("settingSound") as HTMLSelectElement | null)?.value || "off";
+  const choice = ($("settingSound") as HTMLSelectElement | null)?.value || localStorage.getItem("eesi-sound") || "bright";
   const source = localStorage.getItem("eesi-sound-source") || "built-in";
   const durationEl = (source === "custom" ? $("settingCustomAlertDuration") : $("settingAlertDuration")) as HTMLSelectElement | null;
-  const duration = Number(durationEl?.value || 15);
+  const duration = Number(durationEl?.value || localStorage.getItem(source === "custom" ? "eesi-custom-alert-duration" : "eesi-alert-duration") || 15);
   const settings = notificationSettings();
 
   if (silent && !settings.enabled) return;
 
   if (source !== "custom" && choice === "off") {
     if (settings.vibration && "vibrate" in navigator) {
-      startVibrationPattern(duration > 0 ? duration : 3);
+      startVibrationPattern(duration > 0 ? Math.min(duration, 4) : 3);
       if (!silent) toast("Vibration preview (sound is off)");
     } else if (!silent) {
       toast("Choose a built-in sound or turn on vibration.");
@@ -510,18 +537,21 @@ export function playSettingSound(silent = false): void {
     return;
   }
 
+  // For background incoming notification chimes, keep chime concise (max ~3.2s) while full preview honors selected duration
+  const effectiveDuration = silent ? Math.min(duration, 3.2) : duration;
+
   if (source === "custom") {
     playCustomSettingSound().then(started => {
       if (!started && !silent) toast("No custom ringtone saved. Upload one first.");
     });
-    settingSoundTimeout = setTimeout(stopSettingSound, duration * 1000);
-    startVibrationPattern(duration);
+    settingSoundTimeout = setTimeout(stopSettingSound, effectiveDuration * 1000);
+    startVibrationPattern(effectiveDuration);
     return;
   }
 
-  const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-  if (!AudioContextClass) {
-    startVibrationPattern(duration);
+  const ctx = getOrCreateAudioContext();
+  if (!ctx) {
+    startVibrationPattern(effectiveDuration);
     if (!silent) toast("Sound preview is not supported in this browser.");
     return;
   }
@@ -534,51 +564,55 @@ export function playSettingSound(silent = false): void {
     bell: [784, 988, 784],
   };
   const notes = patterns[choice] || patterns.bright;
-  settingSoundContext = new AudioContextClass();
 
   const playPattern = () => {
-    if (!settingSoundContext || settingSoundContext.state === "closed") return;
-    if (settingSoundContext.state === "suspended") settingSoundContext.resume();
-    const start = settingSoundContext.currentTime;
+    if (!ctx || ctx.state === "closed") return;
+    const start = ctx.currentTime;
     notes.forEach((frequency, index) => {
-      if (!settingSoundContext) return;
-      const oscillator = settingSoundContext.createOscillator();
-      const gain = settingSoundContext.createGain();
-      const noteStart = start + index * 0.17;
-      const noteEnd = noteStart + 0.14;
+      const oscillator = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const noteStart = start + index * 0.14;
+      const noteEnd = noteStart + 0.12;
       oscillator.type = choice === "digital" ? "square" : "sine";
       oscillator.frequency.setValueAtTime(frequency, noteStart);
       gain.gain.setValueAtTime(0.001, noteStart);
-      gain.gain.exponentialRampToValueAtTime(0.10, noteStart + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.13, noteStart + 0.015);
       gain.gain.exponentialRampToValueAtTime(0.001, noteEnd);
       oscillator.connect(gain);
-      gain.connect(settingSoundContext.destination);
+      gain.connect(ctx.destination);
       oscillator.start(noteStart);
       oscillator.stop(noteEnd);
     });
   };
-  settingSoundContext.resume().then(() => {
-    if (!settingSoundContext || settingSoundContext.state !== "running") return;
+  const runSound = () => {
+    if (ctx.state !== "running") return;
     playPattern();
-    settingSoundTimer = setInterval(playPattern, notes.length * 170 + 350);
-  }).catch(() => {});
+    if (!silent) {
+      settingSoundTimer = setInterval(playPattern, notes.length * 140 + 350);
+    }
+  };
+  if (ctx.state === "running") {
+    runSound();
+  } else {
+    ctx.resume().then(runSound).catch(() => {});
+  }
 
-  startVibrationPattern(duration);
-  settingSoundTimeout = setTimeout(stopSettingSound, duration * 1000);
+  startVibrationPattern(effectiveDuration);
+  settingSoundTimeout = setTimeout(stopSettingSound, effectiveDuration * 1000);
 }
 
-function vibrateForNotification(): void {
+function vibrateForNotification(pattern: number[] = [220, 100, 220]): void {
   const s = notificationSettings();
-  if (s.enabled && s.vibration && "vibrate" in navigator) navigator.vibrate([220, 100, 220]);
+  if (s.enabled && s.vibration && "vibrate" in navigator) navigator.vibrate(pattern);
 }
 
 let lastAlertAt = 0;
 export function triggerAlert(title: string, body: string, vibratePattern: number[] = [220, 100, 220]): void {
   const s = notificationSettings();
-  if (s.enabled && Date.now() - lastAlertAt > 1200) {
+  if (s.enabled && Date.now() - lastAlertAt > 350) {
     lastAlertAt = Date.now();
+    vibrateForNotification(vibratePattern);
     playSettingSound(true);
-    vibrateForNotification();
   }
   showBackgroundNotification(title, body, vibratePattern);
 }
@@ -592,8 +626,8 @@ export function triggerShiftAlert(
   const s = notificationSettings();
   if (s.enabled) {
     lastAlertAt = Date.now();
+    vibrateForNotification(vibratePattern);
     playSettingSound(true);
-    vibrateForNotification();
   }
   showShiftReminderNotification(title, body, scheduleId, vibratePattern);
 }
@@ -659,9 +693,11 @@ export function applyDisplaySettings(): void {
   const textSize = localStorage.getItem("eesi-text-size") || "regular";
   const compact = localStorage.getItem("eesi-compact") === "on";
   document.body.style.fontSize = "15px";
-  const zoomMap: Record<string, number> = { xs: 0.8, small: 0.9, regular: 1, large: 1.15 };
+  const zoomMap: Record<string, number> = { xs: 0.85, small: 0.92, regular: 1, large: 1.12 };
   const appEl = $("app");
-  if (appEl) (appEl.style as any).zoom = String(zoomMap[textSize] || 1);
+  if (appEl) (appEl.style as any).zoom = "";
+  const mainEl = document.querySelector<HTMLElement>("#app > main");
+  if (mainEl) (mainEl.style as any).zoom = String(zoomMap[textSize] || 1);
   document.body.classList.toggle("compact", compact);
   const sts = $("settingTextSize") as HTMLSelectElement | null;
   const sc = $("settingCompact") as HTMLInputElement | null;
@@ -1122,87 +1158,14 @@ export async function updateLiveWeather(lat = runtime.lastWeatherLat, lon = runt
   }
 }
 
-/* ==================== PULL TO RELOAD ==================== */
+/* ==================== PULL TO RELOAD (REMOVED) ==================== */
 export function initPullToReload(): void {
-  const banner = $("ptrBanner");
-  if (!banner) return;
-  const THRESHOLD = 78;
-  let startY = 0;
-  let pullDist = 0;
-  let tracking = false;
-  let reloading = false;
-
-  const canPull = (target: EventTarget | null) => {
-    const elTarget = target as HTMLElement | null;
-    if (reloading || $("app")?.classList.contains("hidden")) return false;
-    if ((window.scrollY || document.documentElement.scrollTop || 0) > 2) return false;
-    if (elTarget?.closest("#liveMap, canvas, .sheet-back:not(.hidden), .dialog:not(.hidden), #settingsMenu:not(.hidden), #pmsChecklistPanel:not(.hidden), #pmsRecordOverlay:not(.hidden), textarea, select, input")) {
-      return false;
-    }
-    let el = elTarget;
-    while (el && el !== document.body) {
-      if (el.scrollHeight > el.clientHeight + 2 && el.scrollTop > 2) return false;
-      el = el.parentElement;
-    }
-    return true;
-  };
-
-  const resetBanner = () => {
-    tracking = false;
-    pullDist = 0;
-    banner.classList.remove("visible", "ready");
-    banner.style.transform = "translate(-50%, -90px)";
-  };
-
-  document.addEventListener("touchstart", e => {
-    if (e.touches.length !== 1 || !canPull(e.target)) { tracking = false; return; }
-    startY = e.touches[0].clientY;
-    pullDist = 0;
-    tracking = true;
-  }, { passive: true });
-
-  document.addEventListener("touchmove", e => {
-    if (!tracking || reloading || e.touches.length !== 1) return;
-    const dy = e.touches[0].clientY - startY;
-    if (dy <= 10) {
-      if (pullDist > 0) resetBanner();
-      return;
-    }
-    if ((window.scrollY || document.documentElement.scrollTop || 0) > 2) { resetBanner(); return; }
-    pullDist = Math.min(115, dy * 0.55);
-    const ready = pullDist >= THRESHOLD;
-    banner.textContent = ready ? "↻ Release to reload" : "↓ Pull to reload";
-    banner.classList.add("visible");
-    banner.classList.toggle("ready", ready);
-    banner.style.transform = "translate(-50%, " + Math.round(pullDist - 40) + "px)";
-  }, { passive: true });
-
-  const finishPull = () => {
-    if (!tracking || reloading) return;
-    if (pullDist >= THRESHOLD) {
-      if (!navigator.onLine) {
-        resetBanner();
-        toast("No internet connection.");
-        return;
-      }
-      reloading = true;
-      hooks.saveLastView?.();
-      banner.textContent = "🔄 Reloading…";
-      banner.classList.add("visible", "ready");
-      banner.style.transform = "translate(-50%, 10px)";
-      setTimeout(() => window.location.reload(), 250);
-    } else {
-      resetBanner();
-    }
-    tracking = false;
-  };
-
-  document.addEventListener("touchend", finishPull, { passive: true });
-  document.addEventListener("touchcancel", resetBanner, { passive: true });
+  // Auto-reload on pull removed per user request so scrolling remains steady.
 }
 
 /* ==================== SETTINGS WIRING ==================== */
 export function initSettingsWiring(): void {
+  wireAudioGestureUnlock();
   const sn = $("settingNotifications") as HTMLInputElement | null;
   const sv = $("settingVibration") as HTMLInputElement | null;
   const ss = $("settingSound") as HTMLSelectElement | null;
@@ -1210,8 +1173,8 @@ export function initSettingsWiring(): void {
   const scd = $("settingCustomAlertDuration") as HTMLSelectElement | null;
 
   if (sn) sn.checked = localStorage.getItem("eesi-notifications") !== "off";
-  if (sv) sv.checked = localStorage.getItem("eesi-vibration") === "on";
-  if (ss) ss.value = localStorage.getItem("eesi-sound") || "off";
+  if (sv) sv.checked = localStorage.getItem("eesi-vibration") !== "off";
+  if (ss) ss.value = localStorage.getItem("eesi-sound") || "bright";
   if (sd) sd.value = localStorage.getItem("eesi-alert-duration") || "15";
   if (scd) scd.value = localStorage.getItem("eesi-custom-alert-duration") || "15";
   setSoundSource(localStorage.getItem("eesi-sound-source") || "built-in");

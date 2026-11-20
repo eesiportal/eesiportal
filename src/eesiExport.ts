@@ -9,6 +9,7 @@ import {
   fmtDay,
   fmtTableDate,
   isManager,
+  parseDtrJobMeta,
   parseRecMeta,
   parseReportUnit,
   profileName,
@@ -329,7 +330,8 @@ export function exportPmsRecords(format: "xls" | "doc", singleRecordId?: string)
       it.passed ? "PASS" : "FAIL / UNCHECKED",
     ]);
     const title = `PMS Inspection Record — ${(rec.unit_type || "").toUpperCase()}`;
-    const sub = `Site: ${siteName} · Date: ${fmtDay(rec.checklist_date)} · Inspector: ${profileName(rec.user_id)} · Score: ${rec.items_passed}/${rec.items_total}`;
+    const attCount = Array.isArray(parsed.attachments) ? parsed.attachments.length : 0;
+    const sub = `Site: ${siteName} · Date: ${fmtDay(rec.checklist_date)} · Inspector: ${profileName(rec.user_id)} · Score: ${rec.items_passed}/${rec.items_total}${attCount ? ` · Attachments: ${attCount}` : ""}`;
     const fname = `eesi-pms-record-${safeFileSlug(siteName)}-${rec.checklist_date || stamp()}`;
     if (format === "xls") downloadXls(fname + ".xls", title, sub, cols, rows);
     else downloadDoc(fname + ".doc", title, sub, cols, rows);
@@ -342,14 +344,15 @@ export function exportPmsRecords(format: "xls" | "doc", singleRecordId?: string)
     return;
   }
   const cols: TableCol[] = [
-    { label: "Date", px: 95, pct: 11, align: "center" },
+    { label: "Date", px: 95, pct: 10, align: "center" },
     { label: "Region", px: 85, pct: 9, align: "center" },
-    { label: "Site", px: 170, pct: 19, align: "left" },
-    { label: "Unit Type", px: 95, pct: 10, align: "center" },
-    { label: "Inspector", px: 140, pct: 15, align: "left" },
-    { label: "Team", px: 105, pct: 11, align: "left" },
-    { label: "Score", px: 85, pct: 9, align: "center" },
-    { label: "Failed Items", px: 220, pct: 16, align: "left" },
+    { label: "Site", px: 165, pct: 18, align: "left" },
+    { label: "Unit Type", px: 90, pct: 10, align: "center" },
+    { label: "Inspector", px: 135, pct: 14, align: "left" },
+    { label: "Team", px: 100, pct: 10, align: "left" },
+    { label: "Score", px: 80, pct: 9, align: "center" },
+    { label: "Failed Items", px: 200, pct: 14, align: "left" },
+    { label: "Files", px: 60, pct: 6, align: "center" },
   ];
   const rows = list.map(r => {
     const site = state.sites.find(s => String(s.id) === String(r.site_id));
@@ -359,6 +362,7 @@ export function exportPmsRecords(format: "xls" | "doc", singleRecordId?: string)
     const failed = Array.isArray(parsed.items)
       ? parsed.items.filter((i: any) => !i.passed).map((i: any) => i.label).join("; ")
       : "";
+    const attCount = Array.isArray(parsed.attachments) ? parsed.attachments.length : 0;
     return [
       fmtDay(r.checklist_date),
       site?.region || parsed.region || "—",
@@ -368,6 +372,7 @@ export function exportPmsRecords(format: "xls" | "doc", singleRecordId?: string)
       p?.team || "—",
       `${r.items_passed}/${r.items_total}`,
       failed || "All passed",
+      attCount ? `${attCount} file(s)` : "None",
     ];
   });
   const fname = `eesi-pms-records-${stamp()}`;
@@ -478,6 +483,8 @@ export async function exportDtrHistoryPdf(): Promise<void> {
 
     const tableRows = list.map((d, idx) => {
       const p = profileOf(d.user_id);
+      const jobMeta = parseDtrJobMeta(d.job, d.approved_by);
+      const isSunday = d.work_date ? new Date(String(d.work_date) + "T00:00:00").getDay() === 0 : false;
       const hrs = calculateDtrHours(d.time_in, d.time_out, d.overtime_approved);
       const otMins = calculateOtMinutes(d.time_in, d.time_out);
       const otHrs = otMins / 60;
@@ -492,11 +499,16 @@ export async function exportDtrHistoryPdf(): Promise<void> {
       }
 
       const otLabel =
-        otMins > 0
-          ? d.overtime_approved
-            ? `OT Approved (+${otHrs.toFixed(1)}h)`
-            : `OT Pending (${otHrs.toFixed(1)}h)`
-          : "Standard";
+        jobMeta.approvedBy ||
+        (isSunday
+          ? "SUNDAY DUTY"
+          : otMins > 0
+            ? d.overtime_approved
+              ? `EXTEND (+${otHrs.toFixed(1)}h)`
+              : `OT Pending (${otHrs.toFixed(1)}h)`
+            : "Standard");
+
+      const displayJob = [jobMeta.unitName ? `[${jobMeta.unitName}]` : "", jobMeta.cleanJob].filter(Boolean).join(" ") || "—";
 
       return [
         String(idx + 1),
@@ -504,7 +516,7 @@ export async function exportDtrHistoryPdf(): Promise<void> {
         profileName(d.user_id) || "Member",
         [p?.team, p?.area].filter(Boolean).join(" / ") || "—",
         d.location || "—",
-        d.job || "—",
+        displayJob,
         formatPdfTime(d.time_in),
         formatPdfTime(d.time_out),
         hrs.toFixed(2),

@@ -8,7 +8,9 @@ import {
   isAdmin,
   isManager,
   isMissingTableError,
+  isStoryNotice,
   isWithinSelfActionWindow,
+  parseStoryFromAppNotice,
   parseTimeLogFromAppNotice,
   profileName,
   profileOf,
@@ -105,14 +107,11 @@ export async function restoreLastView(): Promise<void> {
   if (!saved || !saved.page) return;
   runtime.restoringView = true;
   try {
-    if (saved.unitsRegion && ["Luzon", "Visayas", "Mindanao"].includes(saved.unitsRegion)) {
+    if (saved.unitsRegion && ["ALL", "Luzon", "Visayas", "Mindanao"].includes(saved.unitsRegion)) {
       runtime.unitsRegion = saved.unitsRegion;
       document.querySelectorAll<HTMLElement>("[data-units-region]").forEach(b =>
         b.classList.toggle("active", b.dataset.unitsRegion === runtime.unitsRegion)
       );
-    }
-    if (saved.unitsTab === "manual" || saved.unitsTab === "list") {
-      hooks.switchUnitsTab?.(saved.unitsTab);
     }
     if (saved.dtrTab) hooks.dtrTab(saved.dtrTab);
     if (saved.noteTab) hooks.switchNoteTab(saved.noteTab);
@@ -173,6 +172,7 @@ let approvalNotificationsLoaded = false;
 let schedulesLoaded = false;
 let announcementsLoaded = false;
 let dtrTimeLogsLoaded = false;
+let storiesLoaded = false;
 
 export function resetDataLoadFlags(): void {
   appNotificationsLoaded = false;
@@ -182,7 +182,11 @@ export function resetDataLoadFlags(): void {
   schedulesLoaded = false;
   leaveLoaded = false;
   dtrTimeLogsLoaded = false;
+  storiesLoaded = false;
   runtime.dtrTimeLogsTableMissing = false;
+  runtime.dtrApprovedByColMissing = false;
+  runtime.storiesTableMissing = false;
+  runtime.amcbSeedAttempted = false;
 }
 
 export async function loadProfiles(): Promise<void> {
@@ -338,11 +342,15 @@ export async function loadAppNotifications(): Promise<void> {
   if (runtime.dtrTimeLogsTableMissing) {
     syncTimeLogsFromAppNotices();
   }
+  if (runtime.storiesTableMissing) {
+    syncStoriesFromAppNotices();
+  }
   hooks.renderNotices();
   hooks.renderHome();
-  if (newItems.length && !isWithinSelfActionWindow()) {
-    const firstTitle = newItems[0].title || "Report";
-    const cleanBody = stripTimeLogMeta(newItems[0].body);
+  const visibleNew = newItems.filter((it: any) => !isStoryNotice(it));
+  if (visibleNew.length && !isWithinSelfActionWindow()) {
+    const firstTitle = visibleNew[0].title || "Report";
+    const cleanBody = stripTimeLogMeta(visibleNew[0].body);
     const alertTitle = /^[📄🟢🔴📅🌴📢💬🔔⚠️]/.test(firstTitle) ? firstTitle : "📄 " + firstTitle;
     triggerAlert(alertTitle, cleanBody);
   }
@@ -392,14 +400,82 @@ export async function loadSchedules(): Promise<void> {
 }
 
 export async function loadDtrs(): Promise<void> {
-  const { data, error } = await runtime.client
-    .from("dtr_entries")
-    .select("id,user_id,work_date,location,job,time_in,time_out,overtime_approved")
-    .order("work_date", { ascending: true });
-  if (error) { setupError("Could not load DTR", error); return; }
-  state.dtrs = data || [];
+  let rows: any[] | null = null;
+  if (!runtime.dtrApprovedByColMissing) {
+    const res = await runtime.client
+      .from("dtr_entries")
+      .select("id,user_id,work_date,location,job,time_in,time_out,overtime_approved,approved_by")
+      .order("work_date", { ascending: true });
+    if (!res.error) {
+      rows = res.data || [];
+    } else if (/approved_by|42703|PGRST204/i.test(String(res.error.message || "") + " " + String(res.error.code || ""))) {
+      runtime.dtrApprovedByColMissing = true;
+    } else {
+      setupError("Could not load DTR", res.error);
+      return;
+    }
+  }
+  if (rows === null) {
+    const { data, error } = await runtime.client
+      .from("dtr_entries")
+      .select("id,user_id,work_date,location,job,time_in,time_out,overtime_approved")
+      .order("work_date", { ascending: true });
+    if (error) { setupError("Could not load DTR", error); return; }
+    rows = data || [];
+  }
+  state.dtrs = rows || [];
   hooks.renderDtr();
   hooks.renderHome();
+}
+
+function applyStoryRows(rows: any[]): void {
+  const nowMs = Date.now();
+  const active = (rows || []).filter((s: any) => !s.expires_at || new Date(s.expires_at).getTime() > nowMs);
+  const prevIds = new Set((state.stories || []).map((s: any) => String(s.id)));
+  const incoming = storiesLoaded
+    ? active.filter((s: any) => !prevIds.has(String(s.id)) && String(s.user_id) !== String(state.userId))
+    : [];
+  state.stories = active;
+  storiesLoaded = true;
+  hooks.renderChatList?.();
+  if (incoming.length > 0 && !isWithinSelfActionWindow()) {
+    const s = incoming[0];
+    triggerAlert("✨ New My Day Story", (s.sender_name || profileName(s.user_id)) + " shared a story", [180, 90, 180]);
+  }
+}
+
+function syncStoriesFromAppNotices(): void {
+  const rows = (state.appNotifications || [])
+    .map((n: any) => parseStoryFromAppNotice(n))
+    .filter(Boolean);
+  applyStoryRows(rows);
+}
+
+export async function loadStories(): Promise<void> {
+  if (!state.userId) return;
+  if (!runtime.storiesTableMissing) {
+    const { data, error } = await runtime.client
+      .from("stories")
+      .select("id,user_id,sender_name,caption,media_url,media_type,bg_style,expires_at,created_at")
+      .gt("expires_at", new Date().toISOString())
+      .order("created_at", { ascending: false })
+      .limit(120);
+    if (!error) {
+      runtime.storiesTableMissing = false;
+      applyStoryRows(data || []);
+      return;
+    }
+    if (!isMissingTableError(error)) {
+      console.warn("Could not load stories:", error?.message || error);
+      return;
+    }
+    runtime.storiesTableMissing = true;
+  }
+  if (!appNotificationsLoaded) {
+    await loadAppNotifications();
+  } else {
+    syncStoriesFromAppNotices();
+  }
 }
 
 function applyTimeLogRows(rows: any[]): void {
@@ -728,6 +804,7 @@ const RELOADERS: Record<string, () => Promise<any> | any> = {
   leave_requests: () => loadLeaveRequests(),
   approval_notifications: () => loadApprovalNotifications(),
   user_blocks: () => loadBlockedUsers(),
+  stories: () => loadStories(),
 };
 const LIVE_TABLES = Object.keys(RELOADERS);
 
@@ -837,6 +914,7 @@ export async function reloadEverything(): Promise<void> {
     loadLeaveRequests(),
     loadReports(),
     loadPmsRecords(),
+    loadStories(),
   ]);
   await loadUnread();
   await loadRecentChatNotices();
@@ -925,6 +1003,7 @@ async function loadGoogleMapsLibraries(): Promise<{
   AdvancedMarkerElement: typeof google.maps.marker.AdvancedMarkerElement;
   LatLngBounds: typeof google.maps.LatLngBounds;
   Place: typeof google.maps.places.Place;
+  Route: typeof google.maps.routes.Route;
 }> {
   const apiKey = getGoogleMapsKey();
   if (!apiKey) {
@@ -934,11 +1013,12 @@ async function loadGoogleMapsLibraries(): Promise<{
     setOptions({ key: apiKey, v: "weekly" });
     mapsConfigured = true;
   }
-  const [mapsLib, markerLib, coreLib, placesLib] = await Promise.all([
+  const [mapsLib, markerLib, coreLib, placesLib, routesLib] = await Promise.all([
     importLibrary("maps") as Promise<google.maps.MapsLibrary>,
     importLibrary("marker") as Promise<google.maps.MarkerLibrary>,
     importLibrary("core") as Promise<google.maps.CoreLibrary>,
     importLibrary("places") as Promise<google.maps.PlacesLibrary>,
+    importLibrary("routes") as Promise<google.maps.RoutesLibrary>,
   ]);
   return {
     Map: mapsLib.Map,
@@ -946,6 +1026,7 @@ async function loadGoogleMapsLibraries(): Promise<{
     AdvancedMarkerElement: markerLib.AdvancedMarkerElement,
     LatLngBounds: coreLib.LatLngBounds,
     Place: placesLib.Place,
+    Route: routesLib.Route,
   };
 }
 
@@ -1177,85 +1258,422 @@ export async function loadLiveMap(opts: { fit?: boolean } = {}): Promise<void> {
 let siteMapInstance: google.maps.Map | null = null;
 let siteMapContainerEl: HTMLElement | null = null;
 let siteMapMarker: google.maps.marker.AdvancedMarkerElement | null = null;
+let siteOriginMarker: google.maps.marker.AdvancedMarkerElement | null = null;
 let siteMapInfoWindow: google.maps.InfoWindow | null = null;
+let siteMapPolylines: google.maps.Polyline[] = [];
+let siteLastDestPos: { lat: number; lng: number } | null = null;
+let siteLastRouteBounds: google.maps.LatLngBounds | null = null;
+const siteLocationCache = new Map<
+  string,
+  { lat: number; lng: number; displayName: string; formattedAddress: string }
+>();
+let lastSiteMapArgs: {
+  containerId: string;
+  query: string;
+  siteTitle: string;
+  statusElId?: string;
+  fallbackQueries?: string[];
+} | null = null;
+
+function clearSiteMapPolylines(): void {
+  siteMapPolylines.forEach(p => { try { p.setMap(null); } catch {} });
+  siteMapPolylines = [];
+  siteLastRouteBounds = null;
+}
+
+function buildOriginPinElement(): HTMLElement {
+  const el = document.createElement("div");
+  el.textContent = "YOU";
+  el.style.cssText =
+    "padding:3px 7px;border-radius:999px;background:#22c55e;color:#fff;font-size:10px;font-weight:800;" +
+    "border:2px solid #fff;box-shadow:0 3px 10px rgba(0,0,0,.45);";
+  return el;
+}
+
+async function ensureSiteMapInstance(containerId: string) {
+  const container = $(containerId);
+  if (!container) return null;
+  const libs = await loadGoogleMapsLibraries();
+  if (!siteMapInstance || siteMapContainerEl !== container) {
+    siteMapContainerEl = container;
+    siteMapInstance = new libs.Map(container, {
+      center: { lat: 10.3157, lng: 123.8854 },
+      zoom: 12,
+      mapId: "DEMO_MAP_ID",
+      mapTypeControl: true,
+      streetViewControl: false,
+      fullscreenControl: true,
+      gestureHandling: "cooperative",
+      internalUsageAttributionIds: [MAPS_ATTRIBUTION_ID],
+    } as any);
+    siteMapInfoWindow = new libs.InfoWindow();
+    siteMapMarker = null;
+    siteOriginMarker = null;
+  }
+  return { container, ...libs };
+}
+
+export async function initSitesMapOverview(): Promise<void> {
+  const container = $("siteGoogleMap");
+  if (!container) return;
+  const statusEl = $("siteMapStatus");
+  const dirBox = $("siteMapDirections");
+  try {
+    await ensureSiteMapInstance("siteGoogleMap");
+    if (!lastSiteMapArgs) {
+      if (statusEl) {
+        statusEl.textContent = "Tap \"View on Map\" on any site below to center the map and load directions.";
+      }
+      if (dirBox && !dirBox.innerHTML.trim()) dirBox.innerHTML = "";
+    }
+  } catch (err: any) {
+    if (statusEl) {
+      statusEl.textContent = "Unable to load map right now: " + (err?.message || err);
+    }
+  }
+}
+
+export function centerSiteMapOnSelected(): void {
+  if (!siteMapInstance || !siteLastDestPos) return;
+  siteMapInstance.panTo(siteLastDestPos);
+  siteMapInstance.setCenter(siteLastDestPos);
+  siteMapInstance.setZoom(16);
+  if (siteMapInfoWindow && siteMapMarker) {
+    siteMapInfoWindow.open({ map: siteMapInstance, anchor: siteMapMarker });
+  }
+}
+
+export function fitSiteMapRoute(): void {
+  if (!siteMapInstance) return;
+  if (siteLastRouteBounds) {
+    siteMapInstance.fitBounds(siteLastRouteBounds, 48);
+  } else {
+    centerSiteMapOnSelected();
+  }
+}
+
+async function getCurrentOriginLatLng(): Promise<{ lat: number; lng: number } | null> {
+  if (navigator.geolocation) {
+    const pos = await new Promise<GeolocationPosition | null>(resolve => {
+      navigator.geolocation.getCurrentPosition(
+        p => resolve(p),
+        () => resolve(null),
+        { enableHighAccuracy: true, maximumAge: 15000, timeout: 6000 }
+      );
+    });
+    if (pos) {
+      return { lat: pos.coords.latitude, lng: pos.coords.longitude };
+    }
+  }
+  if (state.userId && runtime.client) {
+    try {
+      const { data } = await runtime.client
+        .from("employee_locations")
+        .select("latitude,longitude")
+        .eq("user_id", state.userId)
+        .maybeSingle();
+      if (data && Number.isFinite(+data.latitude) && Number.isFinite(+data.longitude)) {
+        return { lat: +data.latitude, lng: +data.longitude };
+      }
+    } catch {}
+  }
+  return null;
+}
+
+function formatDurationMs(msRaw: unknown): string {
+  const ms = Number(msRaw || 0);
+  if (!ms || isNaN(ms)) return "";
+  const totalMin = Math.max(1, Math.round(ms / 60000));
+  if (totalMin < 60) return `${totalMin} min`;
+  const hrs = Math.floor(totalMin / 60);
+  const rem = totalMin % 60;
+  return rem ? `${hrs} hr ${rem} min` : `${hrs} hr`;
+}
+
+function formatDistanceMeters(metersRaw: unknown): string {
+  const m = Number(metersRaw || 0);
+  if (!m || isNaN(m)) return "";
+  return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`;
+}
+
+export function setSiteMapTravelMode(mode: "DRIVING" | "WALKING" | "TWO_WHEELER"): void {
+  runtime.siteMapTravelMode = mode;
+  if (lastSiteMapArgs) {
+    void openSiteGoogleMap(
+      lastSiteMapArgs.containerId,
+      lastSiteMapArgs.query,
+      lastSiteMapArgs.siteTitle,
+      lastSiteMapArgs.statusElId,
+      lastSiteMapArgs.fallbackQueries
+    );
+  }
+}
 
 export async function openSiteGoogleMap(
   containerId: string,
   query: string,
   siteTitle: string,
-  statusElId?: string
+  statusElId?: string,
+  fallbackQueries: string[] = []
 ): Promise<void> {
-  const container = $(containerId);
   const statusEl = statusElId ? $(statusElId) : null;
-  if (!container) return;
-  if (statusEl) statusEl.textContent = "Locating site on Google Maps…";
+  const dirBox = $("siteMapDirections");
+  if (!$(containerId)) return;
+  lastSiteMapArgs = { containerId, query, siteTitle, statusElId, fallbackQueries };
+  if (statusEl) statusEl.textContent = "Centering map on " + siteTitle + "…";
+  if (dirBox) dirBox.innerHTML = '<p class="muted">Locating site & calculating live route…</p>';
+  clearSiteMapPolylines();
+
   try {
-    const { Map, InfoWindow, AdvancedMarkerElement, Place } = await loadGoogleMapsLibraries();
-    if (!siteMapInstance || siteMapContainerEl !== container) {
-      siteMapContainerEl = container;
-      siteMapInstance = new Map(container, {
-        center: { lat: 14.5995, lng: 120.9842 },
-        zoom: 12,
-        mapId: "DEMO_MAP_ID",
-        mapTypeControl: true,
-        streetViewControl: false,
-        fullscreenControl: true,
-        internalUsageAttributionIds: [MAPS_ATTRIBUTION_ID],
-      } as any);
-      siteMapInfoWindow = new InfoWindow();
-      siteMapMarker = null;
+    const setup = await ensureSiteMapInstance(containerId);
+    if (!setup || !siteMapInstance) return;
+    const { InfoWindow, AdvancedMarkerElement, LatLngBounds, Place, Route } = setup;
+
+    if (!siteMapInfoWindow) siteMapInfoWindow = new InfoWindow();
+
+    const cacheKey = query.trim().toLowerCase();
+    let resolved = siteLocationCache.get(cacheKey) || null;
+    let placeErrorMsg = "";
+
+    const originPromise = getCurrentOriginLatLng();
+
+    if (!resolved) {
+      const candidates = [...new Set([query, ...fallbackQueries].map(q => q.trim()).filter(Boolean))];
+      for (const q of candidates) {
+        try {
+          const { places } = await Place.searchByText({
+            textQuery: q,
+            fields: ["displayName", "location", "formattedAddress"],
+            maxResultCount: 1,
+            internalUsageAttributionIds: [MAPS_ATTRIBUTION_ID],
+          } as any);
+          const match = places?.[0];
+          if (match?.location) {
+            const lat = typeof match.location.lat === "function" ? match.location.lat() : Number((match.location as any).lat);
+            const lng = typeof match.location.lng === "function" ? match.location.lng() : Number((match.location as any).lng);
+            if (Number.isFinite(lat) && Number.isFinite(lng)) {
+              resolved = {
+                lat,
+                lng,
+                displayName: match.displayName || siteTitle,
+                formattedAddress: match.formattedAddress || "",
+              };
+              siteLocationCache.set(cacheKey, resolved);
+              break;
+            }
+          }
+        } catch (err: any) {
+          placeErrorMsg = err?.message || String(err || "");
+        }
+      }
     }
 
-    const { places } = await Place.searchByText({
-      textQuery: query,
-      fields: ["displayName", "location", "formattedAddress"],
-      maxResultCount: 1,
-      internalUsageAttributionIds: [MAPS_ATTRIBUTION_ID],
-    } as any);
+    const originCoords = await originPromise;
 
-    const match = places?.[0];
-    if (match && match.location && siteMapInstance) {
-      const pos = match.location;
-      siteMapInstance.setCenter(pos);
-      siteMapInstance.setZoom(16);
-      if (!siteMapMarker) {
-        siteMapMarker = new AdvancedMarkerElement({
-          map: siteMapInstance,
-          position: pos,
-          title: match.displayName || siteTitle,
-        });
-      } else {
-        siteMapMarker.map = siteMapInstance;
-        siteMapMarker.position = pos;
-        siteMapMarker.title = match.displayName || siteTitle;
-      }
-      const infoContent =
-        `<div style="font-size:13px;line-height:1.4;"><b>${esc(match.displayName || siteTitle)}</b>` +
-        (match.formattedAddress ? `<br><span>${esc(match.formattedAddress)}</span>` : "") +
-        `</div>`;
-      if (siteMapInfoWindow) {
-        siteMapInfoWindow.setContent(infoContent);
-        siteMapInfoWindow.open({ map: siteMapInstance, anchor: siteMapMarker });
-      }
+    if (!resolved) {
+      if (siteMapMarker) siteMapMarker.map = null;
+      siteLastDestPos = null;
       if (statusEl) {
-        statusEl.textContent = match.formattedAddress
-          ? "📍 " + match.formattedAddress
-          : "📍 Centered on " + (match.displayName || siteTitle);
+        statusEl.textContent = placeErrorMsg
+          ? "Unable to locate site on embedded map (" + placeErrorMsg + ")."
+          : 'Site location not found in Places for "' + siteTitle + '".';
+      }
+      if (dirBox) {
+        const gSearch = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(query);
+        dirBox.innerHTML = `<a class="btn small-btn" style="text-decoration:none;display:inline-flex;align-items:center;" href="${esc(gSearch)}" target="_blank" rel="noopener">Open in Google Maps ↗</a>`;
+      }
+      return;
+    }
+
+    const destPos = { lat: resolved.lat, lng: resolved.lng };
+    siteLastDestPos = destPos;
+
+    // Always center the existing map component on the selected site location immediately
+    siteMapInstance.setCenter(destPos);
+    siteMapInstance.panTo(destPos);
+    siteMapInstance.setZoom(16);
+
+    if (!siteMapMarker) {
+      siteMapMarker = new AdvancedMarkerElement({
+        map: siteMapInstance,
+        position: destPos,
+        title: resolved.displayName || siteTitle,
+      });
+    } else {
+      siteMapMarker.map = siteMapInstance;
+      siteMapMarker.position = destPos;
+      siteMapMarker.title = resolved.displayName || siteTitle;
+    }
+
+    const infoContent =
+      `<div style="font-size:13px;line-height:1.4;"><b>${esc(resolved.displayName || siteTitle)}</b>` +
+      (resolved.formattedAddress ? `<br><span>${esc(resolved.formattedAddress)}</span>` : "") +
+      `</div>`;
+    if (siteMapInfoWindow) {
+      siteMapInfoWindow.setContent(infoContent);
+      siteMapInfoWindow.open({ map: siteMapInstance, anchor: siteMapMarker });
+    }
+
+    const gmapsExternalUrl = originCoords
+      ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(originCoords.lat + "," + originCoords.lng)}&destination=${encodeURIComponent(destPos.lat + "," + destPos.lng)}&travelmode=${runtime.siteMapTravelMode === "WALKING" ? "walking" : "driving"}`
+      : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destPos.lat + "," + destPos.lng)}&travelmode=${runtime.siteMapTravelMode === "WALKING" ? "walking" : "driving"}`;
+
+    const modeTabsHtml =
+      `<div class="tabs" style="margin:0 0 8px;">` +
+      (["DRIVING", "TWO_WHEELER", "WALKING"] as const)
+        .map(mode => {
+          const lbl = mode === "DRIVING" ? "🚗 Drive" : mode === "TWO_WHEELER" ? "🏍 Moto" : "🚶 Walk";
+          return `<button type="button" class="${runtime.siteMapTravelMode === mode ? "active" : ""}" onclick="setSiteMapTravelMode('${mode}')">${lbl}</button>`;
+        })
+        .join("") +
+      `</div>`;
+
+    if (!originCoords) {
+      if (siteOriginMarker) siteOriginMarker.map = null;
+      if (statusEl) {
+        statusEl.textContent =
+          (resolved.formattedAddress ? "📍 " + resolved.formattedAddress : "📍 " + (resolved.displayName || siteTitle)) +
+          " · Turn on GPS for live route";
+      }
+      if (dirBox) {
+        dirBox.innerHTML =
+          modeTabsHtml +
+          `<div class="muted" style="font-size:12px;margin-bottom:8px;">GPS location is unavailable right now. Allow location permission to show live turn-by-turn route from where you are.</div>` +
+          `<div class="inline-actions" style="margin-top:0;">` +
+          `<button class="gray small-btn" type="button" onclick="centerSiteMapOnSelected()">🎯 Center on Site</button>` +
+          `<a class="btn small-btn" style="text-decoration:none;display:inline-flex;align-items:center;" href="${esc(gmapsExternalUrl)}" target="_blank" rel="noopener">🧭 Open Directions in Google Maps ↗</a>` +
+          `</div>`;
+      }
+      return;
+    }
+
+    if (!siteOriginMarker) {
+      siteOriginMarker = new AdvancedMarkerElement({
+        map: siteMapInstance,
+        position: originCoords,
+        title: "Your Current Location",
+        content: buildOriginPinElement(),
+      });
+    } else {
+      siteOriginMarker.map = siteMapInstance;
+      siteOriginMarker.position = originCoords;
+    }
+
+    // Isolate route computation so routing issues (e.g. inter-island water crossings or traffic layer limits)
+    // never break centering on the selected site.
+    const mode = runtime.siteMapTravelMode || "DRIVING";
+    let route: any = null;
+    try {
+      const basicReq: any = {
+        origin: originCoords,
+        destination: destPos,
+        travelMode: mode,
+        fields: ["path", "distanceMeters", "durationMillis", "viewport", "legs"],
+        internalUsageAttributionIds: [MAPS_ATTRIBUTION_ID],
+      };
+      if (mode === "DRIVING") {
+        try {
+          const trafficRes = await Route.computeRoutes({
+            ...basicReq,
+            routingPreference: "TRAFFIC_AWARE",
+            extraComputations: ["TRAFFIC_ON_POLYLINE"],
+            fields: ["path", "speedPaths", "distanceMeters", "durationMillis", "viewport", "legs"],
+          });
+          route = trafficRes.routes?.[0] || null;
+        } catch {
+          const fallbackRes = await Route.computeRoutes(basicReq);
+          route = fallbackRes.routes?.[0] || null;
+        }
+      } else {
+        const res = await Route.computeRoutes(basicReq);
+        route = res.routes?.[0] || null;
+      }
+    } catch {
+      route = null;
+    }
+
+    if (route) {
+      try {
+        const polylines = route.createPolylines({
+          map: siteMapInstance,
+          polylineOptions: {
+            strokeColor: "#2f8cff",
+            strokeWeight: 6,
+            strokeOpacity: 0.9,
+          },
+        } as any);
+        if (Array.isArray(polylines)) siteMapPolylines.push(...polylines);
+        else if (polylines) siteMapPolylines.push(polylines as any);
+      } catch {}
+
+      if (route.viewport) {
+        siteLastRouteBounds = route.viewport;
+      } else {
+        const bounds = new LatLngBounds();
+        bounds.extend(originCoords);
+        bounds.extend(destPos);
+        siteLastRouteBounds = bounds;
+      }
+
+      const distLabel = formatDistanceMeters(route.distanceMeters);
+      const etaLabel = formatDurationMs(route.durationMillis);
+      const steps: any[] = route.legs?.[0]?.steps || [];
+      const stepsHtml = steps
+        .slice(0, 12)
+        .map((st: any, idx: number) => {
+          const instr = st?.navigationInstruction?.instructions || st?.localizedValues?.distance?.text || "Continue";
+          const dText = st?.localizedValues?.distance?.text || formatDistanceMeters(st?.distanceMeters);
+          return `<div class="pv-row" style="align-items:flex-start;gap:8px;"><span>${idx + 1}. ${esc(instr)}</span><small class="muted" style="white-space:nowrap;">${esc(dText)}</small></div>`;
+        })
+        .join("");
+
+      if (statusEl) {
+        statusEl.textContent = `📍 ${resolved.displayName || siteTitle} · ${distLabel || "Route ready"}${etaLabel ? " · ETA " + etaLabel : ""}`;
+      }
+      if (dirBox) {
+        dirBox.innerHTML =
+          modeTabsHtml +
+          `<div class="item" style="margin-top:0;">` +
+          `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">` +
+          `<div><b>🚗 ${esc(distLabel || "Route")}</b>${etaLabel ? ` <span class="badge">${esc(etaLabel)}</span>` : ""}</div>` +
+          `<div class="inline-actions" style="margin-top:0;">` +
+          `<button class="gray small-btn" type="button" onclick="centerSiteMapOnSelected()">🎯 Center on Site</button>` +
+          `<button class="gray small-btn" type="button" onclick="fitSiteMapRoute()">🗺 Fit Route</button>` +
+          `<a class="btn small-btn" style="text-decoration:none;display:inline-flex;align-items:center;" href="${esc(gmapsExternalUrl)}" target="_blank" rel="noopener">🧭 Open in Google Maps ↗</a>` +
+          `</div></div>` +
+          (resolved.formattedAddress ? `<div class="muted" style="margin-top:4px;font-size:12px;">Destination: ${esc(resolved.formattedAddress)}</div>` : "") +
+          (stepsHtml ? `<div style="margin-top:8px;max-height:190px;overflow:auto;border-top:1px solid var(--border);padding-top:6px;">${stepsHtml}</div>` : "") +
+          `</div>`;
       }
     } else {
-      if (siteMapMarker) siteMapMarker.map = null;
+      const bounds = new LatLngBounds();
+      bounds.extend(originCoords);
+      bounds.extend(destPos);
+      siteLastRouteBounds = bounds;
       if (statusEl) {
-        statusEl.textContent = "Exact pin not found in Places for \"" + query + "\". Showing Philippines map.";
+        statusEl.textContent = "📍 " + (resolved.formattedAddress || resolved.displayName || siteTitle) + " · Centered on site";
+      }
+      if (dirBox) {
+        dirBox.innerHTML =
+          modeTabsHtml +
+          `<div class="muted" style="font-size:12px;margin-bottom:8px;">Map centered on selected site. Direct road route between your current GPS and this site could not be plotted automatically.</div>` +
+          `<div class="inline-actions" style="margin-top:0;">` +
+          `<button class="gray small-btn" type="button" onclick="centerSiteMapOnSelected()">🎯 Center on Site</button>` +
+          `<a class="btn small-btn" style="text-decoration:none;display:inline-flex;align-items:center;" href="${esc(gmapsExternalUrl)}" target="_blank" rel="noopener">🧭 Open Directions in Google Maps ↗</a>` +
+          `</div>`;
       }
     }
   } catch (err: any) {
-    if (statusEl) statusEl.textContent = "Unable to load site map: " + (err?.message || err);
+    const gSearch = "https://www.google.com/maps/dir/?api=1&destination=" + encodeURIComponent(query);
+    if (statusEl) statusEl.textContent = "Unable to load site map right now: " + (err?.message || err);
+    if (dirBox) {
+      dirBox.innerHTML = `<a class="btn small-btn" style="text-decoration:none;display:inline-flex;align-items:center;" href="${esc(gSearch)}" target="_blank" rel="noopener">🧭 Open Directions in Google Maps ↗</a>`;
+    }
   }
 }
 
 export function initDataListeners(): void {
   let scrollSaveTimer: any = null;
-  let lastVisibleReload = Date.now();
 
   window.addEventListener("online", () => {
     updateNetworkStatus();
@@ -1271,16 +1689,15 @@ export function initDataListeners(): void {
 
   window.addEventListener("scroll", () => {
     clearTimeout(scrollSaveTimer);
-    scrollSaveTimer = setTimeout(() => saveLastView(), 200);
+    scrollSaveTimer = setTimeout(() => saveLastView(), 250);
   }, { passive: true });
   window.addEventListener("pagehide", () => saveLastView());
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible" || !state.userId) return;
     if (!runtime.dbReady) startLive();
-    if (Date.now() - lastVisibleReload < 15000) return;
-    lastVisibleReload = Date.now();
-    reloadEverything();
+    hooks.checkShiftReminders?.();
+    void loadUnread();
   });
 
   setInterval(() => {

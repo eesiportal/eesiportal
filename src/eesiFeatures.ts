@@ -4,6 +4,8 @@ import {
   PMS_ITEMS,
   TimeLogNoticeMeta,
   UNIT_MANUAL_DEFAULTS,
+  buildDtrJobWithApproval,
+  buildLeaveReasonWithMeta,
   buildRecReasonWithMeta,
   buildReportDetailsWithUnit,
   buildTimeLogAppNoticeBody,
@@ -23,7 +25,9 @@ import {
   filterDtrRowsByCutoff,
   fmtDate,
   fmtDay,
+  fmtHalfSheetDate,
   fmtTableDate,
+  fmtTime12h,
   getDtrCutoffForDate,
   hooks,
   isAdmin,
@@ -31,13 +35,18 @@ import {
   isImageUrl,
   isManager,
   isMissingTableError,
+  isStoryNotice,
+  isVideoUrl,
   leaveDaysCount,
   listAvailableDtrCutoffs,
   localDateKey,
   openSheet,
+  parseDtrJobMeta,
+  parseLeaveMeta,
   parseRecMeta,
   parseReportUnit,
   parseUnitManualMeta,
+  parseUnitSideTag,
   prepareImageFile,
   profileName,
   profileOf,
@@ -55,6 +64,7 @@ import {
   val,
 } from "./eesiTypes";
 import {
+  initSitesMapOverview,
   isNoticeMarkedRead,
   loadAnnouncements,
   loadAppNotifications,
@@ -133,12 +143,13 @@ export function go(p: string, opts: { skipScrollReset?: boolean } = {}): void {
   $("settingsMenu")?.classList.add("hidden");
   document.querySelectorAll<HTMLElement>("nav.bottom button").forEach(btn => btn.classList.toggle("active", btn.dataset.page === p));
   if (p === "profile") renderProfile();
-  if (p === "units") { renderUnitSiteOptions(); renderUnits(); }
+  if (p === "units") { void ensureAmcbUnitsSeeded(); renderUnitSiteOptions(); renderUnits(); }
   if (p === "reports") { renderReportSites(); renderReports(); if (runtime.reportsViewMode === "search") runSearch(); }
   if (p === "chat") { renderChatList(); renderMessages(); }
   if (p === "notices") { loadAppNotifications(); loadApprovalNotifications(); loadRecentChatNotices(); }
   if (p === "admin") renderAdmin();
   if (p === "schedule") { renderScheduleSiteOptions(); renderAssigneesPicker(); }
+  if (p === "sites") { void initSitesMapOverview(); }
   if (p === "notes") { renderConnectedPickers(); }
   if (p === "dtr") { renderConnectedPickers(); autoFillDtrFromSchedule(false); renderTimeLog(); }
   renderAll();
@@ -368,6 +379,7 @@ export function getNoticeItems(): any[] {
     label: "Notification", approvalId: n.id, isRead: !!n.is_read,
   }));
   state.appNotifications.forEach(n => {
+    if (isStoryNotice(n)) return;
     const isDtrNotice = !n.report_id && /Time In|Time Out/i.test(String(n.title || ""));
     const isOut = /Time Out|🔴/i.test(String(n.title || ""));
     items.push({
@@ -412,16 +424,70 @@ export function getNoticeItems(): any[] {
   return items;
 }
 
-let tickerKey = "";
+let tickerAnimListenerAttached = false;
+function buildTickerQueue(): string[] {
+  const statements: string[] = [];
+  (state.announcements || []).forEach(a => {
+    const line = `📢 ${a.title || "Announcement"}${a.body ? " — " + a.body : ""}`.replace(/\s+/g, " ").trim();
+    if (line) statements.push(line);
+  });
+  timelineReports().slice(0, 15).forEach(r => {
+    const site = state.sites.find(s => String(s.id) === String(r.site_id));
+    const icon = r.report_type === "delivery" ? "📦 Delivery Report" : "📄 Service Report";
+    const line = `${icon}: ${r.title || "Report"}${site ? " (" + site.name + ")" : ""}`.replace(/\s+/g, " ").trim();
+    if (line) statements.push(line);
+  });
+  (state.recs || []).slice(0, 15).forEach(r => {
+    const meta = parseRecMeta(r.reason);
+    const line = `📌 Recommendation: ${[r.site, r.part, r.condition ? "(" + r.condition + ")" : ""].filter(Boolean).join(" ")}${meta.cleanReason ? " — " + meta.cleanReason.slice(0, 110) : ""}`.replace(/\s+/g, " ").trim();
+    if (line) statements.push(line);
+  });
+  if (!statements.length) {
+    SYSTEM_ANNOUNCEMENTS.forEach(a => {
+      statements.push(`📢 ${a.title} — ${a.body}`);
+    });
+  }
+  return statements;
+}
+
 export function updateAnnouncementTicker(): void {
   const text = $("tickerText");
   if (!text) return;
-  const all = [...SYSTEM_ANNOUNCEMENTS, ...(state.announcements || [])];
-  const line = all.map(a => "📢 " + (a.title || "") + " — " + (a.body || "")).join("     ◆     ") + "     ◆     ";
-  if (line === tickerKey) return;
-  tickerKey = line;
-  text.textContent = line;
-  text.style.animation = "marquee " + Math.max(20, Math.round(line.length * 0.18)) + "s linear infinite";
+  const queue = buildTickerQueue();
+  if (!queue.length) return;
+  const queueKey = queue.join("||");
+  if (runtime.tickerQueueKey !== queueKey) {
+    runtime.tickerQueueKey = queueKey;
+    runtime.tickerIndex = 0;
+  } else if (runtime.tickerIndex >= queue.length) {
+    runtime.tickerIndex = 0;
+  }
+
+  const runCurrent = () => {
+    const latestQueue = buildTickerQueue();
+    if (!latestQueue.length) return;
+    if (runtime.tickerIndex >= latestQueue.length) runtime.tickerIndex = 0;
+    const stmt = latestQueue[runtime.tickerIndex];
+    const secs = Math.max(9, Math.min(24, Math.round(stmt.length * 0.13)));
+    text.style.animation = "none";
+    text.textContent = stmt;
+    void text.offsetWidth;
+    text.style.animation = `marqueeSingle ${secs}s linear 1`;
+  };
+
+  if (!tickerAnimListenerAttached) {
+    tickerAnimListenerAttached = true;
+    text.addEventListener("animationend", () => {
+      const latestQueue = buildTickerQueue();
+      if (!latestQueue.length) return;
+      runtime.tickerIndex = (runtime.tickerIndex + 1) % latestQueue.length;
+      runCurrent();
+    });
+  }
+
+  if (!text.textContent || text.style.animation === "none" || !text.style.animation) {
+    runCurrent();
+  }
 }
 
 export function openQuickTimeAction(mode: "time_in" | "time_out"): void {
@@ -809,11 +875,13 @@ export async function saveSchedule(): Promise<void> {
 export function renderSites(): void {
   const box = $("siteList");
   if (!box) return;
-  box.innerHTML = state.sites.map(s =>
-    '<div class="item"><b>' + esc(s.name) + '</b><div class="muted">' + esc([s.address, s.city, s.region].filter(Boolean).join(" · ")) +
-    '</div><div class="inline-actions"><button class="gray small-btn" type="button" data-act="map" data-id="' + esc(s.id) + '">📍 Map</button>' +
-    (isManager() ? '<button class="red small-btn" type="button" data-act="del-site" data-id="' + esc(s.id) + '">Delete</button>' : "") + "</div></div>"
-  ).join("") || '<p class="muted">No sites yet.</p>';
+  box.innerHTML = state.sites.map(s => {
+    const isSel = runtime.selectedSiteId && String(runtime.selectedSiteId) === String(s.id);
+    return '<div class="item' + (isSel ? " site-selected" : "") + '"><b>' + esc(s.name) + '</b><div class="muted">' +
+      esc([s.address, s.city, s.region].filter(Boolean).join(" · ")) +
+      '</div><div class="inline-actions"><button class="btn small-btn" type="button" data-act="map" data-id="' + esc(s.id) + '">📍 View on Map</button>' +
+      (isManager() ? '<button class="red small-btn" type="button" data-act="del-site" data-id="' + esc(s.id) + '">Delete</button>' : "") + "</div></div>";
+  }).join("") || '<p class="muted">No sites yet.</p>';
 }
 
 export async function addSite(): Promise<void> {
@@ -835,135 +903,222 @@ export async function addSite(): Promise<void> {
 export function openSiteOnMap(siteId: string): void {
   const s = state.sites.find(x => String(x.id) === String(siteId));
   if (!s) return;
-  go("sites");
+  runtime.selectedSiteId = String(s.id);
+  if (runtime.currentPage !== "sites") {
+    go("sites", { skipScrollReset: true });
+  } else {
+    renderSites();
+  }
   $("siteMapCard")?.classList.remove("hidden");
   const ttl = $("siteMapTitle");
   if (ttl) ttl.textContent = s.name;
+  const cleanName = String(s.name || "").replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s+/g, " ").trim();
   const query = [s.name, s.address, s.city, s.region, "Philippines"].filter(Boolean).join(", ");
-  void openSiteGoogleMap("siteGoogleMap", query, s.name, "siteMapStatus");
-  $("siteMapCard")?.scrollIntoView({ behavior: "smooth" });
+  const fallbackQueries = [
+    [cleanName, s.address, s.city, "Philippines"].filter(Boolean).join(", "),
+    [cleanName, s.city, "Philippines"].filter(Boolean).join(", "),
+    [s.address, s.city, "Philippines"].filter(Boolean).join(", "),
+    [s.name, "Philippines"].filter(Boolean).join(", "),
+  ];
+  void openSiteGoogleMap("siteGoogleMap", query, s.name, "siteMapStatus", fallbackQueries);
+  $("siteMapCard")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 /* ==================== UNITS & MANUALS ==================== */
-export function renderUnitSiteOptions(): void {
-  const sel = $("unitSite") as HTMLSelectElement | null;
-  if (!sel) return;
-  const cur = sel.value;
-  const grouped = ["Luzon", "Visayas", "Mindanao"].map(reg => {
-    const list = state.sites.filter(s => s.region === reg);
-    if (!list.length) return "";
-    return '<optgroup label="' + esc(reg) + '">' + list.map(s => '<option value="' + esc(s.id) + '">' + esc(s.name) + (s.city ? " (" + esc(s.city) + ")" : "") + "</option>").join("") + "</optgroup>";
-  }).join("");
-  const other = state.sites.filter(s => !["Luzon", "Visayas", "Mindanao"].includes(s.region));
-  const otherHtml = other.map(s => '<option value="' + esc(s.id) + '">' + esc(s.name) + "</option>").join("");
-  sel.innerHTML = '<option value="">Select a work site</option>' + grouped + otherHtml;
-  if (state.sites.some(s => String(s.id) === cur)) sel.value = cur;
-}
+const AMCB_UNIT_SEED: Array<{
+  unit_name: string;
+  unit_type: "escalator" | "elevator";
+  brand_model: string;
+  capacity_floors: string;
+  notes: string;
+}> = [
+  // SEDA SIDE (12)
+  { unit_name: "Esc. No. 19 B2-B3", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B2-B3 · DOWN", notes: "[SIDE: SEDA SIDE]" },
+  { unit_name: "Esc. No. 20 B3-B2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B3-B2 · UP", notes: "[SIDE: SEDA SIDE]" },
+  { unit_name: "Esc. No. 21 B1-B2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B1-B2 · DOWN", notes: "[SIDE: SEDA SIDE]" },
+  { unit_name: "Esc. No. 22 B2-B1", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B2-B1 · UP", notes: "[SIDE: SEDA SIDE]" },
+  { unit_name: "Esc. No. 3 G-B1", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "G-B1 · DOWN", notes: "[SIDE: SEDA SIDE]" },
+  { unit_name: "Esc. No. 4 B1-G", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B1-G · UP", notes: "[SIDE: SEDA SIDE]" },
+  { unit_name: "Esc. No. 26 2-G", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "2-G · DOWN", notes: "[SIDE: SEDA SIDE] 2 Lgt. Newel Guide Roller (Leftside), 2 Lgt. Newel Guide Roller (Rightside)" },
+  { unit_name: "Esc. No. 25 G-2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "G-2 · UP", notes: "[SIDE: SEDA SIDE]" },
+  { unit_name: "Esc. No. 27 3-2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "3-2 · DOWN", notes: "[SIDE: SEDA SIDE]" },
+  { unit_name: "Esc. No. 28 2-3", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "2-3 · UP", notes: "[SIDE: SEDA SIDE]" },
+  { unit_name: "Esc. No. 17 4-3", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "4-3 · DOWN", notes: "[SIDE: SEDA SIDE]" },
+  { unit_name: "Esc. No. 18 3-4", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "3-4 · UP", notes: "[SIDE: SEDA SIDE]" },
+  // IVILLA SIDE (15)
+  { unit_name: "Esc. No. 2 B1-B2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B1-B2 · DOWN", notes: "[SIDE: IVILLA SIDE]" },
+  { unit_name: "Esc. No. 1 B2-B1", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B2-B1 · UP", notes: "[SIDE: IVILLA SIDE]" },
+  { unit_name: "Esc. No. 23 (G-B1)", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "G-B1 · DOWN", notes: "[SIDE: IVILLA SIDE] 1 lgt. Rubber Handrail (Leftside), 2pcs. Newel Guide Roller (Leftside), 1 Lot. Flywheel (Leftside)" },
+  { unit_name: "Esc. No. 24 B1-G", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B1-G · UP", notes: "[SIDE: IVILLA SIDE]" },
+  { unit_name: "Esc. No. 6 2-G", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "2-G · DOWN", notes: "[SIDE: IVILLA SIDE]" },
+  { unit_name: "Esc. No. 5 G-2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "G-2 · UP", notes: "[SIDE: IVILLA SIDE]" },
+  { unit_name: "Esc. No. 7 3-2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "3-2 · DOWN", notes: "[SIDE: IVILLA SIDE]" },
+  { unit_name: "Esc. No. 8 2-3", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "2-3 · UP", notes: "[SIDE: IVILLA SIDE]" },
+  { unit_name: "Esc. No. 9 4-3", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "4-3 · DOWN", notes: "[SIDE: IVILLA SIDE]" },
+  { unit_name: "Esc. No. 10 3-4", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "3-4 · UP", notes: "[SIDE: IVILLA SIDE]" },
+  { unit_name: "Esc. No. 12 5-4", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "5-4 · DOWN", notes: "[SIDE: IVILLA SIDE]" },
+  { unit_name: "Esc. No. 11 4-5", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "4-5 · UP", notes: "[SIDE: IVILLA SIDE]" },
+  { unit_name: "PE1", unit_type: "elevator", brand_model: "Mitsubishi", capacity_floors: "Passenger Elevator", notes: "[SIDE: IVILLA SIDE]" },
+  { unit_name: "PE2", unit_type: "elevator", brand_model: "Mitsubishi", capacity_floors: "Passenger Elevator", notes: "[SIDE: IVILLA SIDE]" },
+  { unit_name: "PE3", unit_type: "elevator", brand_model: "Mitsubishi", capacity_floors: "Passenger Elevator", notes: "[SIDE: IVILLA SIDE]" },
+  // PADRIGA SIDE (7)
+  { unit_name: "Esc. No. 14 2-G", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "2-G · DOWN", notes: "[SIDE: PADRIGA SIDE]" },
+  { unit_name: "Esc. No. 13 G-2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "G-2 · UP", notes: "[SIDE: PADRIGA SIDE]" },
+  { unit_name: "Esc. No. 30 3-2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "3-2 · DOWN", notes: "[SIDE: PADRIGA SIDE]" },
+  { unit_name: "Esc. No. 29 2-3", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "2-3 · UP", notes: "[SIDE: PADRIGA SIDE]" },
+  { unit_name: "Esc. No. 16 4-3", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "4-3 · DOWN", notes: "[SIDE: PADRIGA SIDE]" },
+  { unit_name: "Esc. No. 15 3-4", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "3-4 · UP", notes: "[SIDE: PADRIGA SIDE]" },
+  { unit_name: "CARGO", unit_type: "elevator", brand_model: "Mitsubishi", capacity_floors: "Cargo / Service Elevator", notes: "[SIDE: PADRIGA SIDE]" },
+];
 
-export function openAddUnitForSite(siteId: string): void {
-  runtime.editingUnitId = null;
-  const ttl = $("unitFormTitle");
-  if (ttl) ttl.textContent = "Add unit";
-  ["unitName", "unitBrand", "unitSerial", "unitCapacity", "unitNotes"].forEach(id => setVal(id, ""));
-  setVal("unitType", "elevator");
-  setVal("unitStatus", "Operational");
-  renderUnitSiteOptions();
-  setVal("unitSite", siteId);
-  $("unitFormCard")?.classList.remove("hidden");
-  $("unitFormCard")?.scrollIntoView({ behavior: "smooth" });
-}
-
-export function editUnit(unitId: string): void {
-  const u = state.units.find(x => String(x.id) === String(unitId));
-  if (!u) return;
-  runtime.editingUnitId = String(u.id);
-  const ttl = $("unitFormTitle");
-  if (ttl) ttl.textContent = "Edit unit";
-  renderUnitSiteOptions();
-  setVal("unitSite", String(u.site_id || ""));
-  setVal("unitName", u.unit_name || "");
-  setVal("unitType", u.unit_type || "elevator");
-  setVal("unitStatus", u.status || "Operational");
-  setVal("unitBrand", u.brand_model || "");
-  setVal("unitSerial", u.serial_no || "");
-  setVal("unitCapacity", u.capacity_floors || "");
-  setVal("unitNotes", parseUnitManualMeta(u.notes).cleanNotes);
-  $("unitFormCard")?.classList.remove("hidden");
-  $("unitFormCard")?.scrollIntoView({ behavior: "smooth" });
-}
-
-export function cancelUnitForm(): void {
-  runtime.editingUnitId = null;
-  ["unitName", "unitBrand", "unitSerial", "unitCapacity", "unitNotes"].forEach(id => setVal(id, ""));
-  $("unitFormCard")?.classList.add("hidden");
-}
-
-export async function saveUnit(): Promise<void> {
-  if (!checkNetwork()) return;
-  const siteId = val("unitSite");
-  const unitName = val("unitName").trim();
-  if (!siteId || !unitName) { toast("Select a work site and enter a unit name"); return; }
-
-  let combinedNotes = val("unitNotes").trim();
-  if (runtime.editingUnitId) {
-    const existing = state.units.find(u => String(u.id) === String(runtime.editingUnitId));
-    if (existing) {
-      const meta = parseUnitManualMeta(existing.notes);
-      combinedNotes = buildUnitNotesWithManual(combinedNotes, meta.manualUrl, meta.manualText);
+export async function ensureAmcbUnitsSeeded(): Promise<void> {
+  if (runtime.amcbSeedAttempted || !state.userId || !runtime.client || !navigator.onLine) return;
+  runtime.amcbSeedAttempted = true;
+  try {
+    let amcbSite = state.sites.find(s =>
+      /ayala\s*malls?\s*central\s*bloc|\bamcb\b/i.test(String(s.name || ""))
+    );
+    if (!amcbSite) {
+      const { data: insertedSite, error: siteErr } = await runtime.client
+        .from("sites")
+        .insert({
+          name: "Ayala Malls Central Bloc (AMCB)",
+          address: "Cebu IT Park, Apas",
+          city: "Cebu City",
+          region: "Visayas",
+        })
+        .select("*")
+        .maybeSingle();
+      if (siteErr) return;
+      amcbSite = insertedSite;
+      if (amcbSite) await loadSites();
     }
+    if (!amcbSite) return;
+
+    const existingForAmcb = state.units.filter(u => String(u.site_id) === String(amcbSite.id));
+    const existingNames = new Set(
+      existingForAmcb.map(u => String(u.unit_name || "").trim().toLowerCase())
+    );
+    const missing = AMCB_UNIT_SEED.filter(
+      seed => !existingNames.has(seed.unit_name.trim().toLowerCase())
+    );
+    if (!missing.length) return;
+
+    const rows = missing.map(m => ({
+      site_id: amcbSite.id,
+      unit_name: m.unit_name,
+      unit_type: m.unit_type,
+      status: "Operational",
+      brand_model: m.brand_model,
+      capacity_floors: m.capacity_floors,
+      notes: m.notes,
+      created_by: state.userId,
+    }));
+    const { error } = await runtime.client.from("site_units").insert(rows);
+    if (!error) {
+      suppressNotifications();
+      await loadUnits();
+    }
+  } catch {}
+}
+
+export function toggleUnitSiteCard(siteId: string): void {
+  const key = String(siteId);
+  runtime.expandedUnitSiteIds[key] = !runtime.expandedUnitSiteIds[key];
+  renderUnits();
+}
+
+export function switchUnitsTab(_tab: "list" | "manual"): void {
+  runtime.unitsTab = "list";
+  renderUnits();
+}
+
+function renderUnitManualOverlayBody(u: any): void {
+  const site = state.sites.find(s => String(s.id) === String(u.site_id));
+  const meta = parseUnitManualMeta(u.notes);
+  const sideInfo = parseUnitSideTag(meta.cleanNotes);
+  const std = UNIT_MANUAL_DEFAULTS[u.unit_type] || UNIT_MANUAL_DEFAULTS.elevator;
+  const canEditManual = isManager() || String(u.created_by) === String(state.userId);
+  const fileUrl = safeUrl(meta.manualUrl);
+
+  const ttl = $("unitManualOverlayTitle");
+  if (ttl) ttl.textContent = `📖 ${u.unit_name} — Manual`;
+
+  const metaEl = $("unitManualOverlayMeta");
+  if (metaEl) {
+    metaEl.textContent =
+      "📍 " +
+      [
+        site?.name,
+        site?.address || site?.name,
+        site?.city,
+        site?.region,
+        u.unit_type,
+        u.brand_model,
+        u.capacity_floors,
+      ]
+        .filter(Boolean)
+        .join(" · ");
   }
 
-  const payload = {
-    site_id: siteId,
-    unit_name: unitName,
-    unit_type: val("unitType"),
-    status: val("unitStatus"),
-    brand_model: val("unitBrand").trim() || null,
-    serial_no: val("unitSerial").trim() || null,
-    capacity_floors: val("unitCapacity").trim() || null,
-    notes: combinedNotes || null,
-  };
-  const q = runtime.editingUnitId
-    ? runtime.client.from("site_units").update(payload).eq("id", runtime.editingUnitId)
-    : runtime.client.from("site_units").insert({ ...payload, created_by: state.userId });
-  const { error } = await q;
-  if (error) { toast("Could not save unit: " + error.message); return; }
-  cancelUnitForm();
-  suppressNotifications();
-  await loadUnits();
-  toast("Unit saved");
-}
+  const statusEl = $("unitManualOverlayStatus");
+  if (statusEl) {
+    statusEl.textContent = u.status || "Operational";
+    statusEl.style.background =
+      u.status === "Needs Repair" || u.status === "Shutdown" ? "var(--red)" : "";
+    statusEl.style.color =
+      u.status === "Needs Repair" || u.status === "Shutdown" ? "#fff" : "";
+  }
 
-export async function deleteUnit(unitId: string): Promise<void> {
-  if (!(await confirmDialog("Delete this unit?", "Delete unit"))) return;
-  const { error } = await runtime.client.from("site_units").delete().eq("id", unitId);
-  if (error) { toast("Delete failed: " + error.message); return; }
-  if (runtime.manualUnitId === String(unitId)) runtime.manualUnitId = null;
-  suppressNotifications();
-  await loadUnits();
-  toast("Unit deleted");
-}
-
-export function switchUnitsTab(tab: "list" | "manual"): void {
-  runtime.unitsTab = tab;
-  document.querySelectorAll<HTMLElement>("[data-units-tab]").forEach(b => b.classList.toggle("active", b.dataset.unitsTab === tab));
-  $("unitsListView")?.classList.toggle("hidden", tab !== "list");
-  $("unitsManualView")?.classList.toggle("hidden", tab !== "manual");
-  renderUnits();
-  saveLastView();
+  const bodyEl = $("unitManualOverlayBody");
+  if (!bodyEl) return;
+  bodyEl.innerHTML =
+    (sideInfo.side || sideInfo.cleanNotes
+      ? `<div class="muted" style="margin-bottom:8px;">${sideInfo.side ? `<b>${esc(sideInfo.side)}</b>` : ""}${sideInfo.side && sideInfo.cleanNotes ? " · " : ""}${esc(sideInfo.cleanNotes)}</div>`
+      : "") +
+    (fileUrl
+      ? '<div class="item" style="margin-top:8px;"><b>📎 Attached Unit Manual Document</b><div class="inline-actions"><a class="btn small-btn" href="' +
+        esc(fileUrl) +
+        '" target="_blank" rel="noopener" style="text-decoration:none;">Open Manual File ↗</a></div></div>'
+      : "") +
+    (meta.manualText
+      ? '<div class="item" style="margin-top:8px;border-left:3px solid var(--cyan);"><b>📝 Site-Specific Manual / Wiring / Controller Notes</b><div style="white-space:pre-wrap;margin-top:6px;line-height:1.5;">' +
+        esc(meta.manualText) +
+        "</div></div>"
+      : "") +
+    `<div style="margin-top:10px;"><h3 style="margin:0 0 8px;">${esc(std.title)}</h3>` +
+    std.sections
+      .map(
+        sec =>
+          `<div class="item"><b>${esc(sec.heading)}</b><ul style="margin:6px 0 0;padding-left:18px;line-height:1.5;">` +
+          sec.steps.map(st => `<li>${esc(st)}</li>`).join("") +
+          "</ul></div>"
+      )
+      .join("") +
+    "</div>" +
+    (canEditManual
+      ? '<div class="card" style="margin-top:12px;background:rgba(0,0,0,0.2);">' +
+        '<h3 style="margin:0 0 8px;">Update Custom Unit Manual</h3>' +
+        '<div class="field"><label for="manualUrlInput_' + esc(u.id) + '">Manual File / PDF URL</label><input id="manualUrlInput_' + esc(u.id) + '" value="' + esc(meta.manualUrl) + '" placeholder="https://… or upload below"></div>' +
+        '<div class="field"><label for="manualCustomText_' + esc(u.id) + '">Unit-Specific Instructions / Fault Codes / Notes</label><textarea id="manualCustomText_' + esc(u.id) + '" rows="3" placeholder="Enter controller fault codes, key switches, emergency rescue steps…">' + esc(meta.manualText) + "</textarea></div>" +
+        '<div class="inline-actions">' +
+        '<button class="btn small-btn" type="button" onclick="saveUnitManual(\'' + esc(u.id) + '\')">💾 Save Manual</button>' +
+        '<button class="gray small-btn" type="button" onclick="triggerUnitManualUpload(\'' + esc(u.id) + '\')">📎 Upload PDF / Photo Manual</button>' +
+        "</div></div>"
+      : "");
 }
 
 export function openUnitManual(unitId: string): void {
   const u = state.units.find(x => String(x.id) === String(unitId));
   if (!u) return;
-  const site = state.sites.find(s => String(s.id) === String(u.site_id));
-  if (site?.region) {
-    runtime.unitsRegion = site.region;
-    document.querySelectorAll<HTMLElement>("[data-units-region]").forEach(b => b.classList.toggle("active", b.dataset.unitsRegion === site.region));
-  }
   runtime.manualUnitId = String(u.id);
-  switchUnitsTab("manual");
-  go("units");
+  renderUnitManualOverlayBody(u);
+  $("unitManualOverlay")?.classList.remove("hidden");
+}
+
+export function closeUnitManualOverlay(): void {
+  $("unitManualOverlay")?.classList.add("hidden");
+  runtime.manualUnitId = null;
 }
 
 export async function saveUnitManual(unitId: string): Promise<void> {
@@ -978,6 +1133,10 @@ export async function saveUnitManual(unitId: string): Promise<void> {
   if (error) { toast("Failed to save manual: " + error.message); return; }
   suppressNotifications();
   await loadUnits();
+  const updated = state.units.find(x => String(x.id) === String(unitId));
+  if (updated && !$("unitManualOverlay")?.classList.contains("hidden")) {
+    renderUnitManualOverlayBody(updated);
+  }
   toast("Unit manual updated");
 }
 
@@ -1035,166 +1194,214 @@ export function openUnitPms(siteId: string, region: string, unitType: string, un
   openPmsChecklist(unitId);
 }
 
-function renderUnitsManualSection(sites: any[], q: string): void {
-  const box = $("unitsManualView");
-  if (!box) return;
-  const filteredUnits = state.units.filter(u => {
-    const site = state.sites.find(s => String(s.id) === String(u.site_id));
-    if (!site || (runtime.unitsRegion !== "ALL" && site.region !== runtime.unitsRegion)) return false;
-    if (!q) return true;
-    const hay = [u.unit_name, u.unit_type, u.brand_model, u.serial_no, site.name, site.city, site.address].filter(Boolean).join(" ").toLowerCase();
-    return hay.includes(q);
-  });
+export function renderUnitSiteOptions(): void {
+  const sel = $("unitSite") as HTMLSelectElement | null;
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML =
+    '<option value="">Select a work site</option>' +
+    state.sites
+      .map(s => '<option value="' + esc(s.id) + '">' + esc(s.name) + (s.region ? " (" + esc(s.region) + ")" : "") + "</option>")
+      .join("");
+  if (state.sites.some(s => String(s.id) === cur)) sel.value = cur;
+}
 
-  if (!filteredUnits.length) {
-    box.innerHTML = '<div class="card"><p class="muted" style="margin:0;">No units found in ' + esc(runtime.unitsRegion) + " for manuals yet. Add units in the Units list tab.</p></div>";
-    return;
+export function openAddUnitForSite(siteId: string): void {
+  go("units");
+  runtime.editingUnitId = null;
+  const ttl = $("unitFormTitle");
+  if (ttl) ttl.textContent = "Add unit";
+  renderUnitSiteOptions();
+  setVal("unitSite", siteId);
+  setVal("unitName", "");
+  setVal("unitType", "elevator");
+  setVal("unitStatus", "Operational");
+  setVal("unitBrand", "");
+  setVal("unitSerial", "");
+  setVal("unitCapacity", "");
+  setVal("unitNotes", "");
+  $("unitFormCard")?.classList.remove("hidden");
+  $("unitFormCard")?.scrollIntoView({ behavior: "smooth" });
+}
+
+export function editUnit(unitId: string): void {
+  const u = state.units.find(x => String(x.id) === String(unitId));
+  if (!u) return;
+  runtime.editingUnitId = String(u.id);
+  const ttl = $("unitFormTitle");
+  if (ttl) ttl.textContent = "Edit unit";
+  renderUnitSiteOptions();
+  setVal("unitSite", String(u.site_id || ""));
+  setVal("unitName", u.unit_name || "");
+  setVal("unitType", u.unit_type || "elevator");
+  setVal("unitStatus", u.status || "Operational");
+  setVal("unitBrand", u.brand_model || "");
+  setVal("unitSerial", u.serial_no || "");
+  setVal("unitCapacity", u.capacity_floors || "");
+  setVal("unitNotes", parseUnitManualMeta(u.notes).cleanNotes || "");
+  $("unitFormCard")?.classList.remove("hidden");
+  $("unitFormCard")?.scrollIntoView({ behavior: "smooth" });
+}
+
+export function cancelUnitForm(): void {
+  runtime.editingUnitId = null;
+  const ttl = $("unitFormTitle");
+  if (ttl) ttl.textContent = "Add unit";
+  setVal("unitName", "");
+  setVal("unitBrand", "");
+  setVal("unitSerial", "");
+  setVal("unitCapacity", "");
+  setVal("unitNotes", "");
+  $("unitFormCard")?.classList.add("hidden");
+}
+
+export async function saveUnit(): Promise<void> {
+  if (!checkNetwork()) return;
+  const siteId = val("unitSite").trim();
+  const unitName = val("unitName").trim();
+  if (!siteId || !unitName) { toast("Select a work site and enter a unit name"); return; }
+  const cleanNotes = val("unitNotes").trim();
+  const existing = runtime.editingUnitId
+    ? state.units.find(x => String(x.id) === String(runtime.editingUnitId))
+    : null;
+  const prevMeta = existing ? parseUnitManualMeta(existing.notes) : { manualUrl: "", manualText: "" };
+  const notesWithManual = buildUnitNotesWithManual(cleanNotes, prevMeta.manualUrl, prevMeta.manualText);
+  const payload: any = {
+    site_id: siteId,
+    unit_name: unitName,
+    unit_type: val("unitType") || "elevator",
+    status: val("unitStatus") || "Operational",
+    brand_model: val("unitBrand").trim() || null,
+    serial_no: val("unitSerial").trim() || null,
+    capacity_floors: val("unitCapacity").trim() || null,
+    notes: notesWithManual || null,
+  };
+  let error: any = null;
+  if (runtime.editingUnitId) {
+    ({ error } = await runtime.client.from("site_units").update(payload).eq("id", runtime.editingUnitId));
+  } else {
+    payload.created_by = state.userId;
+    ({ error } = await runtime.client.from("site_units").insert(payload));
   }
+  if (error) { toast("Failed to save unit: " + error.message); return; }
+  runtime.expandedUnitSiteIds[String(siteId)] = true;
+  suppressNotifications();
+  cancelUnitForm();
+  await loadUnits();
+  toast(existing ? "Unit updated" : "Unit added");
+}
 
-  const activeUnit = filteredUnits.find(u => String(u.id) === String(runtime.manualUnitId)) || filteredUnits[0];
-  if (activeUnit && String(runtime.manualUnitId) !== String(activeUnit.id)) {
-    runtime.manualUnitId = String(activeUnit.id);
-  }
+export async function deleteUnit(unitId: string): Promise<void> {
+  if (!checkNetwork()) return;
+  if (!(await confirmDialog("Delete this unit permanently?", "Delete Unit"))) return;
+  const { error } = await runtime.client.from("site_units").delete().eq("id", unitId);
+  if (error) { toast("Failed to delete unit: " + error.message); return; }
+  suppressNotifications();
+  await loadUnits();
+  toast("Unit deleted");
+}
 
-  const pickerCards = sites.map(site => {
-    const sUnits = filteredUnits
-      .filter(u => String(u.site_id) === String(site.id))
-      .sort((a, b) => String(a.unit_name || "").localeCompare(String(b.unit_name || "")));
-    if (!sUnits.length) return "";
-    const loc = [site.address, site.city, site.region].filter(Boolean).join(" · ");
-    return '<div class="card" style="margin-bottom:10px;"><b style="font-size:14px;">📍 ' + esc(site.name) + '</b><div class="muted" style="margin-bottom:8px;">' + esc(loc) + '</div>' +
-      '<div class="inline-actions" style="margin-top:0;">' +
-      sUnits.map(u => {
-        const active = activeUnit && String(u.id) === String(activeUnit.id);
-        return '<button class="' + (active ? "btn" : "gray") + ' small-btn" type="button" onclick="openUnitManual(\'' + esc(u.id) + '\')">📖 ' + esc(u.unit_name) + "</button>";
-      }).join("") +
-      "</div></div>";
-  }).filter(Boolean).join("");
-
-  let detailHtml = "";
-  if (activeUnit) {
-    const site = state.sites.find(s => String(s.id) === String(activeUnit.site_id));
-    const meta = parseUnitManualMeta(activeUnit.notes);
-    const std = UNIT_MANUAL_DEFAULTS[activeUnit.unit_type] || UNIT_MANUAL_DEFAULTS.elevator;
-    const canEditManual = isManager() || String(activeUnit.created_by) === String(state.userId);
-    const fileUrl = safeUrl(meta.manualUrl);
-
-    detailHtml =
-      '<div class="card" style="border-color:var(--border-hot);">' +
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">' +
-      '<div><h2 style="margin:0 0 4px;">📖 ' + esc(activeUnit.unit_name) + " — Manual</h2>" +
-      '<div class="muted">📍 ' + esc(site ? [site.name, site.address, site.city, site.region].filter(Boolean).join(" · ") : "Site") +
-      " · " + esc([activeUnit.unit_type, activeUnit.brand_model, activeUnit.serial_no ? "S/N: " + activeUnit.serial_no : "", activeUnit.capacity_floors].filter(Boolean).join(" · ")) +
-      "</div></div>" +
-      '<span class="badge">' + esc(activeUnit.status || "Operational") + "</span></div>" +
-      (fileUrl
-        ? '<div class="item" style="margin-top:12px;"><b>📎 Attached Unit Manual Document</b><div class="inline-actions"><a class="btn small-btn" href="' + esc(fileUrl) + '" target="_blank" rel="noopener" style="text-decoration:none;">Open Manual File ↗</a></div></div>'
-        : "") +
-      (meta.manualText
-        ? '<div class="item" style="margin-top:12px;border-left:3px solid var(--cyan);"><b>📝 Site-Specific Manual / Wiring / Controller Notes</b><div style="white-space:pre-wrap;margin-top:6px;line-height:1.5;">' + esc(meta.manualText) + "</div></div>"
-        : "") +
-      '<div style="margin-top:14px;"><h3 style="margin:0 0 8px;">' + esc(std.title) + "</h3>" +
-      std.sections.map(sec =>
-        '<div class="item"><b>' + esc(sec.heading) + '</b><ul style="margin:6px 0 0;padding-left:18px;line-height:1.5;">' +
-        sec.steps.map(st => "<li>" + esc(st) + "</li>").join("") + "</ul></div>"
-      ).join("") +
-      "</div>" +
-      (canEditManual
-        ? '<div class="card" style="margin-top:12px;background:rgba(0,0,0,0.2);">' +
-          '<h3 style="margin:0 0 8px;">Update Custom Unit Manual</h3>' +
-          '<div class="field"><label for="manualUrlInput_' + esc(activeUnit.id) + '">Manual File / PDF URL</label><input id="manualUrlInput_' + esc(activeUnit.id) + '" value="' + esc(meta.manualUrl) + '" placeholder="https://… or upload below"></div>' +
-          '<div class="field"><label for="manualCustomText_' + esc(activeUnit.id) + '">Unit-Specific Instructions / Fault Codes / Notes</label><textarea id="manualCustomText_' + esc(activeUnit.id) + '" rows="4" placeholder="Enter controller fault codes, key switches, emergency rescue steps…">' + esc(meta.manualText) + "</textarea></div>" +
-          '<div class="inline-actions">' +
-          '<button class="btn small-btn" type="button" onclick="saveUnitManual(\'' + esc(activeUnit.id) + '\')">💾 Save Manual</button>' +
-          '<button class="gray small-btn" type="button" onclick="triggerUnitManualUpload(\'' + esc(activeUnit.id) + '\')">📎 Upload PDF / Photo Manual</button>' +
-          "</div></div>"
-        : "") +
-      "</div>";
-  }
-
-  box.innerHTML = pickerCards + detailHtml;
+function renderUnitCardRow(u: any, site: any): string {
+  const canManage = isManager() || String(u.created_by) === String(state.userId);
+  const statusBadge = u.status === "Operational" ? "now" : (u.status === "Needs Repair" || u.status === "Shutdown" ? "" : "soon");
+  const badgeStyle = (u.status === "Needs Repair" || u.status === "Shutdown") ? ' style="background:var(--red);color:#fff;"' : "";
+  const specs = [u.unit_type, u.brand_model, u.serial_no ? "S/N: " + u.serial_no : "", u.capacity_floors].filter(Boolean).join(" · ");
+  const meta = parseUnitManualMeta(u.notes);
+  const sideMeta = parseUnitSideTag(meta.cleanNotes);
+  return '<div class="item" style="margin-top:8px;">' +
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">' +
+    '<div><b>🛗 ' + esc(u.unit_name) + '</b> <span class="sess-badge ' + statusBadge + '"' + badgeStyle + ">" + esc(u.status || "Operational") + "</span></div>" +
+    '<span class="muted" style="font-size:12px;">📍 ' + esc(site.name + (site.city ? " · " + site.city : "")) + "</span></div>" +
+    '<div class="muted">' + esc(specs) + "</div>" +
+    (sideMeta.cleanNotes ? '<div style="margin-top:4px;font-size:12px;">' + esc(sideMeta.cleanNotes) + "</div>" : "") +
+    '<div class="inline-actions">' +
+    '<button class="btn small-btn" type="button" onclick="openUnitManual(\'' + esc(u.id) + '\')">📖 Manual</button>' +
+    '<button class="gray small-btn" type="button" onclick="openUnitPms(\'' + esc(site.id) + "','" + esc(site.region) + "','" + esc(u.unit_type) + "','" + esc(u.id) + '\')">✅ PMS</button>' +
+    '<button class="gray small-btn" type="button" onclick="openUnitReport(\'' + esc(site.id) + "','" + esc(u.unit_name) + "','" + esc(u.id) + '\')">📄 Report</button>' +
+    (canManage ? '<button class="gray small-btn" type="button" onclick="editUnit(\'' + esc(u.id) + '\')">Edit</button><button class="red small-btn" type="button" onclick="deleteUnit(\'' + esc(u.id) + '\')">Delete</button>' : "") +
+    "</div></div>";
 }
 
 export function renderUnits(): void {
   const box = $("unitsList");
-  const q = val("unitsSearch").trim().toLowerCase();
-  const sortMode = val("unitsSort") || "site";
+  if (!box) return;
 
-  const sites = state.sites
-    .filter(s => s.region === runtime.unitsRegion)
-    .sort((a, b) => {
-      if (sortMode === "location") {
-        const la = [a.city, a.address, a.name].filter(Boolean).join(" ");
-        const lb = [b.city, b.address, b.name].filter(Boolean).join(" ");
-        return la.localeCompare(lb);
-      }
-      return String(a.name || "").localeCompare(String(b.name || ""));
+  const regFilter = runtime.unitsRegion || "ALL";
+  const baseRegions = ["Luzon", "Visayas", "Mindanao"];
+  const extraRegions = [...new Set(state.sites.map(s => String(s.region || "").trim()).filter(r => r && !baseRegions.includes(r)))].sort();
+  const targetRegions = regFilter === "ALL" ? [...baseRegions, ...extraRegions] : [regFilter];
+
+  const html = targetRegions.map(region => {
+    const regionSites = state.sites
+      .filter(s => String(s.region || "Unassigned") === region)
+      .sort((a, b) => String(a.city || a.address || a.name || "").localeCompare(String(b.city || b.address || b.name || "")) || String(a.name || "").localeCompare(String(b.name || "")));
+    if (!regionSites.length) return "";
+
+    const byArea: Record<string, any[]> = {};
+    regionSites.forEach(s => {
+      const area = String(s.city || s.address || "General Area").trim();
+      (byArea[area] = byArea[area] || []).push(s);
     });
 
-  renderUnitsManualSection(sites, q);
-  if (!box || runtime.unitsTab === "manual") return;
+    const areasHtml = Object.keys(byArea).sort().map(area => {
+      const sitesHtml = byArea[area].map(site => {
+        const siteUnits = state.units.filter(u => String(u.site_id) === String(site.id));
+        const isExpanded = !!runtime.expandedUnitSiteIds[String(site.id)];
+        const loc = [site.address, site.city, site.region].filter(Boolean).join(" · ");
 
-  const siteCards = sites.map(site => {
-    const loc = [site.address, site.city, site.region].filter(Boolean).join(" · ");
-    let siteUnits = state.units.filter(u => String(u.site_id) === String(site.id));
-    if (q) {
-      const siteMatch = (site.name + " " + loc).toLowerCase().includes(q);
-      if (!siteMatch) {
-        siteUnits = siteUnits.filter(u =>
-          [u.unit_name, u.unit_type, u.brand_model, u.serial_no, u.status, u.notes].filter(Boolean).join(" ").toLowerCase().includes(q)
-        );
-      }
-      if (!siteMatch && !siteUnits.length) return "";
-    }
-    siteUnits = [...siteUnits].sort((a, b) => {
-      if (sortMode === "status") return String(a.status || "").localeCompare(String(b.status || ""));
-      return String(a.unit_name || "").localeCompare(String(b.unit_name || ""));
-    });
+        let unitsHtml = "";
+        if (isExpanded) {
+          if (!siteUnits.length) {
+            unitsHtml = '<p class="muted" style="margin:8px 0 0;">No units added for this site yet.</p>';
+          } else {
+            const hasSideTags = siteUnits.some(u => !!parseUnitSideTag(parseUnitManualMeta(u.notes).cleanNotes).side);
+            if (hasSideTags) {
+              const sideOrder = ["SEDA SIDE", "IVILLA SIDE", "PADRIGA SIDE"];
+              const grouped: Record<string, any[]> = {};
+              siteUnits.forEach(u => {
+                const sTag = parseUnitSideTag(parseUnitManualMeta(u.notes).cleanNotes).side || "OTHER UNITS";
+                (grouped[sTag] = grouped[sTag] || []).push(u);
+              });
+              const orderedSides = [
+                ...sideOrder.filter(k => grouped[k]?.length),
+                ...Object.keys(grouped).filter(k => !sideOrder.includes(k)).sort(),
+              ];
+              unitsHtml = orderedSides.map(sideName =>
+                `<div class="person-group-title" style="margin-top:10px;">${esc(sideName)} (${grouped[sideName].length})</div>` +
+                grouped[sideName].map(u => renderUnitCardRow(u, site)).join("")
+              ).join("");
+            } else {
+              unitsHtml = [...siteUnits]
+                .sort((a, b) => String(a.unit_name || "").localeCompare(String(b.unit_name || "")))
+                .map(u => renderUnitCardRow(u, site))
+                .join("");
+            }
+          }
+        }
 
-    const siteReports = state.reports.filter(r => String(r.site_id) === String(site.id));
-    const sitePms = state.pmsRecords.filter(r => String(r.site_id) === String(site.id));
-    const siteRecs = state.recs.filter(r => (r.site || "").trim().toLowerCase() === (site.name || "").trim().toLowerCase());
-    const siteSchedules = visibleSchedules().filter(s => (s.title || "").toLowerCase().includes((site.name || "").toLowerCase()));
+        const siteReportsCount = state.reports.filter(r => String(r.site_id) === String(site.id)).length;
+        const sitePmsCount = state.pmsRecords.filter(r => String(r.site_id) === String(site.id)).length;
+        return '<div class="card" style="margin-bottom:10px;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">' +
+          '<div class="clickable" style="flex:1;min-width:0;" onclick="toggleUnitSiteCard(\'' + esc(site.id) + '\')">' +
+          '<h2 style="margin:0 0 4px;font-size:16px;">' + (isExpanded ? "▾ " : "▸ ") + esc(site.name) +
+          ' <span class="badge">' + siteUnits.length + (siteUnits.length === 1 ? " unit" : " units") + "</span></h2>" +
+          '<div class="muted">📍 ' + esc(loc) + ' · ' + siteReportsCount + ' report(s) · ' + sitePmsCount + ' PMS</div>' +
+          '<div class="muted" style="font-size:11px;margin-top:2px;">' + (isExpanded ? "Tap to hide units" : "Tap site name to view units") + "</div>" +
+          "</div>" +
+          '<button class="gray small-btn" type="button" onclick="openSiteOnMap(\'' + esc(site.id) + '\')">📍 Map</button>' +
+          "</div>" +
+          (isExpanded ? '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);">' + unitsHtml + "</div>" : "") +
+          "</div>";
+      }).join("");
 
-    const unitsHtml = siteUnits.map(u => {
-      const canManage = isManager() || String(u.created_by) === String(state.userId);
-      const statusBadge = u.status === "Operational" ? "now" : (u.status === "Needs Repair" || u.status === "Shutdown" ? "" : "soon");
-      const badgeStyle = (u.status === "Needs Repair" || u.status === "Shutdown") ? ' style="background:var(--red);color:#fff;"' : "";
-      const specs = [u.unit_type, u.brand_model, u.serial_no ? "S/N: " + u.serial_no : "", u.capacity_floors].filter(Boolean).join(" · ");
-      const meta = parseUnitManualMeta(u.notes);
-      return '<div class="item" style="margin-top:8px;">' +
-        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">' +
-        '<div><b>🛗 ' + esc(u.unit_name) + '</b> <span class="sess-badge ' + statusBadge + '"' + badgeStyle + ">" + esc(u.status || "Operational") + "</span></div>" +
-        '<span class="muted" style="font-size:12px;">📍 ' + esc(site.name + (site.city ? " · " + site.city : "")) + "</span></div>" +
-        '<div class="muted">' + esc(specs) + "</div>" +
-        (meta.cleanNotes ? '<div style="margin-top:4px">' + esc(meta.cleanNotes) + "</div>" : "") +
-        '<div class="inline-actions">' +
-        '<button class="btn small-btn" type="button" onclick="openUnitManual(\'' + esc(u.id) + '\')">📖 Manual</button>' +
-        '<button class="gray small-btn" type="button" onclick="openUnitPms(\'' + esc(site.id) + "','" + esc(site.region) + "','" + esc(u.unit_type) + "','" + esc(u.id) + '\')">✅ PMS</button>' +
-        '<button class="gray small-btn" type="button" onclick="openUnitReport(\'' + esc(site.id) + "','" + esc(u.unit_name) + "','" + esc(u.id) + '\')">📄 Report</button>' +
-        (canManage ? '<button class="gray small-btn" type="button" onclick="editUnit(\'' + esc(u.id) + '\')">Edit</button><button class="red small-btn" type="button" onclick="deleteUnit(\'' + esc(u.id) + '\')">Delete</button>' : "") +
-        "</div></div>";
-    }).join("") || '<p class="muted" style="margin:8px 0;">No units added for this site yet.</p>';
+      return `<div class="person-group-title">📍 Area: ${esc(area)}</div>${sitesHtml}`;
+    }).join("");
 
-    const latestReport = siteReports[0];
-    const latestPms = sitePms[0];
-    const connectedHtml =
-      '<div class="muted" style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);font-size:12px;">' +
-      "<div><b>Connected:</b> " + siteUnits.length + " unit(s) · " + siteReports.length + " report(s) · " + sitePms.length + " PMS · " + siteRecs.length + " rec(s) · " + siteSchedules.length + " schedule(s)</div>" +
-      (latestReport ? "<div>Latest report: <b>" + esc(latestReport.title) + "</b> (" + esc(fmtDay(latestReport.report_date)) + ")</div>" : "") +
-      (latestPms ? "<div>Latest PMS: <b>" + esc((latestPms.unit_type || "").toUpperCase()) + "</b> — " + latestPms.items_passed + "/" + latestPms.items_total + " passed (" + esc(fmtDay(latestPms.checklist_date)) + ")</div>" : "") +
-      "</div>";
-
-    return '<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;"><div><h2 style="margin:0 0 4px;">' +
-      esc(site.name) + '</h2><div class="muted">📍 ' + esc(loc) +
-      '</div></div><button class="gray small-btn" type="button" onclick="openSiteOnMap(\'' + esc(site.id) + '\')">📍 Map</button></div>' +
-      unitsHtml +
-      '<div class="inline-actions"><button class="btn small-btn" type="button" onclick="openAddUnitForSite(\'' + esc(site.id) + '\')">＋ Add Unit</button>' +
-      '<button class="gray small-btn" type="button" onclick="openUnitReport(\'' + esc(site.id) + ',\'\')">📄 New Report</button></div>' +
-      connectedHtml + "</div>";
+    return `<div style="margin-bottom:16px;"><h2 style="margin:8px 0 6px;color:var(--cyan);">🗺️ ${esc(region)}</h2>${areasHtml}</div>`;
   }).filter(Boolean).join("");
 
-  box.innerHTML = siteCards || '<p class="muted">No matching work sites or units in ' + esc(runtime.unitsRegion) + ".</p>";
+  box.innerHTML = html || '<p class="muted">No work sites in ' + esc(regFilter) + " yet.</p>";
 }
 
 /* ==================== REPORTS, PMS & SEARCH ==================== */
@@ -1322,12 +1529,16 @@ export function renderConnectedPickers(): void {
   autoFillDtrFromSchedule(false);
 }
 
-function buildReportAttachmentHtml(details: string | null | undefined): string {
-  return extractReportPhotoUrls(details).map(safeUrl).filter((u): u is string => !!u).map(u => {
-    if (isImageUrl(u)) return '<img src="' + esc(u) + '" alt="Photo" data-preview-url="' + esc(u) + '" data-preview-label="Report Photo">';
+function buildUrlAttachmentHtml(urls: string[]): string {
+  return urls.map(safeUrl).filter((u): u is string => !!u).map(u => {
+    if (isImageUrl(u)) return '<img src="' + esc(u) + '" alt="Photo" data-preview-url="' + esc(u) + '" data-preview-label="Attachment Photo">';
     const fname = decodeURIComponent((u.split("/").pop() || "File").replace(/^\d+-\d+-[a-z0-9]+-/, ""));
     return '<a class="report-att-item" href="' + esc(u) + '" target="_blank" rel="noopener" style="text-decoration:none;"><span class="report-att-file">📎 ' + esc(fname) + "</span></a>";
   }).join("");
+}
+
+function buildReportAttachmentHtml(details: string | null | undefined): string {
+  return buildUrlAttachmentHtml(extractReportPhotoUrls(details));
 }
 
 export function renderReports(): void {
@@ -1474,6 +1685,24 @@ export function renderPmsChecklistUnits(selectedUnitId = ""): void {
 }
 export function renderPmsChecklist(): void { renderPmsSiteOptions(); renderPmsChecklistUnits(); }
 
+export function clearPendingPmsFiles(): void {
+  runtime.pendingPmsFiles.forEach(item => { if (item.previewUrl) URL.revokeObjectURL(item.previewUrl); });
+  runtime.pendingPmsFiles = [];
+  const inp = $("pmsChecklistFiles") as HTMLInputElement | null;
+  if (inp) inp.value = "";
+}
+
+export function renderPmsAttachmentPreview(): void {
+  const box = $("pmsChecklistPreview");
+  if (!box) return;
+  box.innerHTML = runtime.pendingPmsFiles.map((item, idx) => {
+    const inner = item.previewUrl
+      ? '<img src="' + esc(item.previewUrl) + '" alt="' + esc(item.file.name) + '">'
+      : '<span class="report-att-file">📎 ' + esc(item.file.name) + "</span>";
+    return '<div class="report-att-item">' + inner + '<button class="report-att-del" type="button" data-remove-pms-att="' + idx + '" aria-label="Remove">✕</button></div>';
+  }).join("");
+}
+
 export function openPmsChecklist(selectedUnitId = ""): void {
   const site = state.sites.find(s => String(s.id) === String(runtime.pmsSiteId));
   $("pmsSitePicker")?.classList.add("hidden");
@@ -1482,6 +1711,8 @@ export function openPmsChecklist(selectedUnitId = ""): void {
   if (ttl) ttl.textContent = site ? site.name : "Site";
   renderPmsChecklistUnits(selectedUnitId);
   setVal("pmsChecklistDate", new Date().toISOString().slice(0, 10));
+  clearPendingPmsFiles();
+  renderPmsAttachmentPreview();
   const st = $("pmsRecordStatus");
   if (st) st.textContent = "";
   const sections = PMS_ITEMS[runtime.pmsUnit] || PMS_ITEMS.elevator;
@@ -1576,26 +1807,27 @@ export function runSearch(): void {
     });
   }
   if (!type || type === "pms") {
-    if (!uploadsOnly) {
-      state.pmsRecords.forEach(r => {
-        if (equip && r.unit_type !== equip) return;
-        const sObj = state.sites.find(s => String(s.id) === String(r.site_id));
-        if (region && (!sObj || sObj.region !== region)) return;
-        if (site && String(r.site_id) !== site) return;
-        if (from && r.checklist_date < from) return;
-        if (to && r.checklist_date > to) return;
-        let parsed: any = {};
-        try { parsed = JSON.parse(r.details || "{}"); } catch {}
-        const hay = ((sObj?.name || "") + " " + (r.unit_type || "") + " " + (parsed.unitName || "") + " " + (r.details || "")).toLowerCase();
-        if (q && !hay.includes(q)) return;
-        hits.push({
-          kind: "PMS (" + r.unit_type + ")" + (parsed.unitName ? " · 🛗 " + parsed.unitName : ""),
-          title: sObj ? sObj.name : "Site",
-          date: fmtDay(r.checklist_date) + " · " + profileName(r.user_id),
-          body: r.items_passed + "/" + r.items_total + " passed",
-        });
+    state.pmsRecords.forEach(r => {
+      if (equip && r.unit_type !== equip) return;
+      const sObj = state.sites.find(s => String(s.id) === String(r.site_id));
+      if (region && (!sObj || sObj.region !== region)) return;
+      if (site && String(r.site_id) !== site) return;
+      if (from && r.checklist_date < from) return;
+      if (to && r.checklist_date > to) return;
+      let parsed: any = {};
+      try { parsed = JSON.parse(r.details || "{}"); } catch {}
+      const attUrls: string[] = Array.isArray(parsed.attachments) ? parsed.attachments : [];
+      if (uploadsOnly && !attUrls.length) return;
+      const hay = ((sObj?.name || "") + " " + (r.unit_type || "") + " " + (parsed.unitName || "") + " " + (r.details || "")).toLowerCase();
+      if (q && !hay.includes(q)) return;
+      hits.push({
+        kind: "PMS (" + r.unit_type + ")" + (parsed.unitName ? " · 🛗 " + parsed.unitName : ""),
+        title: sObj ? sObj.name : "Site",
+        date: fmtDay(r.checklist_date) + " · " + profileName(r.user_id),
+        body: r.items_passed + "/" + r.items_total + " passed",
+        photosHtml: buildUrlAttachmentHtml(attUrls),
       });
-    }
+    });
   }
   const resEl = $("searchResults");
   if (resEl) {
@@ -1680,11 +1912,14 @@ export function renderDtr(): void {
   tbody.innerHTML = rows.map(d => {
     const hrs = calculateDtrHours(d.time_in, d.time_out, d.overtime_approved);
     const otMins = calculateOtMinutes(d.time_in, d.time_out);
+    const meta = parseDtrJobMeta(d.job, d.approved_by);
     const canApprove = isManager() && otMins > 0 && !d.overtime_approved;
     const canDelete = String(d.user_id) === String(state.userId) || isManager();
+    const jobText = [meta.unitName ? `[${meta.unitName}]` : "", meta.cleanJob, meta.approvedBy ? `(${meta.approvedBy})` : ""].filter(Boolean).join(" ");
     return "<tr><td>" + esc(fmtTableDate(d.work_date)) + "</td><td>" + esc(employeeDisplayName(d.user_id)) + "</td><td>" +
-      esc([d.location, d.job].filter(Boolean).join(" · ")) + "</td><td><b>" + esc(d.time_in || "—") + "</b></td><td><b>" +
+      esc([d.location, jobText].filter(Boolean).join(" · ")) + "</td><td><b>" + esc(d.time_in || "—") + "</b></td><td><b>" +
       esc(d.time_out || "—") + "</b></td><td>" + hrs.toFixed(2) + (otMins > 0 ? (d.overtime_approved ? " (OT✓)" : " (OT)") : "") + "</td><td>" +
+      (canDelete ? '<button class="gray small-btn" type="button" onclick="openEditDtr(\'' + esc(d.id) + '\')" aria-label="Edit DTR">✏️</button> ' : "") +
       (canApprove ? '<button class="green small-btn" type="button" data-act="approve-ot" data-id="' + esc(d.id) + '">Approve OT</button> ' : "") +
       (canDelete ? '<button class="red small-btn" type="button" data-act="del-dtr" data-id="' + esc(d.id) + '">×</button>' : "") + "</td></tr>";
   }).join("") || '<tr><td colspan="7" class="muted">No DTR entries for this cutoff period.</td></tr>';
@@ -2472,30 +2707,304 @@ export function resetSignatureState(): void {
   const c = $("signature") as HTMLCanvasElement | null;
   if (c) c.getContext("2d")?.clearRect(0, 0, c.width, c.height);
 }
+export function openEditDtr(id: string): void {
+  const row = (state.dtrs || []).find(d => String(d.id) === String(id));
+  if (!row) return;
+  if (String(row.user_id) !== String(state.userId) && !isManager()) {
+    toast("You can only edit your own DTR entries.");
+    return;
+  }
+  runtime.editingDtrId = String(row.id);
+  const meta = parseDtrJobMeta(row.job, row.approved_by);
+  setVal("editDtrDate", String(row.work_date || ""));
+  setVal("editDtrLocation", String(row.location || ""));
+  setVal("editDtrUnit", meta.unitName || "");
+  setVal("editDtrJob", meta.cleanJob || "");
+  setVal("editDtrIn", String(row.time_in || ""));
+  setVal("editDtrOut", String(row.time_out || ""));
+  setVal("editDtrApprovedBy", meta.approvedBy || "");
+  const otWrap = $("editDtrOvertimeWrap");
+  if (otWrap) otWrap.classList.toggle("hidden", !isManager());
+  const otBox = $("editDtrOvertimeApproved") as HTMLInputElement | null;
+  if (otBox) otBox.checked = !!row.overtime_approved;
+  $("dtrEditOverlay")?.classList.remove("hidden");
+}
+
+export function closeEditDtr(): void {
+  $("dtrEditOverlay")?.classList.add("hidden");
+  runtime.editingDtrId = null;
+}
+
+export async function saveEditedDtr(): Promise<void> {
+  if (!runtime.editingDtrId || !checkNetwork()) return;
+  const workDate = val("editDtrDate").trim();
+  if (!workDate) { toast("Date is required"); return; }
+  const location = val("editDtrLocation").trim();
+  const unitName = val("editDtrUnit").trim();
+  const cleanJob = val("editDtrJob").trim();
+  const timeIn = val("editDtrIn").trim();
+  const timeOut = val("editDtrOut").trim();
+  const approvedBy = val("editDtrApprovedBy").trim();
+  const otEl = $("editDtrOvertimeApproved") as HTMLInputElement | null;
+
+  const basePayload: Record<string, any> = {
+    work_date: workDate,
+    location: location || null,
+    job: buildDtrJobWithApproval(unitName, cleanJob, approvedBy, runtime.dtrApprovedByColMissing) || null,
+    time_in: timeIn || null,
+    time_out: timeOut || null,
+  };
+  if (isManager() && otEl) basePayload.overtime_approved = otEl.checked;
+  if (!runtime.dtrApprovedByColMissing) basePayload.approved_by = approvedBy || null;
+
+  try {
+    let { error } = await runtime.client.from("dtr_entries").update(basePayload).eq("id", runtime.editingDtrId);
+    if (error && /approved_by|42703|schema cache/i.test(String(error.message || ""))) {
+      runtime.dtrApprovedByColMissing = true;
+      delete basePayload.approved_by;
+      basePayload.job = buildDtrJobWithApproval(unitName, cleanJob, approvedBy, true) || null;
+      const retry = await runtime.client.from("dtr_entries").update(basePayload).eq("id", runtime.editingDtrId);
+      error = retry.error;
+    }
+    if (error && (error.code === "23502" || /violates not-null constraint/i.test(error.message || ""))) {
+      const retryNull = await runtime.client
+        .from("dtr_entries")
+        .update({
+          ...basePayload,
+          location: location || "",
+          job: basePayload.job || "",
+          time_in: timeIn || "",
+          time_out: timeOut || "",
+        })
+        .eq("id", runtime.editingDtrId);
+      error = retryNull.error;
+    }
+    if (error) throw error;
+    closeEditDtr();
+    suppressNotifications();
+    await loadDtrs();
+    buildDtrPaper();
+    toast("DTR entry updated");
+  } catch (err: any) {
+    toast("Could not update DTR: " + (err?.message || err));
+  }
+}
+
 function buildDtrPaper(): void {
   renderDtrCutoffOptions();
   const pickedUid = isManager() && val("dtrPreviewEmployee") ? val("dtrPreviewEmployee") : String(state.userId || "");
   const employeeRows = state.dtrs.filter(d => String(d.user_id) === String(pickedUid));
-  const { period, rows } = filterDtrRowsByCutoff(employeeRows, getActiveDtrCutoffKey());
+  const { rows } = filterDtrRowsByCutoff(employeeRows, getActiveDtrCutoffKey());
   const isOwn = String(pickedUid) === String(state.userId);
   const sig = isOwn
-    ? (signaturePhotoDataUrl ? '<img src="' + esc(signaturePhotoDataUrl) + '" alt="">' : (drawnSigDataUrl ? '<img src="' + esc(drawnSigDataUrl) + '" alt="">' : ""))
+    ? (signaturePhotoDataUrl ? '<img src="' + esc(signaturePhotoDataUrl) + '" alt="Signature">' : (drawnSigDataUrl ? '<img src="' + esc(drawnSigDataUrl) + '" alt="Signature">' : ""))
     : "";
-  const body = rows.map(d =>
-    "<tr><td>" + esc(fmtTableDate(d.work_date)) + "</td><td>" + esc(d.location || "") + "</td><td>" + esc(d.job || "") +
-    "</td><td>" + esc(d.time_in || "—") + "</td><td>" + esc(d.time_out || "—") + "</td><td>" +
-    calculateDtrHours(d.time_in, d.time_out, d.overtime_approved).toFixed(2) + "</td></tr>"
-  ).join("") || '<tr><td colspan="6" class="dp-empty">No entries for this cutoff period.</td></tr>';
-  const periodLine = period ? `<div style="font-size:12px;font-weight:600;margin-top:2px;">Cutoff: ${esc(period.label)}</div>` : "";
+  const body = rows.map(d => {
+    const meta = parseDtrJobMeta(d.job, d.approved_by);
+    const wdDate = d.work_date ? new Date(String(d.work_date) + "T00:00:00") : null;
+    const isSunday = wdDate && !isNaN(wdDate.getTime()) && wdDate.getDay() === 0;
+    const tIn = fmtTime12h(d.time_in);
+    const tOut = fmtTime12h(d.time_out);
+    const timeRange = (tIn && tOut) ? `${tIn} - ${tOut}` : (tIn || tOut || "—");
+    const desc = [meta.cleanJob, meta.unitName ? `(${meta.unitName})` : ""].filter(Boolean).join(" ") || meta.unitName || "";
+    const approvedTxt = meta.approvedBy ||
+      (isSunday ? "SUNDAY DUTY" : (d.overtime_approved || calculateOtMinutes(d.time_in, d.time_out) > 0 ? "EXTEND" : ""));
+    return '<tr class="clickable" data-edit-dtr="' + esc(d.id) + '" title="Tap to edit DTR entry">' +
+      "<td>" + esc(fmtHalfSheetDate(d.work_date)) + "</td>" +
+      "<td>" + esc(d.location || "") + "</td>" +
+      "<td>" + esc(desc) + "</td>" +
+      "<td>" + esc(timeRange) + "</td>" +
+      "<td>" + esc(approvedTxt) + "</td></tr>";
+  }).join("") || '<tr><td colspan="5" class="dp-empty">No entries for this cutoff period. Tap Fill DTR to add logs.</td></tr>';
   const paper = $("dtrPaper");
   if (paper) {
     paper.innerHTML =
-      '<table class="dp-table"><tr><td colspan="6" class="dp-sheet-title">EESI ELEVATORS INC.<br>DAILY TIME RECORD' + periodLine + '</td></tr>' +
-      '<tr class="dp-col-head"><th>Date</th><th>Location</th><th>Work description</th><th>Time In</th><th>Time Out</th><th>Hours</th></tr>' +
-      body + '</table><div class="dp-employee-sign">' + sig + '<div class="dp-employee-name">' + esc(employeeDisplayName(pickedUid)) +
-      '</div><div class="dp-employee-caption">Employee signature</div></div>';
+      '<table class="dp-table">' +
+      '<tr><th colspan="5" class="dp-sheet-title">DAILY TIME RECORD &amp; AUTHORITY TO CONDUCT OVERTIME</th></tr>' +
+      '<tr class="dp-col-head">' +
+      '<th style="width:11%">DATE</th>' +
+      '<th style="width:19%">LOCATION</th>' +
+      '<th style="width:37%">WORK DESCRIPTION</th>' +
+      '<th style="width:19%">TIME START/END</th>' +
+      '<th style="width:14%">APPROVED BY:</th>' +
+      "</tr>" +
+      body +
+      '<tr><td colspan="5" class="dp-empty"></td></tr>' +
+      "</table>" +
+      '<div class="dp-employee-sign">' + sig +
+      '<div class="dp-employee-name">' + esc(employeeDisplayName(pickedUid)) + "</div>" +
+      '<div class="dp-employee-caption">Signature Over Printed Name of Employee</div>' +
+      "</div>";
   }
 }
+
+/* ==================== TIMEMARK CAMERA ==================== */
+let timemarkStream: MediaStream | null = null;
+let timemarkFacing: "environment" | "user" = "environment";
+let timemarkTimer: any = null;
+let timemarkCoordsText = "GPS locating…";
+
+function updateTimemarkHud(): void {
+  const now = new Date();
+  const clockEl = $("timemarkClock");
+  const dateEl = $("timemarkDate");
+  const modeEl = $("timemarkModePill");
+  const siteEl = $("timemarkSiteLabel");
+  const gpsEl = $("timemarkGps");
+  const sched = findScheduledWorkForUser(localDateKey(now));
+  const site = val("timeLogSite").trim() || sched?.siteName || "EESI Field Site";
+  const unit = val("timeLogUnit").trim() || sched?.unitName || "";
+
+  if (clockEl) {
+    clockEl.textContent = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+  if (dateEl) {
+    dateEl.textContent = now.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "2-digit" });
+  }
+  if (modeEl) {
+    const isOut = runtime.timeLogMode === "time_out";
+    modeEl.textContent = isOut ? "🔴 TIME OUT" : "🟢 TIME IN";
+  }
+  if (siteEl) {
+    siteEl.textContent = [site, unit].filter(Boolean).join(" · ");
+  }
+  if (gpsEl) {
+    gpsEl.textContent = timemarkCoordsText;
+  }
+}
+
+async function startTimemarkCameraStream(): Promise<void> {
+  if (timemarkStream) {
+    timemarkStream.getTracks().forEach(t => t.stop());
+    timemarkStream = null;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    closeTimemarkCamera();
+    toast("Live camera unavailable — opening device camera.");
+    $("timeLogCam")?.click();
+    return;
+  }
+  try {
+    timemarkStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: timemarkFacing }, width: { ideal: 1280 }, height: { ideal: 960 } },
+      audio: false,
+    });
+    const vid = $("timemarkVideo") as HTMLVideoElement | null;
+    if (vid) {
+      vid.srcObject = timemarkStream;
+      await vid.play().catch(() => {});
+    }
+  } catch {
+    closeTimemarkCamera();
+    toast("Camera permission needed — using standard camera picker.");
+    $("timeLogCam")?.click();
+  }
+}
+
+export function openTimemarkCamera(): void {
+  const overlay = $("timemarkCamOverlay");
+  if (!overlay) {
+    $("timeLogCam")?.click();
+    return;
+  }
+  overlay.classList.remove("hidden");
+  timemarkCoordsText = "GPS locating…";
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        timemarkCoordsText = `${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`;
+        updateTimemarkHud();
+      },
+      () => {
+        timemarkCoordsText = `${runtime.lastWeatherLat.toFixed(4)}, ${runtime.lastWeatherLon.toFixed(4)} (Approx)`;
+        updateTimemarkHud();
+      },
+      { enableHighAccuracy: true, timeout: 5000 }
+    );
+  }
+  updateTimemarkHud();
+  clearInterval(timemarkTimer);
+  timemarkTimer = setInterval(updateTimemarkHud, 1000);
+  void startTimemarkCameraStream();
+}
+
+export function closeTimemarkCamera(): void {
+  clearInterval(timemarkTimer);
+  timemarkTimer = null;
+  if (timemarkStream) {
+    timemarkStream.getTracks().forEach(t => t.stop());
+    timemarkStream = null;
+  }
+  const vid = $("timemarkVideo") as HTMLVideoElement | null;
+  if (vid) vid.srcObject = null;
+  $("timemarkCamOverlay")?.classList.add("hidden");
+}
+
+export function flipTimemarkCamera(): void {
+  timemarkFacing = timemarkFacing === "environment" ? "user" : "environment";
+  void startTimemarkCameraStream();
+}
+
+export function captureTimemarkPhoto(): void {
+  const vid = $("timemarkVideo") as HTMLVideoElement | null;
+  if (!vid || !vid.videoWidth || !vid.videoHeight) {
+    toast("Camera is still starting…");
+    return;
+  }
+  const w = vid.videoWidth;
+  const h = vid.videoHeight;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  ctx.drawImage(vid, 0, 0, w, h);
+
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const dateStr = now.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "2-digit", year: "numeric" });
+  const sched = findScheduledWorkForUser(localDateKey(now));
+  const siteStr = val("timeLogSite").trim() || sched?.siteName || "EESI Field Site";
+  const unitStr = val("timeLogUnit").trim() || sched?.unitName || "";
+  const modeBadge = runtime.timeLogMode === "time_out" ? "TIME OUT" : "TIME IN";
+  const whoStr = state.profile?.full_name || state.email || "EESI Technician";
+
+  // Draw Timemark HUD card on bottom-left
+  const pad = Math.max(16, Math.round(w * 0.025));
+  const boxW = Math.min(w - pad * 2, Math.round(w * 0.72));
+  const boxH = Math.round(Math.max(128, h * 0.22));
+  const bx = pad;
+  const by = h - boxH - pad;
+
+  ctx.fillStyle = "rgba(6, 14, 31, 0.78)";
+  ctx.fillRect(bx, by, boxW, boxH);
+  ctx.fillStyle = runtime.timeLogMode === "time_out" ? "#ef4444" : "#f5a623";
+  ctx.fillRect(bx, by, Math.max(6, Math.round(boxW * 0.015)), boxH);
+
+  const tx = bx + Math.max(18, Math.round(boxW * 0.04));
+  const baseFont = Math.max(16, Math.round(h * 0.026));
+  ctx.fillStyle = "#ffffff";
+  ctx.font = `800 ${Math.round(baseFont * 1.65)}px Inter, Arial, sans-serif`;
+  ctx.fillText(timeStr, tx, by + Math.round(boxH * 0.34));
+
+  ctx.fillStyle = runtime.timeLogMode === "time_out" ? "#fca5a5" : "#86efac";
+  ctx.font = `800 ${Math.round(baseFont * 0.85)}px Inter, Arial, sans-serif`;
+  ctx.fillText(`EESI ELEVATORS · ${modeBadge}`, tx, by + Math.round(boxH * 0.54));
+
+  ctx.fillStyle = "#e8f0ff";
+  ctx.font = `600 ${Math.round(baseFont * 0.8)}px Inter, Arial, sans-serif`;
+  ctx.fillText(`${dateStr} · ${whoStr}`, tx, by + Math.round(boxH * 0.72));
+  ctx.fillText(`${[siteStr, unitStr].filter(Boolean).join(" / ")} · ${timemarkCoordsText}`, tx, by + Math.round(boxH * 0.89));
+
+  canvas.toBlob(blob => {
+    if (!blob) { toast("Could not capture image."); return; }
+    const file = new File([blob], `timemark-${runtime.timeLogMode}-${Date.now()}.jpg`, { type: "image/jpeg" });
+    closeTimemarkCamera();
+    void submitTimeLogPhoto(file);
+  }, "image/jpeg", 0.92);
+}
+
 export async function downloadDtr(): Promise<void> {
   const paper = $("dtrPaper");
   if (!paper) return;
@@ -2516,7 +3025,10 @@ export async function downloadDtr(): Promise<void> {
     }, "image/jpeg", 0.92);
   } catch (err: any) { toast(err?.message || "Could not export."); }
 }
-export function printDtr(): void { window.print(); }
+export function printDtr(): void {
+  document.body.classList.remove("printing-leave");
+  window.print();
+}
 
 /* ==================== NOTES, RECS, LEAVE, PROFILE ==================== */
 export function renderNotes(): void {
@@ -2643,28 +3155,107 @@ export async function saveRec(): Promise<void> {
 
 function updateLeaveDaysPreview(): void {
   const el = $("leaveDaysPreview");
-  if (!el) return;
+  const wdEl = $("leaveWorkingDays") as HTMLInputElement | null;
   const start = val("leaveStart");
   const end = val("leaveEnd");
   const typeEl = $("leaveType") as HTMLSelectElement | null;
   const typeLabel = typeEl ? typeEl.options[typeEl.selectedIndex].text : "leave";
-  if (!start || !end) { el.textContent = ""; return; }
+  if (!start || !end) { if (el) el.textContent = ""; return; }
   const days = leaveDaysCount(start, end);
-  el.textContent = days ? "Total: " + days + " day(s) will count toward " + typeLabel + "." : "End date must be on or after start date.";
+  if (wdEl && days && (!wdEl.value || wdEl.dataset.autoFilled === "1")) {
+    wdEl.value = String(days);
+    wdEl.dataset.autoFilled = "1";
+  }
+  if (el) {
+    el.textContent = days ? "Total: " + days + " day(s) will count toward " + typeLabel + "." : "End date must be on or after start date.";
+  }
 }
+
+function splitFullNameParts(fullName: string): { lastName: string; firstName: string; middleName: string } {
+  const parts = String(fullName || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { lastName: "", firstName: "", middleName: "" };
+  if (parts.length === 1) return { lastName: parts[0], firstName: "", middleName: "" };
+  if (parts.length === 2) return { lastName: parts[1], firstName: parts[0], middleName: "" };
+  return {
+    firstName: parts.slice(0, -2).join(" "),
+    middleName: parts[parts.length - 2],
+    lastName: parts[parts.length - 1],
+  };
+}
+
+function collectLeaveMetaFromForm() {
+  const typeVal = val("leaveType") as "sick" | "emergency" | "vacation" | "others";
+  const defParts = splitFullNameParts(state.profile?.full_name || "");
+  const filingDate = val("leaveFilingDate").trim() || localDateKey(new Date());
+  const lastName = val("leaveLastName").trim() || defParts.lastName;
+  const firstName = val("leaveFirstName").trim() || defParts.firstName;
+  const middleName = val("leaveMiddleName").trim() || defParts.middleName;
+  const othersSpecify = val("leaveOthersSpecify").trim();
+  const vacSel = document.querySelector<HTMLInputElement>('input[name="leaveVacationPlace"]:checked')?.value || val("leaveVacationPlace");
+  const vacationPlace = (vacSel === "within" || vacSel === "outside") ? vacSel : "";
+  const outsideSpecify = val("leaveOutsideSpecify").trim();
+  const inHospital = !!($("leaveInHospital") as HTMLInputElement | null)?.checked;
+  const hospitalSpecify = val("leaveHospitalSpecify").trim();
+  const workingDays = val("leaveWorkingDays").trim();
+  const applicantName = val("leaveApplicantName").trim() || [firstName, middleName, lastName].filter(Boolean).join(" ") || (state.profile?.full_name || "");
+  const reasonText = val("leaveReason").trim();
+  return {
+    filingDate,
+    lastName,
+    firstName,
+    middleName,
+    displayType: typeVal,
+    othersSpecify,
+    vacationPlace: vacationPlace as "within" | "outside" | "",
+    outsideSpecify,
+    inHospital,
+    hospitalSpecify,
+    workingDays,
+    applicantName,
+    reasonText,
+  };
+}
+
 export async function submitLeaveRequest(): Promise<void> {
   const start = val("leaveStart");
   const end = val("leaveEnd");
-  if (!start || !end) { toast("Choose both dates"); return; }
+  if (!start || !end) { toast("Choose inclusive start and end dates"); return; }
   const days = leaveDaysCount(start, end);
-  if (!days) { toast("End date must be after start"); return; }
-  const { error } = await runtime.client.from("leave_requests").insert({
-    user_id: state.userId, leave_type: val("leaveType"), start_date: start, end_date: end,
-    calendar_days: days, workdays: days, reason: val("leaveReason").trim() || null, status: "pending",
+  if (!days) { toast("End date must be on or after start date"); return; }
+  const meta = collectLeaveMetaFromForm();
+  const dbType = meta.displayType === "others" ? "others" : meta.displayType;
+  const encodedReason = buildLeaveReasonWithMeta({
+    ...meta,
+    workingDays: meta.workingDays || String(days),
   });
+
+  let { error } = await runtime.client.from("leave_requests").insert({
+    user_id: state.userId,
+    leave_type: dbType,
+    start_date: start,
+    end_date: end,
+    calendar_days: days,
+    workdays: Number(meta.workingDays) || days,
+    reason: encodedReason || null,
+    status: "pending",
+  });
+  if (error && dbType === "others" && (error.code === "23514" || /leave_requests_leave_type_check/i.test(error.message || ""))) {
+    const retry = await runtime.client.from("leave_requests").insert({
+      user_id: state.userId,
+      leave_type: "emergency",
+      start_date: start,
+      end_date: end,
+      calendar_days: days,
+      workdays: Number(meta.workingDays) || days,
+      reason: encodedReason || null,
+      status: "pending",
+    });
+    error = retry.error;
+  }
+
   const st = $("leaveFormStatus");
   if (error) { if (st) st.textContent = "Failed: " + error.message; return; }
-  setVal("leaveReason", "");
+  ["leaveReason", "leaveOthersSpecify", "leaveOutsideSpecify", "leaveHospitalSpecify", "leaveWorkingDays"].forEach(id => setVal(id, ""));
   if (st) st.textContent = "Request submitted (" + days + " day(s)).";
   updateLeaveDaysPreview();
   $("leaveFormCard")?.classList.add("hidden");
@@ -2673,15 +3264,21 @@ export async function submitLeaveRequest(): Promise<void> {
   renderLeaveBalances();
   toast("Leave request submitted");
 }
+
 export function renderLeave(): void {
   const mine = state.leaveRequests.filter(r => String(r.user_id) === String(state.userId));
   const myBox = $("myLeaveRequests");
   if (myBox) {
     myBox.innerHTML = mine.map(r => {
       const days = r.calendar_days || leaveDaysCount(r.start_date, r.end_date) || r.workdays || 0;
-      return '<div class="item"><b>' + esc(r.leave_type) + '</b> <span class="badge">' + esc(r.status) + '</span><div class="muted">' +
-        esc(fmtDay(r.start_date)) + " – " + esc(fmtDay(r.end_date)) + " · " + days + " day(s)</div>" +
-        (r.reason ? "<div>" + esc(r.reason) + "</div>" : "") + "</div>";
+      const meta = parseLeaveMeta(r.reason);
+      const dispType = (meta.displayType || r.leave_type || "").toUpperCase() +
+        (meta.displayType === "others" && meta.othersSpecify ? ` (${meta.othersSpecify})` : "");
+      return '<div class="item"><b>' + esc(dispType || r.leave_type) + '</b> <span class="badge">' + esc(r.status) + '</span><div class="muted">' +
+        esc(fmtDay(r.start_date)) + " – " + esc(fmtDay(r.end_date)) + " · " + (meta.workingDays || days) + " working day(s)" +
+        (meta.filingDate ? " · Filed " + esc(fmtDay(meta.filingDate)) : "") + "</div>" +
+        (meta.cleanReason ? "<div>" + esc(meta.cleanReason) + "</div>" : "") +
+        '<div class="inline-actions"><button class="gray small-btn" type="button" onclick="openLeaveSheetPreview(\'' + esc(r.id) + '\')">📄 View / Print Form</button></div></div>';
     }).join("") || '<p class="muted">No requests yet.</p>';
   }
   const revBox = $("leaveReviewList");
@@ -2689,14 +3286,144 @@ export function renderLeave(): void {
     const pending = state.leaveRequests.filter(r => r.status === "pending" && String(r.user_id) !== String(state.userId));
     revBox.innerHTML = pending.map(r => {
       const days = r.calendar_days || leaveDaysCount(r.start_date, r.end_date) || r.workdays || 0;
-      return '<div class="item"><b>' + esc(profileName(r.user_id)) + "</b> — " + esc(r.leave_type) + '<div class="muted">' +
-        esc(fmtDay(r.start_date)) + " – " + esc(fmtDay(r.end_date)) + " · " + days + " day(s)</div>" +
-        (r.reason ? "<div>" + esc(r.reason) + "</div>" : "") +
-        '<div class="inline-actions"><button class="green small-btn" type="button" data-act="leave-approve" data-id="' + esc(r.id) + '">Approve</button>' +
+      const meta = parseLeaveMeta(r.reason);
+      const dispType = (meta.displayType || r.leave_type || "").toUpperCase();
+      return '<div class="item"><b>' + esc(profileName(r.user_id)) + "</b> — " + esc(dispType) + '<div class="muted">' +
+        esc(fmtDay(r.start_date)) + " – " + esc(fmtDay(r.end_date)) + " · " + (meta.workingDays || days) + " day(s)</div>" +
+        (meta.cleanReason ? "<div>" + esc(meta.cleanReason) + "</div>" : "") +
+        '<div class="inline-actions"><button class="gray small-btn" type="button" onclick="openLeaveSheetPreview(\'' + esc(r.id) + '\')">📄 Form</button>' +
+        '<button class="green small-btn" type="button" data-act="leave-approve" data-id="' + esc(r.id) + '">Approve</button>' +
         '<button class="red small-btn" type="button" data-act="leave-reject" data-id="' + esc(r.id) + '">Reject</button></div></div>';
     }).join("") || '<p class="muted">Nothing to review.</p>';
   }
   renderLeaveBalances();
+}
+
+export function openLeaveSheetPreview(requestId?: string): void {
+  const req = requestId ? state.leaveRequests.find(r => String(r.id) === String(requestId)) : null;
+  const paper = $("leaveSheetPaper");
+  const overlay = $("leaveSheetPreviewOverlay");
+  if (!paper || !overlay) return;
+
+  let meta: any = {};
+  let leaveType = "";
+  let start = "";
+  let end = "";
+  let status = "pending";
+  let days = 0;
+  let approverName = "";
+  let isOwn = true;
+
+  if (req) {
+    meta = parseLeaveMeta(req.reason);
+    leaveType = (meta.displayType || req.leave_type || "").toLowerCase();
+    start = req.start_date || "";
+    end = req.end_date || "";
+    status = req.status || "pending";
+    days = req.calendar_days || leaveDaysCount(start, end) || req.workdays || 0;
+    isOwn = String(req.user_id) === String(state.userId);
+    const prof = profileOf(req.user_id);
+    const nameParts = splitFullNameParts(prof?.full_name || "");
+    if (!meta.lastName) meta.lastName = nameParts.lastName;
+    if (!meta.firstName) meta.firstName = nameParts.firstName;
+    if (!meta.middleName) meta.middleName = nameParts.middleName;
+    if (!meta.applicantName) meta.applicantName = prof?.full_name || "";
+    if (!meta.filingDate) meta.filingDate = String(req.created_at || "").slice(0, 10) || start;
+    if (req.reviewed_by) approverName = profileName(req.reviewed_by);
+  } else {
+    meta = collectLeaveMetaFromForm();
+    leaveType = meta.displayType;
+    start = val("leaveStart");
+    end = val("leaveEnd");
+    days = leaveDaysCount(start, end);
+  }
+
+  const chk = (on: boolean) => `<span class="ls-box">${on ? "✓" : ""}</span>`;
+  const fmtFiling = meta.filingDate
+    ? new Date(meta.filingDate + "T00:00:00").toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })
+    : "";
+  const inclusiveStr = start && end ? `${fmtDay(start)} – ${fmtDay(end)}` : (start ? fmtDay(start) : "");
+  const workDaysStr = meta.workingDays || (days ? `${days} Day(s)` : "");
+  const sigImg = isOwn
+    ? (signaturePhotoDataUrl ? `<img src="${esc(signaturePhotoDataUrl)}" alt="Signature" class="ls-sig-img">` : (drawnSigDataUrl ? `<img src="${esc(drawnSigDataUrl)}" alt="Signature" class="ls-sig-img">` : ""))
+    : "";
+
+  paper.innerHTML =
+    `<div class="ls-top-date">Date: <span class="ls-inline-val">${esc(fmtFiling)}</span></div>` +
+    `<div class="ls-title">APPLICATION FOR LEAVE</div>` +
+    `<div class="ls-name-row">` +
+    `<span class="ls-lbl">NAME :</span>` +
+    `<div class="ls-name-cols">` +
+    `<div class="ls-name-cell"><div class="ls-line-val">${esc(meta.lastName || "")}</div><div class="ls-sub">LAST</div></div>` +
+    `<div class="ls-name-cell"><div class="ls-line-val">${esc(meta.firstName || "")}</div><div class="ls-sub">FIRST</div></div>` +
+    `<div class="ls-name-cell"><div class="ls-line-val">${esc(meta.middleName || "")}</div><div class="ls-sub">MIDDLE</div></div>` +
+    `</div></div>` +
+    `<div class="ls-grid">` +
+    `<div class="ls-col">` +
+    `<div class="ls-field-line"><span class="ls-lbl">DATE OF FILLING :</span><span class="ls-fill-val">${esc(fmtFiling)}</span></div>` +
+    `<div class="ls-sec-lbl">TYPE OF LEAVE:</div>` +
+    `<div class="ls-check-item">${chk(leaveType === "vacation")} <span>VACATION</span></div>` +
+    `<div class="ls-check-item">${chk(leaveType === "sick")} <span>SICK</span></div>` +
+    `<div class="ls-check-item">${chk(leaveType === "others" || leaveType === "emergency")} <span>OTHERS (Specify)</span></div>` +
+    `<div class="ls-under-val">${esc(meta.othersSpecify || (leaveType === "emergency" ? "Emergency Leave" : ""))}</div>` +
+    `<div class="ls-sec-lbl" style="margin-top:16px;">NUMBER OF WORKING DAYS APPLIED FOR</div>` +
+    `<div class="ls-under-val">${esc(workDaysStr)}</div>` +
+    `<div class="ls-sec-lbl" style="margin-top:14px;">INCLUSIVE DATES :</div>` +
+    `<div class="ls-under-val">${esc(inclusiveStr)}</div>` +
+    `<div class="ls-sig-block">${sigImg}<div class="ls-under-val" style="min-height:22px;text-align:center;">${esc(meta.applicantName || "")}</div><div class="ls-sig-cap">Signature of Applicant</div></div>` +
+    `</div>` +
+    `<div class="ls-col">` +
+    `<div class="ls-sec-lbl">WHERE LEAVE WILL BE SPENT</div>` +
+    `<div class="ls-sub-sec">(1) IN CASE OF VACATION LEAVE</div>` +
+    `<div class="ls-check-item">${chk(meta.vacationPlace === "within")} <span>Within Metro Manila</span></div>` +
+    `<div class="ls-check-item">${chk(meta.vacationPlace === "outside")} <span>Outside Metro Manila (Specify)</span></div>` +
+    `<div class="ls-under-val">${esc(meta.outsideSpecify || "")}</div>` +
+    `<div class="ls-sub-sec" style="margin-top:16px;">(2) IN CASE OF SICK LEAVE</div>` +
+    `<div class="ls-check-item">${chk(!!meta.inHospital)} <span>In Hospital (Specify)</span></div>` +
+    `<div class="ls-under-val">${esc(meta.hospitalSpecify || "")}</div>` +
+    `<div class="ls-sub-sec" style="margin-top:16px;">(3) STATUS</div>` +
+    `<div class="ls-check-item">${chk(status === "approved")} <span>APPROVED</span></div>` +
+    `<div class="ls-check-item">${chk(status === "rejected")} <span>NOT APPROVE</span></div>` +
+    `<div style="margin-top:16px;font-weight:700;">Approved by</div>` +
+    `<div class="ls-under-val" style="min-height:24px;text-align:center;">${esc(approverName)}</div>` +
+    `<div class="ls-sig-cap">Authorized Signatory</div>` +
+    `</div></div>` +
+    (meta.cleanReason ? `<div class="ls-reason-note"><b>Reason:</b> ${esc(meta.cleanReason)}</div>` : "");
+
+  overlay.classList.remove("hidden");
+}
+
+export function closeLeaveSheetPreview(): void {
+  $("leaveSheetPreviewOverlay")?.classList.add("hidden");
+}
+
+export async function downloadLeaveSheet(): Promise<void> {
+  const paper = $("leaveSheetPaper");
+  if (!paper) return;
+  if (!window.html2canvas) { toast("Image export library is still loading."); return; }
+  try {
+    const canvas = await window.html2canvas(paper, { backgroundColor: "#fff", scale: 2 });
+    canvas.toBlob(async (blob: Blob | null) => {
+      if (!blob) return;
+      const file = new File([blob], "Leave-Application-" + new Date().toISOString().slice(0, 10) + ".jpg", { type: "image/jpeg" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: "Application for Leave" }); return; } catch {}
+      }
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = file.name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    }, "image/jpeg", 0.92);
+  } catch (err: any) { toast(err?.message || "Could not export form."); }
+}
+
+export function printLeaveSheet(): void {
+  document.body.classList.add("printing-leave");
+  const cleanup = () => document.body.classList.remove("printing-leave");
+  window.addEventListener("afterprint", cleanup, { once: true });
+  window.print();
+  setTimeout(cleanup, 1500);
 }
 export function renderLeaveBalances(): void {
   if (!state.userId) return;
@@ -2782,21 +3509,12 @@ export function initFeatureWiring(): void {
 
   document.querySelectorAll<HTMLElement>("[data-units-region]").forEach(btn => {
     btn.addEventListener("click", () => {
-      runtime.unitsRegion = btn.dataset.unitsRegion || "Luzon";
+      runtime.unitsRegion = btn.dataset.unitsRegion || "ALL";
       document.querySelectorAll<HTMLElement>("[data-units-region]").forEach(b => b.classList.toggle("active", b === btn));
       renderUnits();
       saveLastView();
     });
   });
-
-  document.querySelectorAll<HTMLElement>("[data-units-tab]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      switchUnitsTab((btn.dataset.unitsTab as "list" | "manual") || "list");
-    });
-  });
-
-  $("unitsSearch")?.addEventListener("input", renderUnits);
-  $("unitsSort")?.addEventListener("change", renderUnits);
 
   const unitManualFile = $("unitManualFile") as HTMLInputElement | null;
   unitManualFile?.addEventListener("change", async () => {
@@ -2822,6 +3540,10 @@ export function initFeatureWiring(): void {
       if (error) throw error;
       suppressNotifications();
       await loadUnits();
+      const updated = state.units.find(x => String(x.id) === String(unitId));
+      if (updated && !$("unitManualOverlay")?.classList.contains("hidden")) {
+        renderUnitManualOverlayBody(updated);
+      }
       toast("Unit manual uploaded");
     } catch (err: any) {
       toast("Manual upload failed: " + (err?.message || err));
@@ -2893,7 +3615,9 @@ export function initFeatureWiring(): void {
       const ttl = $("unitFormTitle");
       if (ttl) ttl.textContent = "Add unit";
       renderUnitSiteOptions();
-      const firstInRegion = state.sites.find(s => s.region === runtime.unitsRegion);
+      const firstInRegion = runtime.unitsRegion === "ALL"
+        ? state.sites[0]
+        : state.sites.find(s => s.region === runtime.unitsRegion);
       if (firstInRegion) setVal("unitSite", String(firstInRegion.id));
     }
     card.classList.toggle("hidden");
@@ -2944,6 +3668,14 @@ export function initFeatureWiring(): void {
     const card = $("leaveFormCard");
     if (!card) return;
     const opening = card.classList.contains("hidden");
+    if (opening) {
+      if (!val("leaveFilingDate")) setVal("leaveFilingDate", localDateKey(new Date()));
+      const defParts = splitFullNameParts(state.profile?.full_name || "");
+      if (!val("leaveLastName") && defParts.lastName) setVal("leaveLastName", defParts.lastName);
+      if (!val("leaveFirstName") && defParts.firstName) setVal("leaveFirstName", defParts.firstName);
+      if (!val("leaveMiddleName") && defParts.middleName) setVal("leaveMiddleName", defParts.middleName);
+      if (!val("leaveApplicantName") && state.profile?.full_name) setVal("leaveApplicantName", state.profile.full_name);
+    }
     card.classList.toggle("hidden");
     if (opening) card.scrollIntoView({ behavior: "smooth" });
   });
@@ -2992,34 +3724,90 @@ export function initFeatureWiring(): void {
       if (!$("pmsChecklistPanel")?.classList.contains("hidden")) openPmsChecklist();
     })
   );
+  $("pmsChecklistPreview")?.addEventListener("click", e => {
+    const rem = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-remove-pms-att]");
+    if (!rem) return;
+    const idx = Number(rem.dataset.removePmsAtt);
+    const removed = runtime.pendingPmsFiles.splice(idx, 1)[0];
+    if (removed && removed.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+    renderPmsAttachmentPreview();
+  });
+
+  const pmsFilesInp = $("pmsChecklistFiles") as HTMLInputElement | null;
+  pmsFilesInp?.addEventListener("change", async () => {
+    const chosen = [...(pmsFilesInp.files || [])];
+    pmsFilesInp.value = "";
+    if (!chosen.length) return;
+    for (const rawFile of chosen) {
+      const exists = runtime.pendingPmsFiles.some(
+        p => p.file.name === rawFile.name && p.file.size === rawFile.size && p.file.lastModified === rawFile.lastModified
+      );
+      if (exists) continue;
+      const isImg = isImageFile(rawFile);
+      const processed = isImg ? await prepareImageFile(rawFile, 1600, 0.85) : rawFile;
+      runtime.pendingPmsFiles.push({
+        file: processed,
+        previewUrl: isImg ? URL.createObjectURL(processed) : "",
+      });
+    }
+    renderPmsAttachmentPreview();
+    toast(chosen.length + " PMS attachment(s) ready");
+  });
+
   $("savePmsRecordButton")?.addEventListener("click", async () => {
     if (!runtime.pmsSiteId) { toast("Pick a site first"); return; }
-    const all = [...document.querySelectorAll<HTMLInputElement>("#pmsCategories input[type='checkbox']")];
-    const passed = all.filter(c => c.checked).length;
-    const itemsSummary = all.map(c => ({ label: (c.parentElement?.textContent || "").trim(), passed: c.checked }));
-    const unitId = val("pmsChecklistUnit");
-    const unitObj = state.units.find(u => String(u.id) === String(unitId));
-    const { error } = await runtime.client.from("pms_checklist_records").insert({
-      site_id: runtime.pmsSiteId,
-      user_id: state.userId,
-      unit_type: runtime.pmsUnit,
-      checklist_date: val("pmsChecklistDate") || new Date().toISOString().slice(0, 10),
-      items_passed: passed,
-      items_total: all.length,
-      details: JSON.stringify({
-        unit: runtime.pmsUnit,
-        unitId: unitId || null,
-        unitName: unitObj?.unit_name || null,
-        region: runtime.pmsRegion,
-        items: itemsSummary,
-      }),
-    });
+    if (!checkNetwork()) return;
+    const btn = $("savePmsRecordButton") as HTMLButtonElement | null;
     const st = $("pmsRecordStatus");
-    if (error) { if (st) st.textContent = "Failed: " + error.message; return; }
-    if (st) st.textContent = "Saved (" + passed + "/" + all.length + " passed).";
-    suppressNotifications();
-    await loadPmsRecords();
-    toast("PMS record saved");
+    if (btn) btn.disabled = true;
+    if (st) st.textContent = "Uploading & saving PMS checklist…";
+    try {
+      const urls: string[] = [];
+      for (let i = 0; i < runtime.pendingPmsFiles.length; i++) {
+        const f = runtime.pendingPmsFiles[i].file;
+        if (f.size > 25 * 1024 * 1024) throw new Error(f.name + " is larger than 25MB");
+        const safeName = (f.name || ("pms-" + i)).replace(/[^a-zA-Z0-9._-]/g, "_");
+        const path = `${state.userId}/pms/${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}-${safeName}`;
+        const { error: up } = await runtime.client.storage.from("reports").upload(path, f, { upsert: false, contentType: f.type || undefined });
+        if (up) throw up;
+        const { data: pub } = runtime.client.storage.from("reports").getPublicUrl(path);
+        urls.push(pub.publicUrl);
+      }
+
+      const all = [...document.querySelectorAll<HTMLInputElement>("#pmsCategories input[type='checkbox']")];
+      const passed = all.filter(c => c.checked).length;
+      const itemsSummary = all.map(c => ({ label: (c.parentElement?.textContent || "").trim(), passed: c.checked }));
+      const unitId = val("pmsChecklistUnit");
+      const unitObj = state.units.find(u => String(u.id) === String(unitId));
+      const { error } = await runtime.client.from("pms_checklist_records").insert({
+        site_id: runtime.pmsSiteId,
+        user_id: state.userId,
+        unit_type: runtime.pmsUnit,
+        checklist_date: val("pmsChecklistDate") || new Date().toISOString().slice(0, 10),
+        items_passed: passed,
+        items_total: all.length,
+        details: JSON.stringify({
+          unit: runtime.pmsUnit,
+          unitId: unitId || null,
+          unitName: unitObj?.unit_name || null,
+          region: runtime.pmsRegion,
+          attachments: urls,
+          items: itemsSummary,
+        }),
+      });
+      if (error) throw error;
+      clearPendingPmsFiles();
+      renderPmsAttachmentPreview();
+      if (st) st.textContent = "Saved (" + passed + "/" + all.length + " passed" + (urls.length ? `, ${urls.length} attachment(s)` : "") + ").";
+      suppressNotifications();
+      await loadPmsRecords();
+      toast("PMS record saved");
+    } catch (err: any) {
+      if (st) st.textContent = "Failed: " + (err?.message || err);
+      toast("PMS save failed: " + (err?.message || err));
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   });
 
   ["pmsRecordsTeam", "pmsRecordsLocation", "pmsRecordsSite"].forEach(id => $(id)?.addEventListener("change", renderPmsRecords));
@@ -3187,6 +3975,13 @@ export function initFeatureWiring(): void {
       return;
     }
 
+    const editDtrRow = target.closest<HTMLElement>("[data-edit-dtr]");
+    if (editDtrRow) {
+      const id = editDtrRow.dataset.editDtr || "";
+      if (id) openEditDtr(id);
+      return;
+    }
+
     const pmsCard = target.closest<HTMLElement>("[data-pms-record]");
     if (pmsCard) {
       const rec = state.pmsRecords.find(r => String(r.id) === String(pmsCard.dataset.pmsRecord));
@@ -3195,6 +3990,7 @@ export function initFeatureWiring(): void {
       let parsed: any = {};
       try { parsed = JSON.parse(rec.details || "{}"); } catch {}
       const itemsHtml = (parsed.items || []).map((it: any) => "<div>" + (it.passed ? "✅ " : "❌ ") + esc(it.label) + "</div>").join("");
+      const attHtml = buildUrlAttachmentHtml(Array.isArray(parsed.attachments) ? parsed.attachments : []);
       const det = $("pmsRecordDetails");
       if (det) {
         det.innerHTML = "<h2>" + esc(site ? site.name : "Site") + '</h2><div class="muted">' + esc((rec.unit_type || "").toUpperCase()) +
@@ -3203,7 +3999,9 @@ export function initFeatureWiring(): void {
           '<div class="inline-actions" style="margin:0 0 12px;">' +
           '<button class="gray small-btn" type="button" onclick="exportPmsRecords(\'xls\',\'' + esc(rec.id) + '\')">📊 Export XLS</button>' +
           '<button class="gray small-btn" type="button" onclick="exportPmsRecords(\'doc\',\'' + esc(rec.id) + '\')">📝 Export DOC</button>' +
-          "</div>" + itemsHtml;
+          "</div>" +
+          (attHtml ? '<div class="media-grid" style="margin:0 0 12px;">' + attHtml + "</div>" : "") +
+          itemsHtml;
       }
       $("pmsRecordOverlay")?.classList.remove("hidden");
       return;

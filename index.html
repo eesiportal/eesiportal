@@ -67,11 +67,13 @@ h1,h2,h3,.title{font-weight:700;text-transform:uppercase;color:#fff}
 img,video,canvas,iframe{max-width:100%}
 
 header{
-  position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:10px;padding:12px 14px;
+  position:fixed;top:0;left:0;right:0;z-index:25;display:flex;align-items:center;gap:10px;
+  padding:calc(12px + env(safe-area-inset-top)) 14px 12px;
   background:linear-gradient(180deg,#0f2448 0%,#0b1b38 100%);
   border-bottom:1px solid rgba(47,140,255,.25);
   backdrop-filter:blur(20px) saturate(160%);-webkit-backdrop-filter:blur(20px) saturate(160%);
 }
+#app{padding-top:calc(62px + env(safe-area-inset-top))}
 .brand,.brand-long{white-space:nowrap;font-size:14px;overflow:visible;color:#fff}
 .brand{flex:1;font-weight:700}
 .brand-long{display:inline}
@@ -89,8 +91,8 @@ header{
 @keyframes pulseDot{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.25);opacity:.7}}
 
 .ticker{overflow:hidden;white-space:nowrap;padding:8px 10px;font-size:12px;background:#0b1b38;color:#cfe0ff;border-bottom:1px solid rgba(47,140,255,.2)}
-.ticker span{display:inline-block;padding-left:100%;animation:marquee 40s linear infinite;will-change:transform;color:#cfe0ff}
-@keyframes marquee{to{transform:translateX(-100%)}}
+.ticker span{display:inline-block;padding-left:0;will-change:transform;color:#cfe0ff}
+@keyframes marqueeSingle{0%{transform:translateX(100vw)}100%{transform:translateX(-100%)}}
 
 main{max-width:860px;margin:auto;position:relative}
 .ct{padding:16px}
@@ -105,6 +107,7 @@ main{max-width:860px;margin:auto;position:relative}
 .card:hover,.item:hover,.person:hover,.tile:hover,.stat:hover{border-color:rgba(47,140,255,.5);box-shadow:0 6px 20px rgba(30,108,242,.18)}
 .card{padding:16px;margin-bottom:14px}
 .item{padding:14px;margin-bottom:10px}
+.item.site-selected{border-color:var(--cyan)!important;box-shadow:0 0 0 1px var(--cyan),0 6px 18px rgba(47,140,255,.28)!important}
 .item.unread-notice{border-left:4px solid var(--cyan);box-shadow:0 0 18px rgba(47,140,255,.32)}
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 .stat,.tile{padding:14px 10px;text-align:center;cursor:pointer;position:relative;overflow:hidden}
@@ -191,12 +194,13 @@ td{color:#e8f0ff}
 .dtr-paper{background:#fff;color:#000;border:0;padding:8px;width:100%;max-width:1000px;aspect-ratio:17/11;margin:0 auto 12px;overflow:auto;border-radius:4px;box-shadow:0 12px 40px rgba(0,0,0,.45)}
 .dp-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:11px;font-weight:700;background:#fff!important;border-radius:0!important;box-shadow:none!important;border:1px solid #000!important}
 .dp-table th,.dp-table td{border:1px solid #000!important;padding:4px 3px;text-align:center;overflow-wrap:anywhere;color:#000!important;background:#fff!important}
+.dp-table tr.clickable:hover td{background:#f0f6ff!important}
 .dp-table .dp-sheet-title{font-size:19px!important;line-height:1.2;font-style:normal;padding:5px}
 .dp-col-head th{font-style:italic;font-size:11px!important}
 .dp-empty{padding:14px!important;font-weight:400}
 .dp-employee-sign{width:34%;min-width:210px;text-align:center;margin-top:4px;color:#000}
-.dp-employee-sign img{display:block;width:180px;height:65px;object-fit:contain;margin:0 auto;border:0}
-.dp-employee-name{font-weight:bold;font-size:13px;margin-top:2px;padding-bottom:4px;border-bottom:3px double #000;color:#000}
+.dp-employee-sign img{display:block;width:190px;height:68px;object-fit:contain;margin:0 auto -22px;position:relative;z-index:2;border:0}
+.dp-employee-name{position:relative;z-index:1;font-weight:bold;font-size:13px;margin-top:2px;padding-bottom:4px;border-bottom:3px double #000;color:#000}
 .dp-employee-caption{font-weight:bold;font-style:italic;font-size:11px;margin-top:4px;color:#000}
 .dtr-actions{display:flex;gap:8px;max-width:1000px;margin:0 auto}
 .dtr-actions button{flex:1;white-space:normal}
@@ -205,9 +209,11 @@ td{color:#e8f0ff}
 .time-chat-log{max-height:360px;min-height:200px;overflow-y:auto;padding:10px;border:1px solid var(--border);border-radius:12px;background:rgba(4,8,24,.55);margin:10px 0}
 body.light .time-chat-log{background:#f8fbff}
 #appWatermark{position:fixed;inset:0;z-index:0;pointer-events:none;background-size:cover;background-position:center;background-repeat:no-repeat;opacity:.14}
-header,.ticker,main,nav.bottom{position:relative;z-index:1}
-header{z-index:20}
+.ticker,main{position:relative;z-index:1}
+header{z-index:25}
 nav.bottom{z-index:30}
+.story-ring{padding:3px!important;background:linear-gradient(135deg,#f59e0b,#ef4444,#ec4899,#2f8cff)!important;border:0!important}
+.story-ring .avatar,.story-ring video{border:2px solid var(--void);border-radius:50%;width:100%;height:100%;object-fit:cover}
 .person-picker{max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:10px;background:rgba(4,8,24,.7)}
 
 .chat-page .chat-ct{display:flex;flex-direction:column;height:calc(100dvh - 158px);padding:8px 14px 0}
@@ -372,8 +378,8 @@ nav.bottom{z-index:30}
 .site-header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
 .site-header .title{margin:0}
 .site-header .btn,.site-header .gray{flex:0 0 auto}
-.page{animation:pageFade .32s ease-out}
-@keyframes pageFade{from{opacity:0;transform:translateY(10px) scale(.99)}to{opacity:1;transform:none}}
+.page{animation:pageFade .24s ease-out}
+@keyframes pageFade{from{opacity:0}to{opacity:1}}
 .page.hidden{animation:none}
 .online-dot{width:9px;height:9px;border-radius:50%;background:#5a6480;display:inline-block;margin-right:4px}
 .online-dot.on{background:var(--green)}
@@ -420,9 +426,35 @@ section.page:not(#page-chat)>.ct>.deco-band{margin-top:auto}
 .pin-shake{animation:pinShake .4s}
 @keyframes pinShake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
 
-.ptr-banner{position:fixed;left:50%;top:calc(12px + env(safe-area-inset-top));transform:translate(-50%,-90px);z-index:250;padding:9px 18px;border-radius:999px;font-size:13px;font-weight:700;background:var(--panel);color:var(--text);border:1px solid var(--border-hot);box-shadow:0 8px 24px rgba(0,0,0,.45);backdrop-filter:blur(12px);pointer-events:none;transition:transform .2s ease,opacity .2s ease;opacity:0;display:flex;align-items:center;gap:8px;white-space:nowrap}
-.ptr-banner.visible{opacity:1}
-.ptr-banner.ready{background:#1e6cf2;color:#fff;border-color:#1e6cf2;box-shadow:0 6px 20px rgba(30,108,242,.5)}
+.timemark-stage{position:relative;width:100%;max-width:560px;background:#000;border-radius:14px;overflow:hidden;border:1px solid var(--border-hot)}
+#timemarkVideo{width:100%;max-height:66vh;display:block;object-fit:cover;background:#000}
+.timemark-hud{position:absolute;left:12px;bottom:12px;right:12px;max-width:340px;background:rgba(6,14,31,.82);border-left:4px solid #f5a623;border-radius:10px;padding:10px 12px;color:#fff;pointer-events:none;backdrop-filter:blur(6px)}
+#timemarkClock{font-size:26px;font-weight:800;line-height:1.1}
+#timemarkModePill{font-size:11px;font-weight:800;margin-top:4px;letter-spacing:.04em}
+#timemarkDate,#timemarkSiteLabel,#timemarkGps{font-size:11px;color:#cfe0ff;margin-top:2px;line-height:1.3}
+
+.leave-sheet{background:#fff;color:#000;padding:20px 22px;border-radius:6px;max-width:820px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.35}
+.leave-sheet,.leave-sheet *{color:#000!important;font-family:Arial,Helvetica,sans-serif!important}
+.ls-top-date{font-weight:700;margin-bottom:4px}
+.ls-inline-val{border-bottom:1px solid #000;padding:0 10px;min-width:140px;display:inline-block;font-weight:600}
+.ls-title{text-align:center;font-weight:800;font-size:16px;margin:4px 0 14px;letter-spacing:.04em}
+.ls-name-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:14px}
+.ls-lbl{font-weight:700;white-space:nowrap}
+.ls-name-cols{flex:1;display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;text-align:center}
+.ls-line-val{border-bottom:1px solid #000;min-height:20px;font-weight:700;padding-bottom:2px}
+.ls-sub{font-size:11px;font-weight:700;margin-top:2px}
+.ls-grid{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+.ls-field-line{display:flex;gap:8px;align-items:flex-end;margin-bottom:12px}
+.ls-fill-val{flex:1;border-bottom:1px solid #000;min-height:20px;padding:0 6px 2px;font-weight:700}
+.ls-sec-lbl{font-weight:800;margin:8px 0 6px}
+.ls-sub-sec{font-weight:700;margin:8px 0 6px}
+.ls-check-item{display:flex;align-items:center;gap:10px;margin:6px 0 6px 14px;font-weight:600}
+.ls-box{width:22px;height:20px;border:1.5px solid #000;display:inline-grid;place-items:center;font-weight:900;font-size:14px;flex:none}
+.ls-under-val{border-bottom:1px solid #000;min-height:20px;margin:6px 0 4px;padding:0 6px 2px;font-weight:700}
+.ls-sig-block{margin-top:26px;position:relative}
+.ls-sig-img{display:block;width:170px;height:56px;object-fit:contain;margin:0 auto -18px;position:relative;z-index:2}
+.ls-sig-cap{text-align:center;font-weight:700;font-size:12px;margin-top:4px}
+.ls-reason-note{margin-top:14px;padding-top:8px;border-top:1px dashed #999;font-size:12px}
 
 body.compact header{padding:8px 10px;gap:6px}
 body.compact .ct{padding:10px}
@@ -442,6 +474,7 @@ body.compact nav.bottom button span{font-size:16px}
 @media(max-width:540px){
   .grid{grid-template-columns:repeat(2,1fr)}
   .row{grid-template-columns:1fr;gap:0}
+  .ls-grid{grid-template-columns:1fr;gap:12px}
   .title{font-size:19px}
   .dtr-paper{overflow-x:auto}
   .dp-table{min-width:760px}
@@ -453,21 +486,26 @@ body.compact nav.bottom button span{font-size:16px}
   .ct{padding:10px}
 }
 @media print{
-  header,.ticker,nav.bottom,#toastBox,.ptr-banner{display:none!important}
+  header,.ticker,nav.bottom,#toastBox{display:none!important}
   main{max-width:none}
-  body{background:#fff!important;color:#000!important}
-  @page{size:8.5in 5.5in;margin:0.2in}
-  .page{display:none!important}
-  #page-dtr{display:block!important}
-  #dtrFill,.dtr-tabs,.dtr-actions,#dtrExportHint{display:none!important}
-  #dtrPreview{display:block!important}
-  .dtr-paper{width:8.1in;height:5.1in;max-width:none;aspect-ratio:auto;overflow:hidden;box-shadow:none;border:0}
-  .dp-table{min-width:0}
-  #page-dtr .title{display:none}
+  body{background:#fff!important;color:#000!important;padding:0!important}
+  @page{margin:0.2in}
+  body:not(.printing-leave) .page{display:none!important}
+  body:not(.printing-leave) #page-dtr{display:block!important}
+  body:not(.printing-leave) #dtrFill,body:not(.printing-leave) .dtr-tabs,body:not(.printing-leave) .dtr-actions,body:not(.printing-leave) #dtrExportHint{display:none!important}
+  body:not(.printing-leave) #dtrPreview{display:block!important}
+  body:not(.printing-leave) .dtr-paper{width:8.1in;height:5.1in;max-width:none;aspect-ratio:auto;overflow:hidden;box-shadow:none;border:0}
+  body:not(.printing-leave) .dp-table{min-width:0}
+  body:not(.printing-leave) #page-dtr .title{display:none}
+  body.printing-leave #app{display:none!important}
+  body.printing-leave #leaveSheetPreviewOverlay{position:static!important;background:#fff!important;padding:0!important;display:block!important}
+  body.printing-leave #leaveSheetPreviewOverlay .card{box-shadow:none!important;border:0!important;background:#fff!important;width:100%!important;max-width:none!important;padding:0!important}
+  body.printing-leave .leave-preview-actions{display:none!important}
 }
 @media(display-mode:standalone){
   header{padding-top:calc(12px + env(safe-area-inset-top))}
   body{padding-top:0}
+  #app{padding-top:calc(62px + env(safe-area-inset-top))}
 }
 
 /* ===== LIGHT THEME ONLY ===== */
@@ -511,8 +549,6 @@ body.light .deco-band{filter:saturate(.95)}
 body.light .settings-subpanel{background:rgba(30,108,242,.04)}
 body.light #liveClock{color:#0f1f3d}
 body.light #liveWeather{color:#1e6cf2}
-body.light .ptr-banner{background:#ffffff;color:#0f1f3d;border-color:rgba(30,108,242,.35);box-shadow:0 6px 20px rgba(19,35,63,.18)}
-body.light .ptr-banner.ready{background:#1e6cf2;color:#fff}
 
 /* ===== FONT FAMILY, WEIGHT & ALL FONT STYLES ===== */
 *:not(svg):not(svg *){font-family:inherit!important}
@@ -541,7 +577,6 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
 
 <div id="appWatermark" class="hidden" aria-hidden="true"></div>
 <div id="offlineBanner" class="hidden">⚠️ No Internet Connection. Please check your network.</div>
-<div id="ptrBanner" class="ptr-banner" aria-live="polite">↓ Pull to reload</div>
 
 <svg width="0" height="0" style="position:absolute;overflow:hidden" aria-hidden="true" focusable="false">
   <symbol id="eesiLogo" viewBox="0 0 356 196">
@@ -799,13 +834,11 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
         <div class="tile clickable admin-only hidden" onclick="go('live-map')"><span class="ic">🗺️</span>Live Map</div>
         <div class="tile clickable" onclick="go('units')"><span class="ic">🛗</span>Units</div>
         <div class="tile clickable" onclick="go('reports')"><span class="ic">📄</span>Reports</div>
-        <div class="tile clickable" onclick="go('announcements')"><span class="ic">📢</span>Announcements</div>
         <div class="tile clickable" onclick="go('schedule')"><span class="ic">📅</span>Schedule</div>
         <div class="tile clickable" onclick="go('sites')"><span class="ic">📍</span>Sites</div>
         <div class="tile clickable" onclick="go('dtr')"><span class="ic">⏰</span>DTR</div>
         <div class="tile clickable" onclick="go('dtr');dtrTab('time_log')"><span class="ic">📸</span>Time In / Out</div>
         <div class="tile clickable" onclick="go('notes')"><span class="ic">📌</span>Notes &amp; Recs</div>
-        <div class="tile clickable" onclick="go('profile')"><span class="ic">👤</span>Profile</div>
         <div class="tile clickable" onclick="go('reports');setTimeout(function(){var b=document.getElementById('reportSearchTab');if(b)b.click();},80)"><span class="ic">🔍</span>Search</div>
         <div class="tile clickable" onclick="go('leave')"><span class="ic">🌴</span>Leave</div>
       </div>
@@ -893,24 +926,14 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
           <button class="gray" type="button" onclick="cancelUnitForm()">Cancel</button>
         </div>
       </div>
-      <div class="tabs" id="unitsModeTabs">
-        <button class="tab active" type="button" data-units-tab="list">🛗 Units by Site &amp; Location</button>
-        <button class="tab" type="button" data-units-tab="manual">📖 Unit Manuals</button>
-      </div>
       <div class="tabs" id="unitsRegionTabs">
-        <button class="tab active" type="button" data-units-region="Luzon">Luzon</button>
+        <button class="tab active" type="button" data-units-region="ALL">All Regions</button>
+        <button class="tab" type="button" data-units-region="Luzon">Luzon</button>
         <button class="tab" type="button" data-units-region="Visayas">Visayas</button>
         <button class="tab" type="button" data-units-region="Mindanao">Mindanao</button>
       </div>
-      <div class="card" style="padding:12px;">
-        <div class="row">
-          <div class="field" style="margin-bottom:0;"><label for="unitsSearch">Search unit / site name / location</label><input id="unitsSearch" type="search" placeholder="e.g. Elevator 1, Cebu, SM…"></div>
-          <div class="field" style="margin-bottom:0;"><label for="unitsSort">Sort by</label><select id="unitsSort"><option value="site">Site Name &amp; Unit Name</option><option value="location">Site Location (City / Address)</option><option value="status">Unit Status</option></select></div>
-        </div>
-      </div>
       <div id="unitsSetupHint" class="card warn hidden"></div>
       <div id="unitsListView"><div id="unitsList"></div></div>
-      <div id="unitsManualView" class="hidden"></div>
       <input id="unitManualFile" type="file" class="sr-file-input" accept="image/*,.pdf,.doc,.docx,.txt">
     </div></section>
 
@@ -1049,7 +1072,12 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
               <div class="field"><label for="pmsChecklistUnit">Unit (connected to site)</label><select id="pmsChecklistUnit"><option value="">General / Site-wide Unit</option></select></div>
               <div class="field"><label for="pmsChecklistDate">Checklist date</label><input id="pmsChecklistDate" type="date"></div>
             </div>
-            <p class="muted">Complete the checklist, then save or export the checklist.</p>
+            <div class="field">
+              <label for="pmsChecklistFiles">Attach PMS photos / files (one or multiple)</label>
+              <input id="pmsChecklistFiles" type="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt" multiple>
+            </div>
+            <div id="pmsChecklistPreview" class="media-grid"></div>
+            <p class="muted">Complete the checklist, attach photos or documents if needed, then save or export the checklist.</p>
             <div class="inline-actions">
               <button class="btn" type="button" id="savePmsRecordButton">Save checklist record</button>
               <button class="gray" type="button" onclick="exportCurrentChecklist('xls')">📊 Export XLS</button>
@@ -1067,10 +1095,11 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
         <h1 class="title">📍 Work sites</h1>
         <button class="btn manager-only hidden" type="button" id="openAddSite">Add site</button>
       </div>
-      <div id="siteMapCard" class="card hidden">
-        <h2 id="siteMapTitle" style="margin-top:0">Selected site</h2>
+      <div id="siteMapCard" class="card">
+        <h2 id="siteMapTitle" style="margin-top:0">Sites Map</h2>
         <div id="siteGoogleMap" class="map"></div>
-        <p id="siteMapStatus" class="muted" style="margin:6px 0 0;"></p>
+        <p id="siteMapStatus" class="muted" style="margin:6px 0 0;">Tap "View on Map" on any site below to center the map and load directions.</p>
+        <div id="siteMapDirections" style="margin-top:10px;"></div>
       </div>
       <h2>All sites</h2><div id="siteList"></div>
     </div></section>
@@ -1147,7 +1176,7 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
           </div>
           <div id="timeLogMessages" class="time-chat-log"></div>
           <div class="inline-actions" style="margin-top:8px;">
-            <label for="timeLogCam" class="btn small-btn" style="margin:0;cursor:pointer;display:inline-flex;align-items:center;">📷 Camera</label>
+            <button class="btn small-btn" type="button" onclick="openTimemarkCamera()">📷 Timemark Camera</button>
             <label for="timeLogPhoto" class="gray small-btn" style="margin:0;cursor:pointer;display:inline-flex;align-items:center;">🖼 Upload Photo</label>
           </div>
           <div class="chat-composer" style="margin-top:8px;">
@@ -1278,20 +1307,48 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
           <div id="leavePageBalances"><p class="muted">Loading balances…</p></div>
         </div>
         <div id="leaveFormCard" class="card hidden">
-          <h2 style="margin-top:0">Request leave</h2>
-          <div class="field"><label for="leaveType">Leave type</label><select id="leaveType"><option value="sick">Sick leave</option><option value="emergency">Emergency leave</option><option value="vacation">Vacation leave</option></select></div>
+          <h2 style="margin-top:0">Application for Leave</h2>
           <div class="row">
-            <div class="field"><label for="leaveStart">Start date</label><input id="leaveStart" type="date"></div>
-            <div class="field"><label for="leaveEnd">End date</label><input id="leaveEnd" type="date"></div>
+            <div class="field"><label for="leaveFilingDate">Date of Filing</label><input id="leaveFilingDate" type="date"></div>
+            <div class="field"><label for="leaveType">Type of Leave</label><select id="leaveType"><option value="vacation">Vacation</option><option value="sick">Sick</option><option value="emergency">Emergency</option><option value="others">Others (Specify)</option></select></div>
           </div>
-          <div class="field"><label for="leaveReason">Reason</label><textarea id="leaveReason" maxlength="1000"></textarea></div>
+          <div class="row">
+            <div class="field"><label for="leaveLastName">Last Name</label><input id="leaveLastName" placeholder="Last name"></div>
+            <div class="field"><label for="leaveFirstName">First Name</label><input id="leaveFirstName" placeholder="First name"></div>
+          </div>
+          <div class="row">
+            <div class="field"><label for="leaveMiddleName">Middle Name</label><input id="leaveMiddleName" placeholder="Middle name"></div>
+            <div class="field"><label for="leaveWorkingDays">No. of Working Days Applied For</label><input id="leaveWorkingDays" placeholder="e.g. 2"></div>
+          </div>
+          <div class="field"><label for="leaveOthersSpecify">Others (Specify — if applicable)</label><input id="leaveOthersSpecify" placeholder="Specify leave type"></div>
+          <div class="card" style="padding:12px;margin-bottom:12px;">
+            <b style="font-size:12px;display:block;margin-bottom:6px;">WHERE LEAVE WILL BE SPENT</b>
+            <div class="field" style="margin-bottom:8px;">
+              <label for="leaveVacationPlace">(1) In Case of Vacation Leave</label>
+              <select id="leaveVacationPlace">
+                <option value="">Select location (optional)</option>
+                <option value="within">Within Metro Manila</option>
+                <option value="outside">Outside Metro Manila (Specify below)</option>
+              </select>
+            </div>
+            <div class="field" style="margin-bottom:8px;"><label for="leaveOutsideSpecify">Outside Metro Manila (Specify)</label><input id="leaveOutsideSpecify" placeholder="e.g. Cebu City"></div>
+            <label class="check-row"><input id="leaveInHospital" type="checkbox"> (2) In Case of Sick Leave — In Hospital</label>
+            <div class="field" style="margin-bottom:0;"><label for="leaveHospitalSpecify">Hospital / Confinement Details (Specify)</label><input id="leaveHospitalSpecify" placeholder="Hospital name / home rest"></div>
+          </div>
+          <div class="row">
+            <div class="field"><label for="leaveStart">Inclusive Date From</label><input id="leaveStart" type="date"></div>
+            <div class="field"><label for="leaveEnd">Inclusive Date To</label><input id="leaveEnd" type="date"></div>
+          </div>
+          <div class="field"><label for="leaveApplicantName">Applicant Printed Name</label><input id="leaveApplicantName" placeholder="Full name for signature line"></div>
+          <div class="field"><label for="leaveReason">Reason / Remarks</label><textarea id="leaveReason" maxlength="1000"></textarea></div>
           <div class="inline-actions">
             <button class="btn" type="button" onclick="submitLeaveRequest()">Submit request</button>
+            <button class="gray" type="button" onclick="openLeaveSheetPreview()">📄 Preview Form</button>
             <button id="cancelLeaveFormBtn" class="gray" type="button">Cancel</button>
           </div>
           <p id="leaveDaysPreview" class="muted"></p>
           <p id="leaveFormStatus" class="muted" role="status"></p>
-          <p class="muted">Every day from start date to end date (including weekends and holidays) counts toward your selected leave once approved.</p>
+          <p class="muted">Every day from start date to end date counts toward your selected leave once approved.</p>
         </div>
         <div class="card">
           <h2 style="margin-top:0">My leave requests</h2>
@@ -1591,6 +1648,119 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
     <p style="margin:0 0 14px;line-height:1.5;">EESI Elevators operates in strict online mode. You can't continue without an internet connection. Please turn on Wi-Fi or mobile data.</p>
     <p id="offlineOverlayStatus" class="muted" style="min-height:18px;margin-bottom:14px;"></p>
     <button id="retryOnlineBtn" class="btn" type="button" style="width:100%" onclick="checkConnectionNow()">🔄 Retry Connection</button>
+  </div>
+</div>
+
+<div id="unitManualOverlay" class="dialog hidden" style="z-index:340;overflow:auto;" role="dialog" aria-modal="true" aria-labelledby="unitManualOverlayTitle">
+  <div class="card" style="width:min(680px,100%);max-height:90vh;overflow:auto;">
+    <div class="site-header" style="margin-bottom:8px;">
+      <h2 id="unitManualOverlayTitle" style="margin:0;">📖 Unit Manual</h2>
+      <button class="gray small-btn" type="button" onclick="closeUnitManualOverlay()">✕ Close</button>
+    </div>
+    <div id="unitManualOverlayMeta" class="muted" style="margin-bottom:8px;"></div>
+    <div style="margin-bottom:10px;"><span id="unitManualOverlayStatus" class="badge" style="margin-left:0;"></span></div>
+    <div id="unitManualOverlayBody"></div>
+  </div>
+</div>
+
+<div id="dtrEditOverlay" class="dialog hidden" style="z-index:345;overflow:auto;" role="dialog" aria-modal="true" aria-labelledby="dtrEditTitle">
+  <div class="card" style="width:min(520px,100%);max-height:92vh;overflow:auto;">
+    <h2 id="dtrEditTitle" style="margin-top:0;">✏️ Edit DTR Entry</h2>
+    <div class="row">
+      <div class="field"><label for="editDtrDate">Date</label><input id="editDtrDate" type="date"></div>
+      <div class="field"><label for="editDtrLocation">Location</label><input id="editDtrLocation" placeholder="Site code / name"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label for="editDtrUnit">Unit</label><input id="editDtrUnit" placeholder="Optional unit"></div>
+      <div class="field"><label for="editDtrApprovedBy">Approved By (e.g. EXTEND, SUNDAY DUTY)</label><input id="editDtrApprovedBy" placeholder="EXTEND / SUNDAY DUTY"></div>
+    </div>
+    <div class="field"><label for="editDtrJob">Work Description</label><textarea id="editDtrJob" rows="2"></textarea></div>
+    <div class="row">
+      <div class="field"><label for="editDtrIn">Time Start</label><input id="editDtrIn" type="time"></div>
+      <div class="field"><label for="editDtrOut">Time End</label><input id="editDtrOut" type="time"></div>
+    </div>
+    <div id="editDtrOvertimeWrap" class="field hidden">
+      <label class="check-row"><input id="editDtrOvertimeApproved" type="checkbox"> Overtime Approved</label>
+    </div>
+    <div class="inline-actions" style="justify-content:flex-end;">
+      <button class="gray" type="button" onclick="closeEditDtr()">Cancel</button>
+      <button class="btn" type="button" onclick="saveEditedDtr()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<div id="timemarkCamOverlay" class="dialog hidden" style="z-index:348;padding:12px;" role="dialog" aria-modal="true" aria-label="Timemark Camera">
+  <div class="card" style="width:min(580px,100%);padding:12px;">
+    <div class="site-header" style="margin-bottom:8px;">
+      <h2 style="margin:0;font-size:16px;">📷 Timemark Time Log Camera</h2>
+      <button class="gray small-btn" type="button" onclick="closeTimemarkCamera()">✕ Close</button>
+    </div>
+    <div class="timemark-stage">
+      <video id="timemarkVideo" autoplay playsinline muted></video>
+      <div class="timemark-hud">
+        <div id="timemarkClock">--:--:--</div>
+        <div id="timemarkModePill">🟢 TIME IN</div>
+        <div id="timemarkDate"></div>
+        <div id="timemarkSiteLabel"></div>
+        <div id="timemarkGps"></div>
+      </div>
+    </div>
+    <div class="inline-actions" style="margin-top:12px;">
+      <button class="btn" type="button" style="flex:2;" onclick="captureTimemarkPhoto()">📸 Capture &amp; Submit</button>
+      <button class="gray" type="button" style="flex:1;" onclick="flipTimemarkCamera()">🔄 Flip</button>
+    </div>
+  </div>
+</div>
+
+<div id="leaveSheetPreviewOverlay" class="dialog hidden" style="z-index:350;overflow:auto;" role="dialog" aria-modal="true" aria-label="Application for Leave Preview">
+  <div class="card" style="width:min(860px,100%);max-height:94vh;overflow:auto;">
+    <div class="inline-actions leave-preview-actions" style="justify-content:space-between;margin-top:0;margin-bottom:12px;">
+      <h2 style="margin:0;font-size:16px;">📄 Application for Leave</h2>
+      <div class="inline-actions" style="margin-top:0;">
+        <button class="green small-btn" type="button" onclick="downloadLeaveSheet()">📷 Save JPEG</button>
+        <button class="btn small-btn" type="button" onclick="printLeaveSheet()">🖨️ Print</button>
+        <button class="gray small-btn" type="button" onclick="closeLeaveSheetPreview()">✕ Close</button>
+      </div>
+    </div>
+    <div id="leaveSheetPaper" class="leave-sheet"></div>
+  </div>
+</div>
+
+<div id="storyCreateOverlay" class="dialog hidden" style="z-index:352;overflow:auto;" role="dialog" aria-modal="true" aria-labelledby="storyCreateTitle">
+  <div class="card" style="width:min(460px,100%);">
+    <div class="site-header" style="margin-bottom:8px;">
+      <h2 id="storyCreateTitle" style="margin:0;">✨ My Day / Reel</h2>
+      <button class="gray small-btn" type="button" onclick="closeStoryComposer()">✕</button>
+    </div>
+    <div class="field"><label for="storyMediaFile">Photo or Video Reel (optional)</label><input id="storyMediaFile" type="file" accept="image/*,video/*"></div>
+    <div class="field"><label for="storyCaption">Caption / Text Status</label><textarea id="storyCaption" maxlength="400" placeholder="Share an update or field highlight…"></textarea></div>
+    <div class="field"><label for="storyBgStyle">Background Style (for text story)</label><select id="storyBgStyle"><option value="linear-gradient(135deg,#0d254d,#1e6cf2)">EESI Navy Blue</option><option value="linear-gradient(135deg,#134e4a,#10b981)">Emerald Green</option><option value="linear-gradient(135deg,#7c2d12,#f59e0b)">Sunset Amber</option><option value="linear-gradient(135deg,#4c1d95,#ec4899)">Violet Pink</option></select></div>
+    <p id="storyComposerStatus" class="muted" role="status"></p>
+    <div class="inline-actions" style="justify-content:flex-end;">
+      <button class="gray" type="button" onclick="closeStoryComposer()">Cancel</button>
+      <button id="postStoryBtn" class="btn" type="button" onclick="postStory()">Post My Day</button>
+    </div>
+  </div>
+</div>
+
+<div id="storyViewerOverlay" class="dialog hidden" style="z-index:354;overflow:auto;" role="dialog" aria-modal="true" aria-label="My Day Viewer">
+  <div class="card" style="width:min(480px,100%);padding:12px;">
+    <div id="storyViewerProgress" style="display:flex;gap:4px;margin-bottom:10px;"></div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+      <div id="storyViewerAvatar"></div>
+      <div style="flex:1;min-width:0;">
+        <b id="storyViewerName" style="display:block;"></b>
+        <small id="storyViewerTime" class="muted"></small>
+      </div>
+      <button id="storyDeleteBtn" class="red small-btn hidden" type="button" onclick="deleteStory()">🗑</button>
+      <button class="gray small-btn" type="button" onclick="closeStoryViewer()">✕</button>
+    </div>
+    <div id="storyViewerMedia"></div>
+    <p id="storyViewerCaption" class="hidden" style="margin:10px 0 4px;white-space:pre-wrap;"></p>
+    <div class="inline-actions" style="justify-content:space-between;margin-top:12px;">
+      <button class="gray small-btn" type="button" onclick="stepStoryViewer(-1)">◀ Previous</button>
+      <button class="btn small-btn" type="button" onclick="stepStoryViewer(1)">Next ▶</button>
+    </div>
   </div>
 </div>
 

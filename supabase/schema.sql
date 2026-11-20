@@ -153,8 +153,10 @@ CREATE TABLE IF NOT EXISTS public.dtr_entries (
   time_in TEXT,
   time_out TEXT,
   overtime_approved BOOLEAN NOT NULL DEFAULT FALSE,
+  approved_by TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE public.dtr_entries ADD COLUMN IF NOT EXISTS approved_by TEXT;
 ALTER TABLE public.dtr_entries ALTER COLUMN location DROP NOT NULL;
 ALTER TABLE public.dtr_entries ALTER COLUMN job DROP NOT NULL;
 ALTER TABLE public.dtr_entries ALTER COLUMN time_in DROP NOT NULL;
@@ -173,11 +175,11 @@ CREATE TABLE IF NOT EXISTS public.dtr_time_logs (
   note TEXT,
   ai_summary TEXT,
   image_url TEXT,
-  dtr_entry_id UUID REFERENCES public.dtr_entries(id) ON DELETE SET NULL,
+  dtr_entry_id TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE public.dtr_time_logs ADD COLUMN IF NOT EXISTS sender_name TEXT;
-ALTER TABLE public.dtr_time_logs ADD COLUMN IF NOT EXISTS dtr_entry_id UUID REFERENCES public.dtr_entries(id) ON DELETE SET NULL;
+ALTER TABLE public.dtr_time_logs ADD COLUMN IF NOT EXISTS dtr_entry_id TEXT;
 
 CREATE TABLE IF NOT EXISTS public.notes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -211,7 +213,7 @@ CREATE TABLE IF NOT EXISTS public.leave_requests (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   leave_type TEXT NOT NULL DEFAULT 'vacation'
-    CHECK (leave_type IN ('sick', 'emergency', 'vacation')),
+    CHECK (leave_type IN ('sick', 'emergency', 'vacation', 'others')),
   start_date DATE NOT NULL,
   end_date DATE NOT NULL,
   calendar_days INTEGER NOT NULL DEFAULT 1,
@@ -224,6 +226,8 @@ CREATE TABLE IF NOT EXISTS public.leave_requests (
   review_note TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE public.leave_requests DROP CONSTRAINT IF EXISTS leave_requests_leave_type_check;
+ALTER TABLE public.leave_requests ADD CONSTRAINT leave_requests_leave_type_check CHECK (leave_type IN ('sick', 'emergency', 'vacation', 'others'));
 ALTER TABLE public.leave_requests ADD COLUMN IF NOT EXISTS calendar_days INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE public.leave_requests ADD COLUMN IF NOT EXISTS workdays INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE public.leave_requests ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
@@ -294,7 +298,30 @@ CREATE TABLE IF NOT EXISTS public.app_notifications (
   is_read BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-ALTER TABLE public.app_notifications ADD COLUMN IF NOT EXISTS report_id UUID REFERENCES public.service_delivery_reports(id) ON DELETE CASCADE;
+DO $$
+DECLARE
+  v_rep_type TEXT;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'app_notifications' AND column_name = 'report_id'
+  ) THEN
+    SELECT format_type(a.atttypid, a.atttypmod) INTO v_rep_type
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = 'service_delivery_reports' AND a.attname = 'id' AND NOT a.attisdropped;
+
+    IF v_rep_type IS NOT NULL THEN
+      EXECUTE format(
+        'ALTER TABLE public.app_notifications ADD COLUMN report_id %s REFERENCES public.service_delivery_reports(id) ON DELETE CASCADE',
+        v_rep_type
+      );
+    ELSE
+      ALTER TABLE public.app_notifications ADD COLUMN report_id TEXT;
+    END IF;
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS public.approval_notifications (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -321,6 +348,18 @@ CREATE TABLE IF NOT EXISTS public.employee_locations (
   latitude DOUBLE PRECISION NOT NULL,
   longitude DOUBLE PRECISION NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.stories (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  author_name TEXT,
+  media_url TEXT,
+  media_type TEXT NOT NULL DEFAULT 'image' CHECK (media_type IN ('image', 'video', 'text')),
+  caption TEXT,
+  bg_color TEXT DEFAULT '#1e6cf2',
+  expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours'),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 /* 4. SECURITY HELPER FUNCTIONS */
@@ -773,6 +812,15 @@ CREATE POLICY emp_loc_select ON public.employee_locations FOR SELECT USING (publ
 DROP POLICY IF EXISTS emp_loc_upsert ON public.employee_locations;
 CREATE POLICY emp_loc_upsert ON public.employee_locations FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
+/* Chat Stories / My Day / Reels */
+ALTER TABLE public.stories ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS stories_select ON public.stories;
+CREATE POLICY stories_select ON public.stories FOR SELECT USING (public.is_approved_user());
+DROP POLICY IF EXISTS stories_insert ON public.stories;
+CREATE POLICY stories_insert ON public.stories FOR INSERT WITH CHECK (public.is_approved_user() AND auth.uid() = user_id);
+DROP POLICY IF EXISTS stories_delete ON public.stories;
+CREATE POLICY stories_delete ON public.stories FOR DELETE USING (auth.uid() = user_id OR public.is_manager());
+
 /* 7. STORAGE BUCKETS & POLICIES */
 INSERT INTO storage.buckets (id, name, public)
 VALUES
@@ -816,7 +864,8 @@ DECLARE
     'message_reactions',
     'app_notifications',
     'approval_notifications',
-    'employee_locations'
+    'employee_locations',
+    'stories'
   ];
 BEGIN
   FOREACH t IN ARRAY tables LOOP
@@ -835,5 +884,66 @@ CREATE INDEX IF NOT EXISTS idx_site_units_site_id ON public.site_units (site_id)
 CREATE INDEX IF NOT EXISTS idx_dtr_entries_user_date ON public.dtr_entries (user_id, work_date DESC);
 CREATE INDEX IF NOT EXISTS idx_dtr_time_logs_created_at ON public.dtr_time_logs (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_recommendations_created_at ON public.recommendations (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_stories_expires_at ON public.stories (expires_at DESC);
+
+/* 10. SEED AYALA MALLS CENTRAL BLOC (AMCB) & 34 UNITS */
+DO $$
+DECLARE
+  v_site_id UUID;
+BEGIN
+  SELECT id INTO v_site_id
+  FROM public.sites
+  WHERE LOWER(name) LIKE '%ayala%central bloc%' OR UPPER(TRIM(name)) = 'AMCB'
+  LIMIT 1;
+
+  IF v_site_id IS NULL THEN
+    INSERT INTO public.sites (name, address, city, region)
+    VALUES ('Ayala Malls Central Bloc (AMCB)', 'Cebu IT Park, Apas', 'Cebu City', 'Visayas')
+    RETURNING id INTO v_site_id;
+  END IF;
+
+  INSERT INTO public.site_units (site_id, unit_name, unit_type, status, capacity_floors, notes)
+  SELECT v_site_id, u.unit_name, u.unit_type, 'Operational', u.capacity_floors, u.notes
+  FROM (VALUES
+    ('Esc. No. 19 B2-B3', 'escalator', 'B2-B3', 'SEDA SIDE · DOWN'),
+    ('Esc. No. 20 B3-B2', 'escalator', 'B3-B2', 'SEDA SIDE · UP'),
+    ('Esc. No. 21 B1-B2', 'escalator', 'B1-B2', 'SEDA SIDE · DOWN'),
+    ('Esc. No. 22 B2-B1', 'escalator', 'B2-B1', 'SEDA SIDE · UP'),
+    ('Esc. No. 3 G-B1', 'escalator', 'G-B1', 'SEDA SIDE · DOWN'),
+    ('Esc. No. 4 B1-G', 'escalator', 'B1-G', 'SEDA SIDE · UP'),
+    ('Esc. No. 26 2-G', 'escalator', '2-G', 'SEDA SIDE · DOWN · 2 Lgt. Newel Guide Roller (Leftside), 2 Lgt. Newel Guide Roller (Rightside)'),
+    ('Esc. No. 25 G-2', 'escalator', 'G-2', 'SEDA SIDE · UP'),
+    ('Esc. No. 27 3-2', 'escalator', '3-2', 'SEDA SIDE · DOWN'),
+    ('Esc. No. 28 2-3', 'escalator', '2-3', 'SEDA SIDE · UP'),
+    ('Esc. No. 17 4-3', 'escalator', '4-3', 'SEDA SIDE · DOWN'),
+    ('Esc. No. 18 3-4', 'escalator', '3-4', 'SEDA SIDE · UP'),
+    ('Esc. No. 2 B1-B2', 'escalator', 'B1-B2', 'IVILLA SIDE · DOWN'),
+    ('Esc. No. 1 B2-B1', 'escalator', 'B2-B1', 'IVILLA SIDE · UP'),
+    ('Esc. No. 23 (G-B1)', 'escalator', 'G-B1', 'IVILLA SIDE · DOWN · 1 Lgt. Rubber Handrail (Leftside), 2pcs. Newel Guide Roller (Leftside), 1 Lot. Flywheel (Leftside)'),
+    ('Esc. No. 24 B1-G', 'escalator', 'B1-G', 'IVILLA SIDE · UP'),
+    ('Esc. No. 6 2-G', 'escalator', '2-G', 'IVILLA SIDE · DOWN'),
+    ('Esc. No. 5 G-2', 'escalator', 'G-2', 'IVILLA SIDE · UP'),
+    ('Esc. No. 7 3-2', 'escalator', '3-2', 'IVILLA SIDE · DOWN'),
+    ('Esc. No. 8 2-3', 'escalator', '2-3', 'IVILLA SIDE · UP'),
+    ('Esc. No. 9 4-3', 'escalator', '4-3', 'IVILLA SIDE · DOWN'),
+    ('Esc. No. 10 3-4', 'escalator', '3-4', 'IVILLA SIDE · UP'),
+    ('Esc. No. 12 5-4', 'escalator', '5-4', 'IVILLA SIDE · DOWN'),
+    ('Esc. No. 11 4-5', 'escalator', '4-5', 'IVILLA SIDE · UP'),
+    ('PE1', 'elevator', NULL, 'IVILLA SIDE · Passenger Elevator'),
+    ('PE2', 'elevator', NULL, 'IVILLA SIDE · Passenger Elevator'),
+    ('PE3', 'elevator', NULL, 'IVILLA SIDE · Passenger Elevator'),
+    ('Esc. No. 14 2-G', 'escalator', '2-G', 'PADRIGA SIDE · DOWN'),
+    ('Esc. No. 13 G-2', 'escalator', 'G-2', 'PADRIGA SIDE · UP'),
+    ('Esc. No. 30 3-2', 'escalator', '3-2', 'PADRIGA SIDE · DOWN'),
+    ('Esc. No. 29 2-3', 'escalator', '2-3', 'PADRIGA SIDE · UP'),
+    ('Esc. No. 16 4-3', 'escalator', '4-3', 'PADRIGA SIDE · DOWN'),
+    ('Esc. No. 15 3-4', 'escalator', '3-4', 'PADRIGA SIDE · UP'),
+    ('CARGO', 'elevator', NULL, 'PADRIGA SIDE · Cargo Elevator')
+  ) AS u(unit_name, unit_type, capacity_floors, notes)
+  WHERE NOT EXISTS (
+    SELECT 1 FROM public.site_units su
+    WHERE su.site_id = v_site_id AND LOWER(TRIM(su.unit_name)) = LOWER(TRIM(u.unit_name))
+  );
+END $$;
 
 NOTIFY pgrst, 'reload schema';

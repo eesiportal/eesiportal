@@ -26,11 +26,17 @@ import {
   toast,
   val,
   isImageFile,
+  isVideoUrl,
+  isMissingTableError,
+  buildStoryAppNoticeBody,
+  suppressNotifications,
 } from "./eesiTypes";
 import {
+  loadAppNotifications,
   loadBlockedUsers,
   loadMessages,
   loadPreviews,
+  loadStories,
   loadThreads,
   onlineIds,
   saveLastView,
@@ -101,15 +107,45 @@ export function renderChatList(): void {
   const peopleRow = $("chatPeopleRow");
   if (peopleRow) {
     const online = onlineIds();
-    peopleRow.innerHTML = state.profiles
-      .filter(p => String(p.user_id) !== String(state.userId))
-      .slice(0, 20)
+    const nowMs = Date.now();
+    const storiesByUser = new Map<string, any[]>();
+    (state.stories || []).forEach(st => {
+      if (st.expires_at && new Date(st.expires_at).getTime() <= nowMs) return;
+      const uid = String(st.user_id || "");
+      if (!uid) return;
+      if (!storiesByUser.has(uid)) storiesByUser.set(uid, []);
+      storiesByUser.get(uid)!.push(st);
+    });
+
+    const myStories = storiesByUser.get(String(state.userId || "")) || [];
+    const addStoryBtn =
+      '<button class="story" type="button" onclick="openStoryComposer()">' +
+      '<span class="bubble-av' + (myStories.length ? " story-ring" : "") + '" style="background:rgba(47,140,255,.16);border-radius:50%;display:inline-flex;align-items:center;justify-content:center;">' +
+      face(state.profile) +
+      '<span style="position:absolute;right:-2px;bottom:-2px;width:18px;height:18px;border-radius:50%;background:var(--accent);color:#fff;font-size:12px;font-weight:800;display:grid;place-items:center;border:2px solid var(--bg);">＋</span>' +
+      '</span><small>My Day</small></button>';
+
+    const activeStoryBtns = [...storiesByUser.entries()]
+      .filter(([, list]) => list.length > 0)
+      .map(([uid, list]) => {
+        const p = profileOf(uid);
+        const firstName = uid === String(state.userId) ? "Your Story" : (((p?.full_name || list[0]?.sender_name || "Member").split(" ")[0]) + ` (${list.length})`);
+        const on = online.has(uid);
+        return '<button class="story" type="button" onclick="openStoryViewer(\'' + esc(uid) + '\')">' +
+          '<span class="bubble-av story-ring">' + face(p) + (on ? '<span class="presdot"></span>' : "") + '</span>' +
+          '<small>' + esc(firstName) + '</small></button>';
+      });
+
+    const memberDmBtns = state.profiles
+      .filter(p => String(p.user_id) !== String(state.userId) && !storiesByUser.has(String(p.user_id)))
+      .slice(0, 18)
       .map(p => {
         const on = online.has(String(p.user_id));
         return '<button class="story" type="button" data-act="open-dm" data-id="' + esc(p.user_id) + '"><span class="bubble-av">' +
           face(p) + (on ? '<span class="presdot"></span>' : "") + "</span><small>" + esc((p.full_name || "").split(" ")[0]) + "</small></button>";
-      })
-      .join("");
+      });
+
+    peopleRow.innerHTML = addStoryBtn + activeStoryBtns.join("") + memberDmBtns.join("");
   }
   const q = val("chatSearch").trim().toLowerCase();
   const filter = state.chatFilter || "all";
@@ -1294,3 +1330,229 @@ export function initChatWiring(): void {
   $("chatSearch")?.addEventListener("input", renderChatList);
   $("messageSearch")?.addEventListener("input", renderMessages);
 }
+
+/* ==================== CHAT MY DAY / STORIES & REELS ==================== */
+let viewerStoriesList: any[] = [];
+let viewerStoryIndex = 0;
+
+export function openStoryComposer(): void {
+  setVal("storyCaption", "");
+  const fileEl = $("storyMediaFile") as HTMLInputElement | null;
+  if (fileEl) fileEl.value = "";
+  const st = $("storyComposerStatus");
+  if (st) st.textContent = "Visible to all EESI members for 24 hours.";
+  $("storyCreateOverlay")?.classList.remove("hidden");
+}
+
+export function closeStoryComposer(): void {
+  $("storyCreateOverlay")?.classList.add("hidden");
+}
+
+export async function postStory(): Promise<void> {
+  if (!checkNetwork() || !state.userId) return;
+  const caption = val("storyCaption").trim();
+  const bgStyle = val("storyBgStyle") || "linear-gradient(135deg,#0d254d,#1e6cf2)";
+  const fileEl = $("storyMediaFile") as HTMLInputElement | null;
+  const rawFile = fileEl?.files?.[0] || null;
+  if (!caption && !rawFile) {
+    toast("Add text, photo, or video reel for your My Day story.");
+    return;
+  }
+
+  const btn = $("postStoryBtn") as HTMLButtonElement | null;
+  const st = $("storyComposerStatus");
+  if (btn) btn.disabled = true;
+  if (st) st.textContent = "Publishing My Day story…";
+  suppressNotifications(5000);
+
+  try {
+    let mediaUrl: string | null = null;
+    let mediaType: "image" | "video" | "text" = "text";
+
+    if (rawFile) {
+      let uploadFile = rawFile;
+      const isVid = (rawFile.type || "").startsWith("video/") || isVideoUrl(rawFile.name);
+      if (!isVid && isImageFile(rawFile)) {
+        uploadFile = await prepareImageFile(rawFile, 1440, 0.86);
+        mediaType = "image";
+      } else if (isVid) {
+        if (rawFile.size > 45 * 1024 * 1024) throw new Error("Video reel max size is 45 MB.");
+        mediaType = "video";
+      } else {
+        throw new Error("Please select an image or video file.");
+      }
+
+      const path = `${state.userId}/stories/${Date.now()}-${uploadFile.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const { error: upErr } = await runtime.client.storage
+        .from("chat")
+        .upload(path, uploadFile, { upsert: false, contentType: uploadFile.type || undefined });
+      if (upErr) throw upErr;
+      const { data: pub } = runtime.client.storage.from("chat").getPublicUrl(path);
+      mediaUrl = pub.publicUrl;
+    }
+
+    const senderName = state.profile?.full_name || state.email || "Member";
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    let savedViaFallback = runtime.storiesTableMissing;
+    if (!savedViaFallback) {
+      const { error } = await runtime.client.from("stories").insert({
+        user_id: state.userId,
+        sender_name: senderName,
+        caption: caption || null,
+        media_url: mediaUrl,
+        media_type: mediaType,
+        bg_style: bgStyle,
+        expires_at: expiresAt,
+      });
+      if (error) {
+        if (isMissingTableError(error)) {
+          runtime.storiesTableMissing = true;
+          savedViaFallback = true;
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    if (savedViaFallback) {
+      const body = buildStoryAppNoticeBody(caption || (mediaType === "video" ? "Shared a Reel" : "Shared a My Day photo"), {
+        user_id: state.userId,
+        sender_name: senderName,
+        caption,
+        media_url: mediaUrl,
+        media_type: mediaType,
+        bg_style: bgStyle,
+        expires_at: expiresAt,
+      });
+      const { error: nErr } = await runtime.client.from("app_notifications").insert({
+        title: `✨ ${senderName} posted a My Day Story`,
+        body,
+      });
+      if (nErr) throw nErr;
+      await loadAppNotifications();
+    }
+
+    await loadStories();
+    closeStoryComposer();
+    toast("My Day story posted!");
+  } catch (err: any) {
+    toast("Story failed: " + (err?.message || err));
+    if (st) st.textContent = "Failed: " + (err?.message || err);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function renderStoryViewerSlide(): void {
+  if (!viewerStoriesList.length) { closeStoryViewer(); return; }
+  const s = viewerStoriesList[Math.max(0, Math.min(viewerStoryIndex, viewerStoriesList.length - 1))];
+  if (!s) return;
+
+  const p = profileOf(s.user_id);
+  const av = $("storyViewerAvatar");
+  const nm = $("storyViewerName");
+  const tm = $("storyViewerTime");
+  const mediaEl = $("storyViewerMedia");
+  const capEl = $("storyViewerCaption");
+  const dotsEl = $("storyViewerProgress");
+  const delBtn = $("storyDeleteBtn");
+
+  if (av) av.innerHTML = face(p);
+  if (nm) nm.textContent = s.sender_name || p?.full_name || "Member";
+  if (tm) tm.textContent = `${fmtDate(s.created_at)} (${viewerStoryIndex + 1}/${viewerStoriesList.length})`;
+  if (dotsEl) {
+    dotsEl.innerHTML = viewerStoriesList
+      .map((_, i) => `<span style="flex:1;height:3px;border-radius:3px;background:${i <= viewerStoryIndex ? "#fff" : "rgba(255,255,255,.3)"};"></span>`)
+      .join("");
+  }
+  if (delBtn) {
+    const canDel = String(s.user_id) === String(state.userId) || isManager();
+    delBtn.classList.toggle("hidden", !canDel);
+    delBtn.setAttribute("data-story-id", String(s.id));
+  }
+
+  if (mediaEl) {
+    const u = safeUrl(s.media_url);
+    if (u && (s.media_type === "video" || isVideoUrl(u))) {
+      mediaEl.innerHTML = `<video src="${esc(u)}" controls autoplay playsinline loop style="width:100%;max-height:62vh;border-radius:12px;background:#000;"></video>`;
+    } else if (u) {
+      mediaEl.innerHTML = `<img src="${esc(u)}" alt="Story" style="width:100%;max-height:62vh;object-fit:contain;border-radius:12px;background:#000;">`;
+    } else {
+      const bg = s.bg_style || "linear-gradient(135deg,#0d254d,#1e6cf2)";
+      mediaEl.innerHTML =
+        `<div style="min-height:260px;border-radius:14px;background:${esc(bg)};display:grid;place-items:center;padding:24px;text-align:center;font-size:22px;font-weight:800;color:#fff;line-height:1.35;">` +
+        `${esc(s.caption || "My Day")}` +
+        `</div>`;
+    }
+  }
+  if (capEl) {
+    const hasMedia = !!safeUrl(s.media_url);
+    capEl.textContent = hasMedia && s.caption ? s.caption : "";
+    capEl.classList.toggle("hidden", !(hasMedia && s.caption));
+  }
+}
+
+export function openStoryViewer(userId: string): void {
+  const nowMs = Date.now();
+  const userStories = (state.stories || []).filter(
+    s => String(s.user_id) === String(userId) && (!s.expires_at || new Date(s.expires_at).getTime() > nowMs)
+  );
+  if (!userStories.length) {
+    toast("No active story for this member.");
+    return;
+  }
+  viewerStoriesList = userStories.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  viewerStoryIndex = 0;
+  $("storyViewerOverlay")?.classList.remove("hidden");
+  renderStoryViewerSlide();
+}
+
+export function closeStoryViewer(): void {
+  const mediaEl = $("storyViewerMedia");
+  if (mediaEl) mediaEl.innerHTML = "";
+  $("storyViewerOverlay")?.classList.add("hidden");
+  viewerStoriesList = [];
+}
+
+export function stepStoryViewer(delta: number): void {
+  const next = viewerStoryIndex + delta;
+  if (next < 0) {
+    viewerStoryIndex = 0;
+  } else if (next >= viewerStoriesList.length) {
+    closeStoryViewer();
+    return;
+  } else {
+    viewerStoryIndex = next;
+  }
+  renderStoryViewerSlide();
+}
+
+export async function deleteStory(storyId?: string): Promise<void> {
+  const btn = $("storyDeleteBtn");
+  const id = storyId || btn?.getAttribute("data-story-id") || "";
+  if (!id) return;
+  if (!(await confirmDialog("Delete this My Day story?", "Delete story"))) return;
+  try {
+    if (String(id).startsWith("notice:")) {
+      const nid = String(id).replace("notice:", "");
+      const { error } = await runtime.client.from("app_notifications").delete().eq("id", nid);
+      if (error) throw error;
+      await loadAppNotifications();
+    } else {
+      const { error } = await runtime.client.from("stories").delete().eq("id", id);
+      if (error) throw error;
+    }
+    viewerStoriesList = viewerStoriesList.filter(s => String(s.id) !== String(id));
+    await loadStories();
+    if (!viewerStoriesList.length) closeStoryViewer();
+    else {
+      viewerStoryIndex = Math.min(viewerStoryIndex, viewerStoriesList.length - 1);
+      renderStoryViewerSlide();
+    }
+    toast("Story deleted");
+  } catch (err: any) {
+    toast("Could not delete story: " + (err?.message || err));
+  }
+}
+

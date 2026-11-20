@@ -36,7 +36,6 @@ import {
   disableBiometricLock,
   enableBiometricLock,
   enablePush,
-  initPullToReload,
   initPwaInstall,
   initSettingsWiring,
   openPinSetup,
@@ -57,10 +56,13 @@ import {
   updateLiveWeather,
 } from "./eesiSettings";
 import {
+  centerSiteMapOnSelected,
   checkConnectionNow,
   fitLiveMapAll,
+  fitSiteMapRoute,
   focusLiveEmployee,
   initDataListeners,
+  initSitesMapOverview,
   loadAnnouncements,
   loadAppNotifications,
   loadApprovalNotifications,
@@ -78,6 +80,7 @@ import {
   loadRoles,
   loadSchedules,
   loadSites,
+  loadStories,
   loadThreads,
   loadTimeLogs,
   loadUnits,
@@ -89,6 +92,7 @@ import {
   saveLastView,
   setBasemap,
   setLiveMapFilter,
+  setSiteMapTravelMode,
   startEmployeeLocationSharing,
   startLive,
   teardownLive,
@@ -109,9 +113,12 @@ import {
   closeChatInfo,
   closeCompose,
   closeDeleteMessageModal,
+  closeStoryComposer,
+  closeStoryViewer,
   confirmDeleteForEveryone,
   confirmDeleteForYou,
   createGroup,
+  deleteStory,
   endCall,
   hideGroupForm,
   hideIncoming,
@@ -129,8 +136,11 @@ import {
   openPinnedSheet,
   openProfileView,
   openSearchInChatSheet,
+  openStoryComposer,
+  openStoryViewer,
   openThread,
   pickEmoji,
+  postStory,
   removeMyReaction,
   renderChatList,
   renderMessages,
@@ -140,6 +150,7 @@ import {
   setChatFilter,
   showGroupForm,
   startCallListener,
+  stepStoryViewer,
   stopCallListener,
   threadTitle,
   toggleChatPlus,
@@ -152,31 +163,44 @@ import {
   autoFillDtrFromSchedule,
   cancelEditAnnouncement,
   cancelUnitForm,
+  captureTimemarkPhoto,
   changePassword,
   checkUpcomingShiftReminders,
   clearDtrForm,
+  clearPendingPmsFiles,
   clearPendingReportFiles,
   clearSignature,
   clearSignaturePhoto,
   closeChangePasswordModal,
+  closeEditDtr,
+  closeLeaveSheetPreview,
+  closeTimemarkCamera,
+  closeUnitManualOverlay,
   deleteTimeLog,
   deleteUnit,
   downloadDtr,
+  downloadLeaveSheet,
   dtrTab,
   editUnit,
+  ensureAmcbUnitsSeeded,
+  flipTimemarkCamera,
   go,
   initFeatureWiring,
   loadSavedDrawnSignature,
   loadSavedSignaturePhoto,
   openAddUnitForSite,
+  openEditDtr,
+  openLeaveSheetPreview,
   openPmsChecklist,
   openQuickTimeAction,
   openSiteOnMap,
+  openTimemarkCamera,
   openUnitManual,
   openUnitPms,
   openUnitReport,
   postAnnouncement,
   printDtr,
+  printLeaveSheet,
   refreshLeaveBalances,
   removePhoto,
   renderAdmin,
@@ -195,6 +219,7 @@ import {
   renderNotices,
   renderOnline,
   renderPending,
+  renderPmsAttachmentPreview,
   renderPmsChecklist,
   renderPmsRecords,
   renderPmsRecordsFilters,
@@ -216,6 +241,7 @@ import {
   resetSignatureState,
   runSearch,
   saveAdminEdit,
+  saveEditedDtr,
   saveNote,
   saveProfile,
   saveRec,
@@ -228,6 +254,7 @@ import {
   submitLeaveRequest,
   switchNoteTab,
   switchUnitsTab,
+  toggleUnitSiteCard,
   triggerUnitManualUpload,
   updateAccess,
   updateAnnouncementTicker,
@@ -493,6 +520,10 @@ function registerHooks(): void {
     saveLastView,
     visibleSchedules,
     loadThreads,
+    loadStories,
+    ensureAmcbUnitsSeeded,
+    openEditDtr,
+    openTimemarkCamera,
     markThreadRead,
     checkShiftReminders: checkUpcomingShiftReminders,
     autoFillDtrFromSchedule: () => autoFillDtrFromSchedule(false),
@@ -527,6 +558,9 @@ function exposeWindowGlobals(): void {
     openAddUnitForSite,
     editUnit,
     deleteUnit,
+    ensureAmcbUnitsSeeded,
+    toggleUnitSiteCard,
+    closeUnitManualOverlay,
     switchUnitsTab,
     openUnitManual,
     saveUnitManual,
@@ -534,9 +568,20 @@ function exposeWindowGlobals(): void {
     openUnitReport,
     openUnitPms,
     openSiteOnMap,
+    setSiteMapTravelMode,
+    centerSiteMapOnSelected,
+    fitSiteMapRoute,
+    initSitesMapOverview,
     dtrTab,
     addDtr,
     clearDtrForm,
+    openEditDtr,
+    closeEditDtr,
+    saveEditedDtr,
+    openTimemarkCamera,
+    closeTimemarkCamera,
+    flipTimemarkCamera,
+    captureTimemarkPhoto,
     renderDtrUnitOptions,
     autoFillDtrFromSchedule,
     setTimeLogMode,
@@ -557,6 +602,10 @@ function exposeWindowGlobals(): void {
     saveProfile,
     refreshLeaveBalances,
     submitLeaveRequest,
+    openLeaveSheetPreview,
+    closeLeaveSheetPreview,
+    downloadLeaveSheet,
+    printLeaveSheet,
     addSite,
     openCompose,
     closeCompose,
@@ -591,6 +640,13 @@ function exposeWindowGlobals(): void {
     closeDeleteMessageModal,
     confirmDeleteForEveryone,
     confirmDeleteForYou,
+    openStoryComposer,
+    closeStoryComposer,
+    postStory,
+    openStoryViewer,
+    closeStoryViewer,
+    stepStoryViewer,
+    deleteStory,
     setBasemap,
     setLiveMapFilter,
     fitLiveMapAll,
@@ -747,10 +803,15 @@ async function bootInner(session: any): Promise<void> {
     loadPending(),
     loadLeaveRequests(),
     loadPmsRecords(),
+    loadReports(),
+    loadStories(),
   ]);
-  await loadThreads();
-  await loadUnread();
-  await loadRecentChatNotices();
+  void ensureAmcbUnitsSeeded();
+  await Promise.all([
+    loadThreads(),
+    loadUnread(),
+    loadRecentChatNotices(),
+  ]);
   if (run !== runtime.authRun) return;
 
   state.booted = true;
@@ -766,10 +827,11 @@ async function boot(session: any): Promise<void> {
   try {
     await bootInner(session);
     if (!state.booted) return;
-    await loadReports();
     renderReportSites();
-    await loadAppNotifications();
-    await loadApprovalNotifications();
+    await Promise.all([
+      loadAppNotifications(),
+      loadApprovalNotifications(),
+    ]);
     syncPushSession(session);
     enablePush(true);
     const openedFromPush = await openStartupThread();
@@ -785,17 +847,24 @@ function resetState(): void {
     sites: [], units: [], schedules: [], dtrs: [], dtrTimeLogs: [], notes: [], recs: [], announcements: [], pending: [],
     leaveRequests: [], pmsRecords: [], recentChatNotices: [], threads: [], unread: {}, previews: {},
     chatFilter: "all", activeThread: null, messages: [], setupIssue: "", appNotifications: [],
-    approvalNotifications: [], blockedUsers: [], booted: false, reportType: "service",
+    approvalNotifications: [], blockedUsers: [], stories: [], booted: false, reportType: "service",
   });
   resetDataLoadFlags();
   runtime.editingAnnouncementId = null;
   runtime.editingReportId = null;
   runtime.editingExistingUrls = [];
   runtime.editingUnitId = null;
+  runtime.editingDtrId = null;
   runtime.editingMessageId = null;
   runtime.replyingToMsg = null;
+  runtime.expandedUnitSiteIds = {};
+  runtime.selectedSiteId = null;
+  runtime.amcbSeedAttempted = false;
   clearPendingReportFiles();
   renderReportAttachmentPreview();
+  clearPendingPmsFiles();
+  renderPmsAttachmentPreview();
+  closeTimemarkCamera();
   try { closeChat(); } catch {}
   const setTxt = (id: string, v: string) => { const e = $(id); if (e) e.textContent = v; };
   setTxt("welcome", "");
@@ -979,7 +1048,6 @@ export function initEesiApp(): void {
   initDataListeners();
   initChatWiring();
   initFeatureWiring();
-  initPullToReload();
 
   applyDisplaySettings();
   applyTheme(localStorage.getItem("eesi-theme") || "dark");
