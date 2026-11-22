@@ -386,7 +386,7 @@ export async function loadAppNotifications(): Promise<void> {
   state.appNotifications = data || [];
   appNotificationsLoaded = true;
   let siteMetaUpdated = false;
-  const nextMeta: Record<string, { thumbnail_url?: string | null; status?: string | null; updated_at?: string }> = {};
+  const nextMeta: Record<string, { thumbnail_url?: string | null; status?: string | null; latitude?: number | null; longitude?: number | null; updated_at?: string }> = {};
   state.appNotifications.forEach((n: any) => {
     if (!isSiteMetaNotice(n)) return;
     const parsed = parseSiteMetaFromAppNotice(n);
@@ -398,6 +398,8 @@ export async function loadAppNotifications(): Promise<void> {
       nextMeta[parsed.site_id] = {
         thumbnail_url: parsed.thumbnail_url !== undefined ? parsed.thumbnail_url : prev?.thumbnail_url,
         status: parsed.status !== undefined ? parsed.status : prev?.status,
+        latitude: parsed.latitude !== undefined ? parsed.latitude : prev?.latitude,
+        longitude: parsed.longitude !== undefined ? parsed.longitude : prev?.longitude,
         updated_at: parsed.updated_at,
       };
       siteMetaUpdated = true;
@@ -412,6 +414,8 @@ export async function loadAppNotifications(): Promise<void> {
         ...s,
         thumbnail_url: s.thumbnail_url || m.thumbnail_url || null,
         status: s.status || m.status || undefined,
+        latitude: Number.isFinite(Number(s.latitude)) && s.latitude !== null ? Number(s.latitude) : (m.latitude ?? null),
+        longitude: Number.isFinite(Number(s.longitude)) && s.longitude !== null ? Number(s.longitude) : (m.longitude ?? null),
       };
     });
     hooks.renderSites();
@@ -893,8 +897,11 @@ function queueReload(table: string): void {
     const fn = RELOADERS[table];
     if (fn) await fn();
     if (table !== "messages") {
-      hooks.renderAll();
-      if (runtime.currentPage === "admin") hooks.renderAdmin();
+      hooks.renderHome();
+      hooks.renderNotices();
+      if (runtime.currentPage === "admin" && (table === "profiles" || table === "user_roles" || table === "registration_requests")) {
+        hooks.renderAdmin();
+      }
     }
     if (!isWithinSelfActionWindow()) {
       if (table === "recommendations" || table === "recommendation_comments") {
@@ -1805,6 +1812,54 @@ async function getCurrentOriginLatLng(): Promise<{ lat: number; lng: number } | 
         return { lat: +data.latitude, lng: +data.longitude };
       }
     } catch {}
+  }
+  return null;
+}
+
+export function getCachedUserGpsCoords(): { lat: number; lng: number; acc: number } | null {
+  if (!lastKnownCoords) return null;
+  return { lat: lastKnownCoords.lat, lng: lastKnownCoords.lng, acc: lastKnownCoords.acc };
+}
+
+export function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const R = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+export async function resolveSiteCoordinatesByName(siteName: string): Promise<{ lat: number; lng: number; name: string } | null> {
+  const query = String(siteName || "").trim();
+  if (!query || /^eesi field site$/i.test(query)) return null;
+  const low = query.toLowerCase();
+  const site =
+    (state.sites || []).find(s => String(s.name || "").trim().toLowerCase() === low) ||
+    (state.sites || []).find(s => {
+      const n = String(s.name || "").trim().toLowerCase();
+      return n && (n.includes(low) || (n.length >= 4 && low.includes(n)));
+    });
+  if (!site) return null;
+
+  const lat = Number(site.latitude);
+  const lng = Number(site.longitude);
+  if (site.latitude !== null && site.latitude !== undefined && site.longitude !== null && site.longitude !== undefined && Number.isFinite(lat) && Number.isFinite(lng)) {
+    return { lat, lng, name: site.name };
+  }
+
+  const resolved = await resolveSiteAddressAndPin({
+    name: site.name,
+    address: site.address || "",
+    city: site.city || "",
+    region: site.region || "",
+  });
+  if (resolved && Number.isFinite(resolved.lat) && Number.isFinite(resolved.lng)) {
+    site.latitude = resolved.lat;
+    site.longitude = resolved.lng;
+    return { lat: resolved.lat, lng: resolved.lng, name: site.name };
   }
   return null;
 }

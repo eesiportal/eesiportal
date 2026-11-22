@@ -202,13 +202,14 @@ export function renderAll(): void {
 /* ==================== SCHEDULES VISIBILITY & 30-MIN SHIFT PUSH REMINDERS ==================== */
 const SHIFT_REMINDER_WINDOW_MS = 30 * 60 * 1000;
 
-function parseScheduleTimeToken(raw: string): { hours: number; minutes: number; timeLabel: string } | null {
+function parseScheduleTimeToken(raw: string): { hours: number; minutes: number; timeLabel: string; time24: string } | null {
   const s = String(raw || "").trim();
   if (!s) return null;
-  const match = s.match(/(\d{1,2}):([0-5]\d)(?:\s*([ap]m))?/i);
+  const match = s.match(/(\d{1,2})(?::([0-5]\d))?\s*([ap]m)?/i);
   if (!match) return null;
+  if (!match[2] && !match[3]) return null;
   let hours = Number(match[1]);
-  const minutes = Number(match[2]);
+  const minutes = Number(match[2] || 0);
   const ampm = match[3] ? match[3].toLowerCase() : "";
   if (ampm === "pm" && hours < 12) hours += 12;
   else if (ampm === "am" && hours === 12) hours = 0;
@@ -219,7 +220,61 @@ function parseScheduleTimeToken(raw: string): { hours: number; minutes: number; 
     hours,
     minutes,
     timeLabel: `${h12}:${String(minutes).padStart(2, "0")} ${suffix}`,
+    time24: `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`,
   };
+}
+
+function formatScheduleTimeDisplay(raw: string): string {
+  const parsed = parseScheduleTimeToken(raw);
+  return parsed ? parsed.timeLabel : String(raw || "").trim();
+}
+
+function parseScheduleTags(rawNotes: unknown): {
+  assigned: string[];
+  dutyLabel: string;
+  seq: number | null;
+  cleanNotes: string;
+} {
+  let text = String(rawNotes || "").trim();
+  let assigned: string[] = [];
+  let dutyLabel = "";
+  let seq: number | null = null;
+
+  const assignMatch = text.match(/\[ASSIGNED:\s*([^\]]+)\]/i);
+  if (assignMatch) {
+    assigned = assignMatch[1].split(",").map(s => s.trim()).filter(Boolean);
+    text = text.replace(assignMatch[0], " ");
+  }
+  const seqMatch = text.match(/\[SEQ:\s*(\d+)\]/i);
+  if (seqMatch) {
+    seq = Number(seqMatch[1]);
+    text = text.replace(seqMatch[0], " ");
+  }
+  const dutyMatch = text.match(/\[DUTY:\s*([^\]]+)\]/i);
+  if (dutyMatch) {
+    dutyLabel = dutyMatch[1].trim();
+    text = text.replace(dutyMatch[0], " ");
+  }
+  return {
+    assigned,
+    dutyLabel,
+    seq: Number.isFinite(seq) ? seq : null,
+    cleanNotes: text.replace(/^[ \t]+|[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim(),
+  };
+}
+
+function doesAssignedTokenMatchUser(token: string, myName: string): boolean {
+  const tok = String(token || "").trim().toLowerCase();
+  const me = String(myName || "").trim().toLowerCase();
+  if (!tok || !me) return false;
+  if (tok === me) return true;
+  const myWords = me.split(/\s+/).filter(Boolean);
+  if (!tok.includes(" ")) {
+    if (myWords.includes(tok)) return true;
+    const initials = myWords.map(w => w[0]).join("");
+    if (tok.length >= 2 && initials === tok) return true;
+  }
+  return false;
 }
 
 function parseScheduleStartMs(s: any): { startMs: number; timeLabel: string } | null {
@@ -298,16 +353,33 @@ function sessionBadge(s: any): string {
   return "";
 }
 export function visibleSchedules(): any[] {
-  if (isAdmin()) return [...state.schedules];
-  const myName = (state.profile?.full_name || "").trim().toLowerCase();
-  if (!myName) return [];
-  const escaped = myName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const nameRegex = new RegExp("(^|[^a-z0-9])" + escaped + "([^a-z0-9]|$)", "i");
-  return state.schedules.filter(s => {
-    const notes = s.notes || "";
-    const match = notes.match(/^\[ASSIGNED:\s*([^\]]+)\]/);
-    if (match && match[1].split(",").map((n: string) => n.trim().toLowerCase()).includes(myName)) return true;
-    return nameRegex.test((s.title || "") + " " + notes);
+  const list = isAdmin()
+    ? [...state.schedules]
+    : (() => {
+        const myName = (state.profile?.full_name || "").trim().toLowerCase();
+        if (!myName) return [];
+        const escaped = myName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const nameRegex = new RegExp("(^|[^a-z0-9])" + escaped + "([^a-z0-9]|$)", "i");
+        return state.schedules.filter(s => {
+          const tags = parseScheduleTags(s.notes);
+          if (tags.assigned.some(n => doesAssignedTokenMatchUser(n, myName))) return true;
+          return nameRegex.test((s.title || "") + " " + tags.cleanNotes);
+        });
+      })();
+
+  return list.sort((a, b) => {
+    const da = String(a.scheduled_date || "9999-12-31");
+    const db = String(b.scheduled_date || "9999-12-31");
+    if (da !== db) return da.localeCompare(db);
+    const sa = parseScheduleTags(a.notes).seq;
+    const sb = parseScheduleTags(b.notes).seq;
+    if (sa !== null && sb !== null && sa !== sb) return sa - sb;
+    if (sa !== null && sb === null) return -1;
+    if (sa === null && sb !== null) return 1;
+    const ta = String(a.time_in || "99:99");
+    const tb = String(b.time_in || "99:99");
+    if (ta !== tb) return ta.localeCompare(tb);
+    return String(a.created_at || "").localeCompare(String(b.created_at || ""));
   });
 }
 
@@ -356,12 +428,17 @@ export function getNoticeItems(): any[] {
     label: "Announcement", act: "go-announcements",
     isRead: isNoticeMarkedRead("ann:" + a.id),
   }));
-  visibleSchedules().forEach(s => items.push({
-    key: "sched:" + s.id, date: (s.scheduled_date || "1970-01-01") + "T" + (s.time_in || "00:00"), icon: "📅",
-    title: s.title || "Schedule", body: [s.region, s.time_in && s.time_out ? s.time_in + "–" + s.time_out : "", s.priority].filter(Boolean).join(" · "),
-    label: "Schedule", act: "go-schedule",
-    isRead: isNoticeMarkedRead("sched:" + s.id),
-  }));
+  visibleSchedules().forEach(s => {
+    const timeRange = s.time_in && s.time_out
+      ? `${formatScheduleTimeDisplay(s.time_in)}–${formatScheduleTimeDisplay(s.time_out)}`
+      : (s.time_in ? formatScheduleTimeDisplay(s.time_in) : "");
+    items.push({
+      key: "sched:" + s.id, date: (s.scheduled_date || "1970-01-01") + "T" + (s.time_in || "00:00"), icon: "📅",
+      title: s.title || "Schedule", body: [s.region, timeRange, s.priority].filter(Boolean).join(" · "),
+      label: "Schedule", act: "go-schedule",
+      isRead: isNoticeMarkedRead("sched:" + s.id),
+    });
+  });
   state.leaveRequests.forEach(r => {
     if (String(r.user_id) === String(state.userId) && (r.status === "approved" || r.status === "rejected")) {
       const key = "leave:" + r.id + ":" + r.status;
@@ -990,29 +1067,370 @@ export function renderAssigneesPicker(): void {
   ).join("") || '<p class="muted">No personnel in this area.</p>';
 }
 
+interface ParsedScheduleItem {
+  assignees: string[];
+  matchedUserIds: string[];
+  timeIn: string;
+  timeOut: string;
+  timeLabel: string;
+  taskTitle: string;
+  isRestDay: boolean;
+}
+
+interface ParsedScheduleStatement {
+  scheduledDate: string;
+  dutyLabel: string;
+  items: ParsedScheduleItem[];
+}
+
+const MONTH_NAME_MAP: Record<string, number> = {
+  january: 1, jan: 1, february: 2, feb: 2, march: 3, mar: 3,
+  april: 4, apr: 4, may: 5, june: 6, jun: 6, july: 7, jul: 7,
+  august: 8, aug: 8, september: 9, sep: 9, sept: 9, october: 10, oct: 10,
+  november: 11, nov: 11, december: 12, dec: 12,
+};
+
+function parseDateFromHeaderLine(line: string): string {
+  const s = String(line || "").replace(/\s+/g, " ").trim();
+  const iso = s.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
+  if (iso) {
+    return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
+  }
+  const mdy = s.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/);
+  if (mdy) {
+    return `${mdy[3]}-${mdy[1].padStart(2, "0")}-${mdy[2].padStart(2, "0")}`;
+  }
+  const monthPat = s.match(/\b(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec)\.?\s+(\d{1,2}),?\s+(20\d{2})\b/i);
+  if (monthPat) {
+    const m = MONTH_NAME_MAP[monthPat[1].toLowerCase()];
+    if (m) {
+      return `${monthPat[3]}-${String(m).padStart(2, "0")}-${String(Number(monthPat[2])).padStart(2, "0")}`;
+    }
+  }
+  return "";
+}
+
+function formatPersonTokenLabel(raw: string): string {
+  const clean = String(raw || "").trim().replace(/\s+/g, " ");
+  if (!clean) return "";
+  if (clean.length <= 3 && /^[a-z]+$/i.test(clean) && !/^(joe|jan|joy|jay|rey|roy|leo|ben|dan|ken|sam|tom|max|ray|tim|jon|ron|kim|ana|mae)$/i.test(clean)) {
+    return clean.toUpperCase();
+  }
+  return clean.replace(/\b[a-z]/g, ch => ch.toUpperCase());
+}
+
+function resolveSchedulePersonnel(rawGroup: string): { displayNames: string[]; matchedUserIds: string[] } {
+  const tokens = String(rawGroup || "")
+    .split(/\s*(?:\/|,|&|\+|\band\b)\s*/i)
+    .map(t => t.trim())
+    .filter(Boolean);
+
+  const displayNames: string[] = [];
+  const matchedUserIds: string[] = [];
+  const candidates = (state.profiles || []).filter(p => (state.roles[p.user_id]?.app_role || "employee") !== "admin");
+  const allProfiles = candidates.length ? candidates : (state.profiles || []);
+
+  for (const tok of tokens) {
+    const low = tok.toLowerCase();
+    const matched =
+      allProfiles.find(p => String(p.full_name || "").trim().toLowerCase() === low) ||
+      allProfiles.find(p => {
+        const words = String(p.full_name || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+        return words[0] === low || words.includes(low);
+      }) ||
+      allProfiles.find(p => {
+        const words = String(p.full_name || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+        const initials = words.map(w => w[0]).join("");
+        return low.length >= 2 && initials === low;
+      }) ||
+      (low.length >= 3
+        ? allProfiles.find(p =>
+            String(p.full_name || "").trim().toLowerCase().split(/\s+/).some(w => w.startsWith(low))
+          )
+        : undefined);
+
+    if (matched) {
+      if (!displayNames.includes(matched.full_name)) displayNames.push(matched.full_name);
+      if (!matchedUserIds.includes(String(matched.user_id))) matchedUserIds.push(String(matched.user_id));
+    } else {
+      const formatted = formatPersonTokenLabel(tok);
+      if (formatted && !displayNames.includes(formatted)) displayNames.push(formatted);
+    }
+  }
+  return { displayNames, matchedUserIds };
+}
+
+function extractLeadingTimeSpan(text: string): {
+  timeIn: string;
+  timeOut: string;
+  timeLabel: string;
+  rest: string;
+} | null {
+  const s = String(text || "").trim();
+  if (!s) return null;
+
+  const rangeMatch = s.match(/^(\d{1,2}(?::[0-5]\d)?\s*(?:am|pm)?)\s*(?:-|–|—|to)\s*(\d{1,2}(?::[0-5]\d)?\s*(?:am|pm))\b(?:\s*[-–:]\s*|\s+)?([\s\S]*)$/i);
+  if (rangeMatch) {
+    const tInRaw = /\b(?:am|pm)\b/i.test(rangeMatch[1]) || rangeMatch[1].includes(":")
+      ? rangeMatch[1]
+      : rangeMatch[1] + (rangeMatch[2].match(/am|pm/i)?.[0] || "am");
+    const pIn = parseScheduleTimeToken(tInRaw);
+    const pOut = parseScheduleTimeToken(rangeMatch[2]);
+    if (pIn && pOut) {
+      return {
+        timeIn: pIn.time24,
+        timeOut: pOut.time24,
+        timeLabel: `${pIn.timeLabel} – ${pOut.timeLabel}`,
+        rest: (rangeMatch[3] || "").replace(/^[-–—:\s]+/, "").trim(),
+      };
+    }
+  }
+
+  const singleMatch = s.match(/^(\d{1,2}(?::[0-5]\d)?\s*(?:am|pm)|(?:[01]?\d|2[0-3]):[0-5]\d)\b(?:\s*[-–—:]\s*|\s+)?([\s\S]*)$/i);
+  if (singleMatch) {
+    const pIn = parseScheduleTimeToken(singleMatch[1]);
+    if (pIn) {
+      return {
+        timeIn: pIn.time24,
+        timeOut: "",
+        timeLabel: pIn.timeLabel,
+        rest: (singleMatch[2] || "").replace(/^[-–—:\s]+/, "").trim(),
+      };
+    }
+  }
+  return null;
+}
+
+function normalizeTaskDisplayText(text: string): string {
+  const cleaned = String(text || "").replace(/\s+/g, " ").trim();
+  if (!cleaned) return "";
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+function parseScheduleStatement(rawText: string): ParsedScheduleStatement {
+  const lines = String(rawText || "")
+    .split(/\r?\n/)
+    .map(l => l.replace(/^\s*(?:\d+[.)]\s*|[-•*]\s+)/, "").trim())
+    .filter(Boolean);
+
+  let scheduledDate = "";
+  let dutyLabel = "";
+  const items: ParsedScheduleItem[] = [];
+  let lastAssignees: string[] = [];
+  let lastMatchedUserIds: string[] = [];
+
+  for (const rawLine of lines) {
+    const normLine = rawLine.replace(/\s+/g, " ").trim();
+    const detectedDate = parseDateFromHeaderLine(normLine);
+    const isHeaderLike =
+      /^schedule\b/i.test(normLine) ||
+      /^date\s*:/i.test(normLine) ||
+      (!!detectedDate && !extractLeadingTimeSpan(normLine) && !/\s[-–—]\s/.test(normLine));
+
+    if (detectedDate && isHeaderLike) {
+      scheduledDate = detectedDate;
+      const paren = normLine.match(/\(([^)]+)\)/);
+      if (paren && paren[1]) dutyLabel = paren[1].trim();
+      continue;
+    }
+
+    // Continuation line starting directly with time (e.g. "1pm- PMS Epldt vitro cebu")
+    const directTime = extractLeadingTimeSpan(normLine);
+    if (directTime && directTime.rest) {
+      items.push({
+        assignees: [...lastAssignees],
+        matchedUserIds: [...lastMatchedUserIds],
+        timeIn: directTime.timeIn,
+        timeOut: directTime.timeOut,
+        timeLabel: directTime.timeLabel,
+        taskTitle: normalizeTaskDisplayText(directTime.rest),
+        isRestDay: false,
+      });
+      continue;
+    }
+
+    // Line split by separator dash ("Joe / luigi - 8am Ayala...", "Rest day - arnold / rodel")
+    const dashMatch = normLine.match(/^(.+?)\s+[-–—]\s+(.+)$/) || normLine.match(/^([a-zA-Z\s/,&+.]+?)\s*[-–—]\s+(.+)$/);
+    if (dashMatch) {
+      const left = dashMatch[1].trim();
+      const right = dashMatch[2].trim();
+      const restLeft = /^(?:rest\s*day|day\s*off|off\s*duty|off)$/i.test(left);
+      const restRight = /^(?:rest\s*day|day\s*off|off\s*duty|off)$/i.test(right);
+
+      if (restLeft || restRight) {
+        const peoplePart = restLeft ? right : left;
+        const resolved = resolveSchedulePersonnel(peoplePart);
+        lastAssignees = resolved.displayNames;
+        lastMatchedUserIds = resolved.matchedUserIds;
+        items.push({
+          assignees: resolved.displayNames,
+          matchedUserIds: resolved.matchedUserIds,
+          timeIn: "",
+          timeOut: "",
+          timeLabel: "",
+          taskTitle: "Rest Day",
+          isRestDay: true,
+        });
+        continue;
+      }
+
+      const resolved = resolveSchedulePersonnel(left);
+      lastAssignees = resolved.displayNames;
+      lastMatchedUserIds = resolved.matchedUserIds;
+      const rightTime = extractLeadingTimeSpan(right);
+      const taskTitle = normalizeTaskDisplayText(rightTime ? (rightTime.rest || right) : right);
+      items.push({
+        assignees: resolved.displayNames,
+        matchedUserIds: resolved.matchedUserIds,
+        timeIn: rightTime?.timeIn || "",
+        timeOut: rightTime?.timeOut || "",
+        timeLabel: rightTime?.timeLabel || "",
+        taskTitle: taskTitle || "Scheduled Duty",
+        isRestDay: false,
+      });
+      continue;
+    }
+
+    // Fallback plain task line
+    items.push({
+      assignees: [...lastAssignees],
+      matchedUserIds: [...lastMatchedUserIds],
+      timeIn: "",
+      timeOut: "",
+      timeLabel: "",
+      taskTitle: normalizeTaskDisplayText(normLine),
+      isRestDay: /^(?:rest\s*day|day\s*off|off\s*duty)$/i.test(normLine),
+    });
+  }
+
+  return { scheduledDate, dutyLabel, items };
+}
+
+export function updateScheduleStatementPreview(): void {
+  const raw = val("schStatement");
+  const clearBtn = $("clearSchStatementBtn");
+  const prevBox = $("schEnumPreview");
+  const hasText = !!raw.trim();
+  clearBtn?.classList.toggle("hidden", !hasText);
+  if (!prevBox) return;
+  if (!hasText) {
+    prevBox.classList.add("hidden");
+    prevBox.innerHTML = "";
+    return;
+  }
+
+  const parsed = parseScheduleStatement(raw);
+  if (parsed.scheduledDate) setVal("schDate", parsed.scheduledDate);
+
+  // Sync matching personnel checkboxes cleanly
+  const matchedIds = new Set(parsed.items.flatMap(it => it.matchedUserIds));
+  if (matchedIds.size) {
+    document.querySelectorAll<HTMLInputElement>('input[name="schPersonnel"]').forEach(cb => {
+      cb.checked = matchedIds.has(String(cb.value));
+    });
+  }
+
+  if (!parsed.items.length) {
+    prevBox.classList.remove("hidden");
+    prevBox.innerHTML = '<div class="muted">Type or paste task lines below the date header to auto-enumerate…</div>';
+    return;
+  }
+
+  const headerText = [
+    parsed.scheduledDate ? fmtDay(parsed.scheduledDate) : "",
+    parsed.dutyLabel || "",
+    `${parsed.items.length} item${parsed.items.length === 1 ? "" : "s"}`,
+  ].filter(Boolean).join(" · ");
+
+  prevBox.classList.remove("hidden");
+  prevBox.innerHTML =
+    `<div style="font-weight:700;margin-bottom:6px;">📋 Enumerated Preview (${esc(headerText)})</div>` +
+    `<ol style="margin:0;padding-left:20px;display:grid;gap:4px;">` +
+    parsed.items.map(it => {
+      const who = it.assignees.length ? `<b>${esc(it.assignees.join(" / "))}</b>` : `<span class="muted">Unassigned</span>`;
+      const tm = it.timeLabel ? ` · <span class="badge">${esc(it.timeLabel)}</span>` : "";
+      const task = it.isRestDay ? `<span class="badge">Rest Day</span>` : esc(it.taskTitle);
+      return `<li>${who}${tm} — ${task}</li>`;
+    }).join("") +
+    `</ol>`;
+}
+
+export function clearScheduleStatement(): void {
+  setVal("schStatement", "");
+  updateScheduleStatementPreview();
+}
+
 export function renderSchedules(): void {
   const box = $("scheduleList");
   if (!box) return;
   const filtered = visibleSchedules();
-  box.innerHTML = filtered.map(s => {
-    const match = (s.notes || "").match(/^\[ASSIGNED:\s*([^\]]+)\]/);
-    const assigned = match ? match[1] : "";
-    const notes = (s.notes || "").replace(/^\[ASSIGNED:\s*[^\]]+\]\s*/, "");
-    const sst = sessionState(s);
-    return '<div class="item' + (sst ? " sess-" + sst : "") + '"><b>' + esc(s.title) + "</b> " + sessionBadge(s) +
-      ' <span class="badge">' + esc(s.priority || "Normal") + '</span><div class="muted">' + esc(fmtDay(s.scheduled_date)) +
-      (s.region ? " · " + esc(s.region) : "") + (s.time_in && s.time_out ? " · " + esc(s.time_in) + "–" + esc(s.time_out) : "") +
-      "</div>" + (assigned ? "<div><b>Assigned:</b> " + esc(assigned) + "</div>" : "") + (notes ? "<div>" + esc(notes) + "</div>" : "") +
-      (isManager() ? '<div class="inline-actions"><button class="red small-btn" type="button" data-act="del-sched" data-id="' + esc(s.id) + '">Delete</button></div>' : "") + "</div>";
-  }).join("") || '<p class="muted">No schedules assigned to you.</p>';
+  if (!filtered.length) {
+    box.innerHTML = '<p class="muted">No schedules assigned to you.</p>';
+    return;
+  }
+
+  const groups: Array<{ dateKey: string; dutyLabel: string; items: any[] }> = [];
+  const byKey = new Map<string, { dateKey: string; dutyLabel: string; items: any[] }>();
+
+  for (const s of filtered) {
+    const tags = parseScheduleTags(s.notes);
+    const dk = String(s.scheduled_date || "unscheduled");
+    let g = byKey.get(dk);
+    if (!g) {
+      g = { dateKey: dk, dutyLabel: tags.dutyLabel, items: [] };
+      byKey.set(dk, g);
+      groups.push(g);
+    } else if (!g.dutyLabel && tags.dutyLabel) {
+      g.dutyLabel = tags.dutyLabel;
+    }
+    g.items.push(s);
+  }
+
+  box.innerHTML = groups.map(group => {
+    const dateHeader = group.dateKey !== "unscheduled"
+      ? fmtDay(group.dateKey) + (group.dutyLabel ? ` (${group.dutyLabel})` : "")
+      : (group.dutyLabel || "Upcoming Schedule");
+
+    const rowsHtml = group.items.map((s, idx) => {
+      const tags = parseScheduleTags(s.notes);
+      const assigned = tags.assigned.join(", ");
+      const notes = tags.cleanNotes;
+      const noteLines = notes.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const notesHtml = noteLines.length > 1
+        ? '<ol style="margin:6px 0 0;padding-left:20px;">' + noteLines.map(nl => `<li>${esc(nl)}</li>`).join("") + "</ol>"
+        : (notes ? "<div>" + esc(notes) + "</div>" : "");
+      const timeStr = s.time_in && s.time_out
+        ? `${formatScheduleTimeDisplay(s.time_in)} – ${formatScheduleTimeDisplay(s.time_out)}`
+        : (s.time_in ? formatScheduleTimeDisplay(s.time_in) : "");
+      const sst = sessionState(s);
+
+      return '<div class="item' + (sst ? " sess-" + sst : "") + '">' +
+        '<div style="display:flex;align-items:flex-start;gap:8px;">' +
+        '<span class="badge" style="min-width:26px;text-align:center;font-weight:800;">' + (idx + 1) + '.</span>' +
+        '<div style="flex:1;min-width:0;">' +
+        '<b>' + esc(s.title) + "</b> " + sessionBadge(s) +
+        ' <span class="badge">' + esc(s.priority || "Normal") + '</span>' +
+        '<div class="muted">' + esc(fmtDay(s.scheduled_date)) +
+        (s.region ? " · " + esc(s.region) : "") + (timeStr ? " · " + esc(timeStr) : "") +
+        "</div>" + (assigned ? "<div><b>Assigned:</b> " + esc(assigned) + "</div>" : "") + notesHtml +
+        (isManager() ? '<div class="inline-actions"><button class="red small-btn" type="button" data-act="del-sched" data-id="' + esc(s.id) + '">Delete</button></div>' : "") +
+        '</div></div></div>';
+    }).join("");
+
+    return `<div style="margin-bottom:14px;">` +
+      `<div style="font-weight:800;font-size:13.5px;margin:6px 0 8px;display:flex;align-items:center;gap:6px;">📅 ${esc(dateHeader)} <span class="badge">${group.items.length}</span></div>` +
+      rowsHtml +
+      `</div>`;
+  }).join("");
 }
 
 export function openScheduleFormOverlay(): void {
   if (!isManager()) return;
   renderScheduleSiteOptions();
   renderAssigneesPicker();
+  updateScheduleStatementPreview();
   $("scheduleFormOverlay")?.classList.remove("hidden");
-  setTimeout(() => ($("schTitle") as HTMLInputElement | null)?.focus(), 40);
+  setTimeout(() => ($("schStatement") as HTMLTextAreaElement | null)?.focus(), 40);
 }
 
 export function closeScheduleFormOverlay(): void {
@@ -1021,14 +1439,59 @@ export function closeScheduleFormOverlay(): void {
 
 export async function saveSchedule(): Promise<void> {
   if (!isManager()) return;
+  const statementRaw = val("schStatement").trim();
+  const region = val("schRegion");
+  const priority = val("schPriority") || "Normal";
+  const extraNotes = val("schNotes").trim();
+
+  if (statementRaw) {
+    const parsed = parseScheduleStatement(statementRaw);
+    if (!parsed.items.length) {
+      toast("No schedule items found in the statement.");
+      return;
+    }
+    const schDate = parsed.scheduledDate || val("schDate") || null;
+    const rows = parsed.items.map((it, idx) => {
+      const noteParts: string[] = [];
+      if (it.assignees.length) noteParts.push(`[ASSIGNED: ${it.assignees.join(", ")}]`);
+      noteParts.push(`[SEQ:${idx + 1}]`);
+      if (parsed.dutyLabel) noteParts.push(`[DUTY:${parsed.dutyLabel}]`);
+      if (extraNotes) noteParts.push(extraNotes);
+      return {
+        title: it.taskTitle,
+        region,
+        scheduled_date: schDate,
+        priority: it.isRestDay ? "Normal" : priority,
+        time_in: it.timeIn || null,
+        time_out: it.timeOut || null,
+        notes: noteParts.join(" ").trim(),
+      };
+    });
+
+    const { error } = await runtime.client.from("schedules").insert(rows);
+    if (error) { toast("Could not save: " + error.message); return; }
+
+    clearScheduleStatement();
+    setVal("schSite", "");
+    setVal("schUnit", "");
+    setVal("schTitle", "");
+    setVal("schNotes", "");
+    document.querySelectorAll<HTMLInputElement>('input[name="schPersonnel"]:checked').forEach(i => { i.checked = false; });
+    suppressNotifications();
+    await loadSchedules();
+    closeScheduleFormOverlay();
+    toast(`${rows.length} enumerated schedule item${rows.length === 1 ? "" : "s"} saved`);
+    return;
+  }
+
   const title = val("schTitle").trim();
-  if (!title) { toast("Enter a job or site"); return; }
+  if (!title) { toast("Enter a schedule statement or job / site"); return; }
   const picked = [...document.querySelectorAll<HTMLInputElement>('input[name="schPersonnel"]:checked')];
   const names = picked.map(i => i.dataset.name).filter(Boolean);
-  const note = (names.length ? "[ASSIGNED: " + names.join(", ") + "] " : "") + val("schNotes").trim();
+  const note = (names.length ? "[ASSIGNED: " + names.join(", ") + "] " : "") + extraNotes;
   const { error } = await runtime.client.from("schedules").insert({
-    title, region: val("schRegion"), scheduled_date: val("schDate") || null,
-    priority: val("schPriority"), time_in: val("schIn") || null, time_out: val("schOut") || null, notes: note,
+    title, region, scheduled_date: val("schDate") || null,
+    priority, time_in: val("schIn") || null, time_out: val("schOut") || null, notes: note,
   });
   if (error) { toast("Could not save: " + error.message); return; }
   setVal("schSite", "");
@@ -2493,14 +2956,9 @@ export function renderDtr(): void {
 
 function isUserMentionedInSchedule(s: any, myName: string, myEmail: string): boolean {
   if (!s) return false;
-  const notes = String(s.notes || "");
-  const title = String(s.title || "");
-  const assignMatch = notes.match(/^\[ASSIGNED:\s*([^\]]+)\]/i);
-  if (myName && assignMatch) {
-    const assigned = assignMatch[1].split(",").map((n: string) => n.trim().toLowerCase());
-    if (assigned.includes(myName)) return true;
-  }
-  const combined = `${title} ${notes}`;
+  const tags = parseScheduleTags(s.notes);
+  if (myName && tags.assigned.some(n => doesAssignedTokenMatchUser(n, myName))) return true;
+  const combined = `${String(s.title || "")} ${tags.cleanNotes}`;
   if (myName) {
     const escaped = myName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     if (new RegExp("(^|[^a-z0-9])" + escaped + "([^a-z0-9]|$)", "i").test(combined)) return true;
@@ -2545,7 +3003,13 @@ function findScheduledWorkForUser(targetDate?: string): { siteName: string; unit
   const titleLower = rawTitle.toLowerCase();
   const matchedSite = state.sites.find(site => {
     const n = String(site.name || "").trim().toLowerCase();
-    return n && (titleLower === n || titleLower.startsWith(n + " —") || titleLower.startsWith(n + " -") || titleLower.includes(n));
+    return n && (
+      titleLower === n ||
+      titleLower.startsWith(n + " —") ||
+      titleLower.startsWith(n + " -") ||
+      titleLower.includes(n) ||
+      (titleLower.length >= 4 && n.includes(titleLower))
+    );
   });
   const splitParts = rawTitle ? rawTitle.split(/\s+—\s+|\s+-\s+/) : [];
   const siteName = matchedSite ? matchedSite.name : (splitParts[0] || best.region || rawTitle).trim();
@@ -2559,9 +3023,7 @@ function findScheduledWorkForUser(targetDate?: string): { siteName: string; unit
     unitName = splitParts[1].trim();
   }
 
-  const cleanNotes = String(best.notes || "")
-    .replace(/^\[ASSIGNED:\s*[^\]]+\]\s*/i, "")
-    .trim();
+  const cleanNotes = parseScheduleTags(best.notes).cleanNotes;
   const extraTitleTask = splitParts
     .slice(1)
     .map(p => p.trim())
@@ -4030,55 +4492,71 @@ export function openLeaveSheetPreview(requestId?: string): void {
 
   const chk = (on: boolean) => `<span class="ls-box">${on ? "✓" : ""}</span>`;
   const fmtFiling = meta.filingDate
-    ? new Date(meta.filingDate + "T00:00:00").toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })
+    ? new Date(meta.filingDate + "T00:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
     : "";
   const inclusiveStr = start && end ? `${fmtDay(start)} – ${fmtDay(end)}` : (start ? fmtDay(start) : "");
-  const workDaysStr = meta.workingDays || (days ? `${days} Day(s)` : "");
+  const workDaysStr = meta.workingDays || (days ? String(days) : "");
+  const othersText = meta.othersSpecify || (leaveType === "emergency" ? "Emergency Leave" : (leaveType === "others" ? (meta.cleanReason || "") : ""));
   const sigImg = isOwn
     ? (signaturePhotoDataUrl ? `<img src="${esc(signaturePhotoDataUrl)}" alt="Signature" class="ls-sig-img">` : (drawnSigDataUrl ? `<img src="${esc(drawnSigDataUrl)}" alt="Signature" class="ls-sig-img">` : ""))
     : "";
 
   paper.innerHTML =
-    `<div class="ls-top-date">Date: <span class="ls-inline-val">${esc(fmtFiling)}</span></div>` +
-    `<div class="ls-title">APPLICATION FOR LEAVE</div>` +
-    `<div class="ls-name-row">` +
-    `<span class="ls-lbl">NAME :</span>` +
-    `<div class="ls-name-cols">` +
-    `<div class="ls-name-cell"><div class="ls-line-val">${esc(meta.lastName || "")}</div><div class="ls-sub">LAST</div></div>` +
-    `<div class="ls-name-cell"><div class="ls-line-val">${esc(meta.firstName || "")}</div><div class="ls-sub">FIRST</div></div>` +
-    `<div class="ls-name-cell"><div class="ls-line-val">${esc(meta.middleName || "")}</div><div class="ls-sub">MIDDLE</div></div>` +
-    `</div></div>` +
-    `<div class="ls-grid">` +
-    `<div class="ls-col">` +
-    `<div class="ls-field-line"><span class="ls-lbl">DATE OF FILLING :</span><span class="ls-fill-val">${esc(fmtFiling)}</span></div>` +
-    `<div class="ls-sec-lbl">TYPE OF LEAVE:</div>` +
-    `<div class="ls-check-item">${chk(leaveType === "vacation")} <span>VACATION</span></div>` +
-    `<div class="ls-check-item">${chk(leaveType === "sick")} <span>SICK</span></div>` +
-    `<div class="ls-check-item">${chk(leaveType === "others" || leaveType === "emergency")} <span>OTHERS (Specify)</span></div>` +
-    `<div class="ls-under-val">${esc(meta.othersSpecify || (leaveType === "emergency" ? "Emergency Leave" : ""))}</div>` +
-    `<div class="ls-sec-lbl" style="margin-top:16px;">NUMBER OF WORKING DAYS APPLIED FOR</div>` +
-    `<div class="ls-under-val">${esc(workDaysStr)}</div>` +
-    `<div class="ls-sec-lbl" style="margin-top:14px;">INCLUSIVE DATES :</div>` +
-    `<div class="ls-under-val">${esc(inclusiveStr)}</div>` +
-    `<div class="ls-sig-block">${sigImg}<div class="ls-under-val" style="min-height:22px;text-align:center;">${esc(meta.applicantName || "")}</div><div class="ls-sig-cap">Signature of Applicant</div></div>` +
+    `<div class="ls-header">` +
+      `<div class="ls-top-date">Date:</div>` +
+      `<div class="ls-title">APPLICATION FOR LEAVE</div>` +
     `</div>` +
-    `<div class="ls-col">` +
-    `<div class="ls-sec-lbl">WHERE LEAVE WILL BE SPENT</div>` +
-    `<div class="ls-sub-sec">(1) IN CASE OF VACATION LEAVE</div>` +
-    `<div class="ls-check-item">${chk(meta.vacationPlace === "within")} <span>Within Metro Manila</span></div>` +
-    `<div class="ls-check-item">${chk(meta.vacationPlace === "outside")} <span>Outside Metro Manila (Specify)</span></div>` +
-    `<div class="ls-under-val">${esc(meta.outsideSpecify || "")}</div>` +
-    `<div class="ls-sub-sec" style="margin-top:16px;">(2) IN CASE OF SICK LEAVE</div>` +
-    `<div class="ls-check-item">${chk(!!meta.inHospital)} <span>In Hospital (Specify)</span></div>` +
-    `<div class="ls-under-val">${esc(meta.hospitalSpecify || "")}</div>` +
-    `<div class="ls-sub-sec" style="margin-top:16px;">(3) STATUS</div>` +
-    `<div class="ls-check-item">${chk(status === "approved")} <span>APPROVED</span></div>` +
-    `<div class="ls-check-item">${chk(status === "rejected")} <span>NOT APPROVE</span></div>` +
-    `<div style="margin-top:16px;font-weight:700;">Approved by</div>` +
-    `<div class="ls-under-val" style="min-height:24px;text-align:center;">${esc(approverName)}</div>` +
-    `<div class="ls-sig-cap">Authorized Signatory</div>` +
-    `</div></div>` +
-    (meta.cleanReason ? `<div class="ls-reason-note"><b>Reason:</b> ${esc(meta.cleanReason)}</div>` : "");
+    `<div class="ls-name-row">` +
+      `<span class="ls-lbl">NAME :</span>` +
+      `<div class="ls-name-block">` +
+        `<div class="ls-name-vals">` +
+          `<div class="ls-line-val">${esc(meta.lastName || "")}</div>` +
+          `<div class="ls-line-val">${esc(meta.firstName || "")}</div>` +
+          `<div class="ls-line-val">${esc(meta.middleName || "")}</div>` +
+        `</div>` +
+        `<div class="ls-name-subs">` +
+          `<div class="ls-sub">LAST</div>` +
+          `<div class="ls-sub">FIRST</div>` +
+          `<div class="ls-sub">MIDDLE</div>` +
+        `</div>` +
+      `</div>` +
+    `</div>` +
+    `<div class="ls-grid">` +
+      `<div class="ls-col">` +
+        `<div class="ls-field-line"><span class="ls-lbl">DATE OF FILLING :</span><span class="ls-fill-val">${esc(fmtFiling)}</span></div>` +
+        `<div class="ls-sec-lbl">TYPE OF LEAVE:</div>` +
+        `<div class="ls-check-item">${chk(leaveType === "vacation")} <span>VACATION</span></div>` +
+        `<div class="ls-check-item">${chk(leaveType === "sick")} <span>SICK</span></div>` +
+        `<div class="ls-check-item">${chk(leaveType === "others" || leaveType === "emergency")} <span>OTHERS (Specify)</span></div>` +
+        `<div class="ls-under-val ls-under-indent">${esc(othersText)}</div>` +
+        `<div class="ls-sec-lbl" style="margin-top:8px;">NUMBER OF WORKING DAYS APPLIED FOR</div>` +
+        `<div class="ls-under-val">${esc(workDaysStr)}</div>` +
+        `<div class="ls-sec-lbl" style="margin-top:14px;">INCLUSIVE DATES :</div>` +
+        `<div class="ls-under-val">${esc(inclusiveStr)}</div>` +
+        `<div class="ls-sig-block">` +
+          `<div class="ls-sig-line">${sigImg}<div class="ls-sig-name">${esc(meta.applicantName || "")}</div></div>` +
+          `<div class="ls-sig-cap">Signature of Applicant</div>` +
+        `</div>` +
+      `</div>` +
+      `<div class="ls-col">` +
+        `<div class="ls-sec-lbl" style="margin-top:0;">WHERE LEAVE WILL BE SPENT</div>` +
+        `<div class="ls-sub-sec">(1) IN CASE OF VACATION LEAVE</div>` +
+        `<div class="ls-check-item">${chk(meta.vacationPlace === "within")} <span>Within Metro Manila</span></div>` +
+        `<div class="ls-check-item">${chk(meta.vacationPlace === "outside")} <span>Outside Metro Manila (Specify)</span></div>` +
+        `<div class="ls-under-val">${esc(meta.outsideSpecify || "")}</div>` +
+        `<div class="ls-sub-sec" style="margin-top:14px;">(2) IN CASE OF SICK LEAVE</div>` +
+        `<div class="ls-check-item">${chk(!!meta.inHospital)} <span>In Hospital (Specify)</span></div>` +
+        `<div class="ls-under-val">${esc(meta.hospitalSpecify || "")}</div>` +
+        `<div class="ls-sub-sec" style="margin-top:14px;">(3) STATUS</div>` +
+        `<div class="ls-check-item">${chk(status === "approved")} <span>APPROVED</span></div>` +
+        `<div class="ls-check-item">${chk(status === "rejected")} <span>NOT APPROVE</span></div>` +
+        `<div class="ls-auth-lbl">Approved by</div>` +
+        `<div class="ls-sig-block" style="padding-top:10px;">` +
+          `<div class="ls-sig-line"><div class="ls-sig-name">${esc(approverName)}</div></div>` +
+          `<div class="ls-sig-cap">Authorized Signatory</div>` +
+        `</div>` +
+      `</div>` +
+    `</div>`;
 
   overlay.classList.remove("hidden");
 }
@@ -4091,8 +4569,23 @@ export async function downloadLeaveSheet(): Promise<void> {
   const paper = $("leaveSheetPaper");
   if (!paper) return;
   if (!window.html2canvas) { toast("Image export library is still loading."); return; }
+  let host: HTMLDivElement | null = null;
   try {
-    const canvas = await window.html2canvas(paper, { backgroundColor: "#fff", scale: 2 });
+    host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:-9999px;top:0;width:760px;background:#fff;z-index:-1;";
+    const clone = paper.cloneNode(true) as HTMLElement;
+    clone.style.width = "760px";
+    clone.style.minWidth = "760px";
+    clone.style.margin = "0";
+    host.appendChild(clone);
+    document.body.appendChild(host);
+
+    const canvas = await window.html2canvas(clone, {
+      backgroundColor: "#fff",
+      scale: 2,
+      width: 760,
+      windowWidth: 820,
+    });
     canvas.toBlob(async (blob: Blob | null) => {
       if (!blob) return;
       const file = new File([blob], "Leave-Application-" + new Date().toISOString().slice(0, 10) + ".jpg", { type: "image/jpeg" });
@@ -4105,7 +4598,11 @@ export async function downloadLeaveSheet(): Promise<void> {
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 4000);
     }, "image/jpeg", 0.92);
-  } catch (err: any) { toast(err?.message || "Could not export form."); }
+  } catch (err: any) {
+    toast(err?.message || "Could not export form.");
+  } finally {
+    host?.remove();
+  }
 }
 
 export function printLeaveSheet(): void {
@@ -4604,6 +5101,9 @@ export function initFeatureWiring(): void {
   });
   $("toggleScheduleFormBtn")?.addEventListener("click", () => {
     openScheduleFormOverlay();
+  });
+  $("schStatement")?.addEventListener("input", () => {
+    updateScheduleStatementPreview();
   });
   $("scheduleFormOverlay")?.addEventListener("click", ev => {
     if (ev.target === $("scheduleFormOverlay")) closeScheduleFormOverlay();
