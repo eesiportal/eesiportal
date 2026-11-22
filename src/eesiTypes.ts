@@ -166,6 +166,9 @@ export const runtime = {
   pendingPmsFiles: [] as Array<{ file: File; previewUrl: string }>,
   editingAnnouncementId: null as string | null,
   editingUnitId: null as string | null,
+  selectedUnitsSiteId: null as string | null,
+  editingLeaveId: null as string | null,
+  adminRoleFilter: "all" as string,
   editingMessageId: null as string | null,
   replyingToMsg: null as any,
   currentPage: "home",
@@ -202,6 +205,21 @@ export const runtime = {
   tickerQueueKey: "",
   selectedSiteId: null as string | null,
   siteMapTravelMode: "DRIVING" as "DRIVING" | "WALKING" | "TWO_WHEELER",
+  siteMapLayer: "roadmap" as "roadmap" | "satellite",
+  sitesRegionFilter: "ALL" as string,
+  sitesStatusFilter: "ALL" as string,
+  sitesExtraColsMissing: false,
+  siteDistances: {} as Record<string, {
+    status: "idle" | "loading" | "ready" | "no_route" | "no_gps" | "error";
+    distanceMeters?: number;
+    durationMillis?: number;
+    distanceText?: string;
+    durationText?: string;
+    straightKm?: number;
+    message?: string;
+  }>,
+  siteDistanceOriginKey: "",
+  siteMetaNotices: {} as Record<string, { thumbnail_url?: string | null; status?: string | null; latitude?: number | null; longitude?: number | null; updated_at?: string }>,
 };
 
 export const hooks: Record<string, (...args: any[]) => any> = {
@@ -266,6 +284,11 @@ export const hooks: Record<string, (...args: any[]) => any> = {
   ensureAmcbUnitsSeeded: async () => {},
   openEditDtr: () => {},
   openTimemarkCamera: () => {},
+  openSiteOnMap: () => {},
+  refreshVisibleSiteDistances: async () => {},
+  clearDtrAfterExport: async (_ids?: string[]) => {},
+  renderLiveOnlineMembers: () => {},
+  closeSiteUnitsOverlay: () => {},
 };
 
 export const $ = (id: string): HTMLElement | null => document.getElementById(id);
@@ -642,14 +665,12 @@ export function filterDtrRowsByCutoff(rows: any[], cutoffKey?: string): { period
   };
 }
 
-export function calculateDtrHours(timeIn: string, timeOut: string, isApproved: boolean): number {
+export function calculateDtrHours(timeIn: string, timeOut: string, _isApproved = true): number {
   if (!timeIn || !timeOut) return 0;
   const p = (t: string) => { const x = String(t).split(":").map(Number); return (x[0] || 0) * 60 + (x[1] || 0); };
   let mins = p(timeOut) - p(timeIn);
   if (mins < 0) mins += 1440;
-  const standardMins = 9 * 60;
-  if (isApproved) return mins / 60;
-  return (mins > standardMins ? standardMins : mins) / 60;
+  return mins / 60;
 }
 export function calculateOtMinutes(timeIn: string, timeOut: string): number {
   if (!timeIn || !timeOut) return 0;
@@ -1314,5 +1335,78 @@ export function parseUnitSideTag(notes: unknown): { side: string; cleanNotes: st
     cleanNotes: raw.replace(m[0], "").trim(),
   };
 }
+
+export const SITE_STATUS_OPTIONS = [
+  "Operational",
+  "Under Maintenance",
+  "Needs Repair",
+  "Shutdown",
+  "Completed",
+] as const;
+
+export interface SiteMetaNoticePayload {
+  site_id: string;
+  thumbnail_url?: string | null;
+  status?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  updated_at?: string;
+}
+
+export function isSiteMetaNotice(n: any): boolean {
+  return String(n?.body || "").includes("[[SITE_META:");
+}
+
+export function isHiddenSystemNotice(n: any): boolean {
+  return isStoryNotice(n) || isSiteMetaNotice(n);
+}
+
+export function buildSiteMetaAppNoticeBody(meta: SiteMetaNoticePayload): string {
+  return `Site metadata update\n[[SITE_META:${JSON.stringify(meta)}]]`;
+}
+
+export function parseSiteMetaFromAppNotice(n: any): SiteMetaNoticePayload | null {
+  const raw = String(n?.body || "");
+  const match = raw.match(/\[\[SITE_META:([\s\S]*?)\]\]/);
+  if (!match) return null;
+  try {
+    const meta = JSON.parse(match[1]);
+    if (!meta || !meta.site_id) return null;
+    const lat = Number(meta.latitude);
+    const lng = Number(meta.longitude);
+    return {
+      site_id: String(meta.site_id),
+      thumbnail_url: typeof meta.thumbnail_url === "string" ? meta.thumbnail_url : (meta.thumbnail_url === null ? null : undefined),
+      status: typeof meta.status === "string" ? meta.status : undefined,
+      latitude: meta.latitude !== undefined && meta.latitude !== null && Number.isFinite(lat) ? lat : undefined,
+      longitude: meta.longitude !== undefined && meta.longitude !== null && Number.isFinite(lng) ? lng : undefined,
+      updated_at: String(meta.updated_at || n.created_at || ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function getSiteThumbnailUrl(site: any): string | null {
+  if (!site) return null;
+  const meta = runtime.siteMetaNotices[String(site.id)];
+  const raw = site.thumbnail_url !== undefined && site.thumbnail_url !== null && site.thumbnail_url !== ""
+    ? site.thumbnail_url
+    : (meta?.thumbnail_url || "");
+  return safeUrl(raw);
+}
+
+export function getSiteEffectiveStatus(site: any, units: any[] = state.units): string {
+  if (!site) return "Operational";
+  const meta = runtime.siteMetaNotices[String(site.id)];
+  const explicit = String(site.status || meta?.status || "").trim();
+  if (explicit) return explicit;
+  const siteUnits = (units || []).filter(u => String(u.site_id) === String(site.id));
+  if (siteUnits.some(u => u.status === "Shutdown")) return "Shutdown";
+  if (siteUnits.some(u => u.status === "Needs Repair")) return "Needs Repair";
+  if (siteUnits.some(u => u.status === "Under Maintenance")) return "Under Maintenance";
+  return "Operational";
+}
+
 
 

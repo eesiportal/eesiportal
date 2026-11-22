@@ -95,6 +95,7 @@ header{
 @keyframes marqueeSingle{0%{transform:translateX(100vw)}100%{transform:translateX(-100%)}}
 
 main{max-width:860px;margin:auto;position:relative}
+main:has(#page-dtr:not(.hidden) #dtrPreview:not(.hidden)){max-width:1180px}
 .ct{padding:16px}
 .card,.item,.stat,.tile,.person,table{
   background:linear-gradient(180deg,rgba(14,30,62,.95),rgba(9,21,44,.95));
@@ -108,6 +109,41 @@ main{max-width:860px;margin:auto;position:relative}
 .card{padding:16px;margin-bottom:14px}
 .item{padding:14px;margin-bottom:10px}
 .item.site-selected{border-color:var(--cyan)!important;box-shadow:0 0 0 1px var(--cyan),0 6px 18px rgba(47,140,255,.28)!important}
+.site-filters-card{padding:12px 14px;margin-bottom:12px}
+.site-filter-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:6px}
+.site-filter-row{display:flex;flex-wrap:wrap;gap:6px}
+.site-card-row{display:flex;gap:12px;align-items:flex-start}
+.site-thumb{width:76px;height:76px;border-radius:12px;object-fit:cover;flex:0 0 76px;border:1px solid rgba(47,140,255,.35);background:#09152c;cursor:pointer}
+.site-thumb-empty{width:76px;height:76px;border-radius:12px;flex:0 0 76px;border:1px dashed rgba(47,140,255,.35);background:rgba(47,140,255,.08);display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:11px;color:var(--muted);text-align:center;padding:4px}
+.site-card-body{flex:1;min-width:0}
+.site-meta-badges{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px}
+.site-dist-badge{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;padding:3px 8px;border-radius:8px;background:rgba(34,197,94,.14);border:1px solid rgba(34,197,94,.38);color:#86efac}
+.site-dist-badge.muted-dist{background:rgba(47,140,255,.10);border-color:rgba(47,140,255,.28);color:#9cc2ff}
+.site-status-select{width:auto!important;min-width:140px;padding:6px 10px!important;font-size:12px!important;min-height:36px}
+.site-map-search-wrap{position:relative;margin-bottom:10px}
+.site-map-search-bar{display:flex;gap:6px;align-items:center}
+.site-map-search-bar input{flex:1;min-width:0}
+.site-map-search-results{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:45;max-height:240px;overflow-y:auto;border-radius:12px;border:1px solid rgba(47,140,255,.35);background:#0b1b38;box-shadow:0 12px 28px rgba(0,0,0,.5)}
+.site-map-search-item{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid rgba(47,140,255,.14);border-radius:0;box-shadow:none;background:transparent;padding:9px 12px;min-height:40px;color:#e8f0ff;font-size:13px;font-weight:600}
+.site-map-search-item:last-child{border-bottom:0}
+.site-map-search-item:hover{background:rgba(47,140,255,.16);transform:none;box-shadow:none}
+.site-map-search-item small{display:block;font-size:11px;font-weight:400;color:var(--muted);margin-top:2px}
+.site-map-wrap{position:relative;border-radius:10px;overflow:hidden}
+.add-site-pin-map{width:100%;height:185px;border-radius:10px;border:1px solid rgba(47,140,255,.35);background:#09152c;margin:6px 0 8px}
+.site-map-layer-toggle{position:absolute;top:10px;left:10px;z-index:12;display:inline-flex;gap:4px;padding:4px;border-radius:10px;background:rgba(9,21,44,.9);border:1px solid rgba(47,140,255,.4);backdrop-filter:blur(6px);box-shadow:0 4px 12px rgba(0,0,0,.4)}
+.site-map-layer-toggle button{min-height:30px;min-width:auto;padding:4px 10px;font-size:12px;border-radius:7px;box-shadow:none;background:transparent;border:1px solid transparent;color:#cfe0ff}
+.site-map-layer-toggle button.active{background:#1e6cf2;color:#fff;border-color:#2f8cff}
+.site-pin-wrap{position:relative;display:flex;flex-direction:column;align-items:center;cursor:pointer;transform:translateY(-4px)}
+.site-pin-core{width:24px;height:24px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#2f8cff;border:2px solid #fff;box-shadow:0 3px 10px rgba(0,0,0,.45);display:grid;place-items:center;position:relative;z-index:2;transition:transform .2s,background .2s}
+.site-pin-core::after{content:"";width:8px;height:8px;border-radius:50%;background:#fff}
+.site-pin-wrap.is-selected .site-pin-core{background:#ef4444;width:32px;height:32px;animation:sitePinBounce 1.1s ease-in-out infinite}
+.site-pin-wrap.is-selected .site-pin-core::after{width:11px;height:11px}
+.site-pin-pulse{display:none}
+.site-pin-wrap.is-selected .site-pin-pulse{display:block;position:absolute;top:-2px;width:40px;height:40px;border-radius:50%;background:rgba(47,140,255,.35);border:2px solid rgba(56,189,248,.92);animation:sitePinPulse 1.55s ease-out infinite;z-index:1;pointer-events:none}
+.site-pin-label{margin-top:5px;padding:2px 7px;border-radius:999px;background:rgba(9,21,44,.9);color:#fff;font-size:10px;font-weight:700;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis;border:1px solid rgba(255,255,255,.28);box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.site-pin-wrap.is-selected .site-pin-label{background:#1e6cf2;border-color:#fff;font-size:11px}
+@keyframes sitePinBounce{0%,100%{transform:rotate(-45deg) translate(0,0) scale(1)}50%{transform:rotate(-45deg) translate(5px,-5px) scale(1.1)}}
+@keyframes sitePinPulse{0%{transform:scale(.6);opacity:.95}100%{transform:scale(2.15);opacity:0}}
 .item.unread-notice{border-left:4px solid var(--cyan);box-shadow:0 0 18px rgba(47,140,255,.32)}
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 .stat,.tile{padding:14px 10px;text-align:center;cursor:pointer;position:relative;overflow:hidden}
@@ -191,7 +227,7 @@ th,td{padding:9px 8px;border:1px solid rgba(47,140,255,.18);text-align:left;font
 th{background:rgba(47,140,255,.08);color:#8ea6cc;text-transform:uppercase;font-size:11px;font-weight:600}
 td{color:#e8f0ff}
 .dtr-tabs{display:flex;gap:8px;margin:0 0 12px}
-.dtr-paper{background:#fff;color:#000;border:0;padding:8px;width:100%;max-width:1000px;aspect-ratio:17/11;margin:0 auto 12px;overflow:auto;border-radius:4px;box-shadow:0 12px 40px rgba(0,0,0,.45)}
+.dtr-paper{background:#fff;color:#000;border:0;padding:14px;width:100%;max-width:100%;min-height:420px;margin:0 auto 12px;overflow:visible;border-radius:4px;box-shadow:0 12px 40px rgba(0,0,0,.45)}
 .dp-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:11px;font-weight:700;background:#fff!important;border-radius:0!important;box-shadow:none!important;border:1px solid #000!important}
 .dp-table th,.dp-table td{border:1px solid #000!important;padding:4px 3px;text-align:center;overflow-wrap:anywhere;color:#000!important;background:#fff!important}
 .dp-table tr.clickable:hover td{background:#f0f6ff!important}
@@ -202,7 +238,7 @@ td{color:#e8f0ff}
 .dp-employee-sign img{display:block;width:190px;height:68px;object-fit:contain;margin:0 auto -22px;position:relative;z-index:2;border:0}
 .dp-employee-name{position:relative;z-index:1;font-weight:bold;font-size:13px;margin-top:2px;padding-bottom:4px;border-bottom:3px double #000;color:#000}
 .dp-employee-caption{font-weight:bold;font-style:italic;font-size:11px;margin-top:4px;color:#000}
-.dtr-actions{display:flex;gap:8px;max-width:1000px;margin:0 auto}
+.dtr-actions{display:flex;gap:8px;max-width:100%;margin:0 auto}
 .dtr-actions button{flex:1;white-space:normal}
 .dtr-sign{background:#fff;border-radius:6px;border:1px solid var(--border);max-width:100%}
 #signaturePhotoPreview{background:repeating-conic-gradient(#e5e7eb 0% 25%,#ffffff 0% 50%) 50%/12px 12px;border:1px solid var(--border);border-radius:6px;padding:4px}
@@ -476,9 +512,15 @@ body.compact nav.bottom button span{font-size:16px}
   .row{grid-template-columns:1fr;gap:0}
   .ls-grid{grid-template-columns:1fr;gap:12px}
   .title{font-size:19px}
-  .dtr-paper{overflow-x:auto}
-  .dp-table{min-width:760px}
-  .dp-employee-sign{min-width:240px}
+  .dtr-paper{padding:8px;min-height:0;overflow:visible}
+  .dp-table{min-width:0;font-size:clamp(8.5px,2.3vw,11px)}
+  .dp-table th,.dp-table td{padding:3px 2px}
+  .dp-table .dp-sheet-title{font-size:clamp(11px,3.4vw,18px)!important;padding:4px 2px}
+  .dp-col-head th{font-size:clamp(8px,2.1vw,11px)!important}
+  .dp-employee-sign{width:55%;min-width:160px}
+  .dp-employee-sign img{width:130px;height:48px;margin-bottom:-16px}
+  .dp-employee-name{font-size:11px}
+  .dp-employee-caption{font-size:9.5px}
 }
 @media(max-width:380px){
   .grid{grid-template-columns:1fr 1fr}
@@ -549,6 +591,16 @@ body.light .deco-band{filter:saturate(.95)}
 body.light .settings-subpanel{background:rgba(30,108,242,.04)}
 body.light #liveClock{color:#0f1f3d}
 body.light #liveWeather{color:#1e6cf2}
+body.light .site-thumb-empty{background:rgba(30,108,242,.06);border-color:rgba(30,108,242,.3);color:#4a5a78}
+body.light .site-dist-badge{background:rgba(22,163,74,.12);border-color:rgba(22,163,74,.4);color:#15803d}
+body.light .site-dist-badge.muted-dist{background:rgba(30,108,242,.08);border-color:rgba(30,108,242,.26);color:#1d4f9c}
+body.light .site-map-search-results{background:#ffffff;border-color:rgba(30,108,242,.26);box-shadow:0 10px 24px rgba(19,35,63,.16)}
+body.light .site-map-search-item{color:#0f1f3d;border-bottom-color:rgba(30,108,242,.12)}
+body.light .site-map-search-item:hover{background:rgba(30,108,242,.08)}
+body.light .site-map-layer-toggle{background:rgba(255,255,255,.94);border-color:rgba(30,108,242,.28)}
+body.light .site-map-layer-toggle button{color:#1d4f9c}
+body.light .site-map-layer-toggle button.active{background:#1e6cf2;color:#ffffff}
+body.light .add-site-pin-map{background:#e6ecf5;border-color:rgba(30,108,242,.28)}
 
 /* ===== FONT FAMILY, WEIGHT & ALL FONT STYLES ===== */
 *:not(svg):not(svg *){font-family:inherit!important}
@@ -625,7 +677,7 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
         <div class="field"><label for="regArea">Area / Region</label><select id="regArea" required><option value="">Select area</option><option>Visayas</option><option>Luzon</option><option>Mindanao</option></select></div>
         <div class="field"><label for="regEmail">Email</label><input id="regEmail" type="email" autocomplete="email" required></div>
         <div class="field"><label for="regPassword">Password</label><input id="regPassword" type="password" minlength="8" autocomplete="new-password" required></div>
-        <div class="field"><label for="regRole">Requested designation</label><select id="regRole" required><option value="technician">Technician</option><option value="representative">Selective Representative</option></select></div>
+        <div class="field"><label for="regRole">Designation</label><select id="regRole" required><option value="employee" selected>Employee</option></select></div>
         <button id="registerButton" class="btn full" type="submit">Submit registration</button>
         <button id="backLoginButton" class="gray full" type="button">Back to log in</button>
       </form>
@@ -831,10 +883,7 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
       <h2>Quick access</h2>
       <div class="grid">
         <div class="tile clickable admin-only hidden" onclick="go('admin')"><span class="ic">⚙️</span>Admin</div>
-        <div class="tile clickable admin-only hidden" onclick="go('live-map')"><span class="ic">🗺️</span>Live Map</div>
-        <div class="tile clickable" onclick="go('units')"><span class="ic">🛗</span>Units</div>
-        <div class="tile clickable" onclick="go('reports')"><span class="ic">📄</span>Reports</div>
-        <div class="tile clickable" onclick="go('schedule')"><span class="ic">📅</span>Schedule</div>
+        <div class="tile clickable manager-only hidden" onclick="go('live-map')"><span class="ic">🗺️</span>Live Map</div>
         <div class="tile clickable" onclick="go('sites')"><span class="ic">📍</span>Sites</div>
         <div class="tile clickable" onclick="go('dtr')"><span class="ic">⏰</span>DTR</div>
         <div class="tile clickable" onclick="go('dtr');dtrTab('time_log')"><span class="ic">📸</span>Time In / Out</div>
@@ -844,7 +893,7 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
       </div>
     </div></section>
 
-    <section class="page hidden" id="page-members"><div class="ct">
+    <section class="page manager-only hidden" id="page-members"><div class="ct">
       <h1 class="title">👥 Members</h1>
       <div id="members"></div>
     </div></section>
@@ -876,26 +925,7 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
     <section class="page hidden" id="page-schedule"><div class="ct">
       <div class="site-header">
         <h1 class="title">📅 Schedule</h1>
-        <button class="btn manager-only hidden" type="button" id="toggleScheduleFormBtn" style="font-size:20px;width:44px;padding:0;display:grid;place-items:center;">＋</button>
-      </div>
-      <div id="scheduleFormCard" class="card hidden">
-        <div class="field"><label for="schRegion">Region</label><select id="schRegion" onchange="renderScheduleSiteOptions();renderAssigneesPicker()"><option>Visayas</option><option>Luzon</option><option>Mindanao</option></select></div>
-        <div class="row">
-          <div class="field"><label for="schSite">Work site (connected)</label><select id="schSite"><option value="">Select work site (optional)</option></select></div>
-          <div class="field"><label for="schUnit">Unit (connected)</label><select id="schUnit"><option value="">General / All Units</option></select></div>
-        </div>
-        <div class="field"><label for="schTitle">Job / site</label><input id="schTitle"></div>
-        <div class="row">
-          <div class="field"><label for="schDate">Date</label><input id="schDate" type="date"></div>
-          <div class="field"><label for="schPriority">Priority</label><select id="schPriority"><option>Normal</option><option>High</option><option>Urgent</option></select></div>
-        </div>
-        <div class="row">
-          <div class="field"><label for="schIn">Time in</label><input id="schIn" type="time"></div>
-          <div class="field"><label for="schOut">Time out</label><input id="schOut" type="time"></div>
-        </div>
-        <div class="field"><label>Assign Personnel (Multi-select categorized by Region / Team)</label><div id="assigneesPicker" class="person-picker"></div></div>
-        <div class="field"><label for="schNotes">Notes</label><textarea id="schNotes"></textarea></div>
-        <button class="btn" type="button" onclick="saveSchedule()">Save schedule</button>
+        <button class="btn manager-only hidden" type="button" id="toggleScheduleFormBtn" style="font-size:20px;width:44px;padding:0;display:grid;place-items:center;" aria-label="Add schedule">＋</button>
       </div>
       <div id="scheduleList"></div>
     </div></section>
@@ -904,27 +934,6 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
       <div class="site-header">
         <h1 class="title">🛗 Units</h1>
         <button class="btn" type="button" id="toggleUnitFormBtn" style="font-size:20px;width:44px;padding:0;display:grid;place-items:center;" aria-label="Add unit">＋</button>
-      </div>
-      <div id="unitFormCard" class="card hidden">
-        <h2 id="unitFormTitle" style="margin-top:0">Add unit</h2>
-        <div class="field"><label for="unitSite">Work site</label><select id="unitSite" required><option value="">Select a work site</option></select></div>
-        <div class="row">
-          <div class="field"><label for="unitName">Unit name / No.</label><input id="unitName" placeholder="e.g. Passenger Elevator 1"></div>
-          <div class="field"><label for="unitType">Unit type</label><select id="unitType"><option value="elevator">Elevator</option><option value="escalator">Escalator</option><option value="moving-walkway">Moving Walkway</option><option value="dumbwaiter">Dumbwaiter</option></select></div>
-        </div>
-        <div class="row">
-          <div class="field"><label for="unitStatus">Status</label><select id="unitStatus"><option>Operational</option><option>Under Maintenance</option><option>Needs Repair</option><option>Shutdown</option></select></div>
-          <div class="field"><label for="unitBrand">Brand / Model</label><input id="unitBrand" placeholder="e.g. Mitsubishi / Kone"></div>
-        </div>
-        <div class="row">
-          <div class="field"><label for="unitSerial">Serial / Permit No.</label><input id="unitSerial"></div>
-          <div class="field"><label for="unitCapacity">Floors / Capacity</label><input id="unitCapacity" placeholder="e.g. 12F / 1000kg"></div>
-        </div>
-        <div class="field"><label for="unitNotes">Notes</label><textarea id="unitNotes"></textarea></div>
-        <div class="inline-actions">
-          <button class="btn" type="button" onclick="saveUnit()">Save unit</button>
-          <button class="gray" type="button" onclick="cancelUnitForm()">Cancel</button>
-        </div>
       </div>
       <div class="tabs" id="unitsRegionTabs">
         <button class="tab active" type="button" data-units-region="ALL">All Regions</button>
@@ -1095,13 +1104,30 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
         <h1 class="title">📍 Work sites</h1>
         <button class="btn manager-only hidden" type="button" id="openAddSite">Add site</button>
       </div>
-      <div id="siteMapCard" class="card">
-        <h2 id="siteMapTitle" style="margin-top:0">Sites Map</h2>
-        <div id="siteGoogleMap" class="map"></div>
-        <p id="siteMapStatus" class="muted" style="margin:6px 0 0;">Tap "View on Map" on any site below to center the map and load directions.</p>
-        <div id="siteMapDirections" style="margin-top:10px;"></div>
+      <div class="card site-filters-card">
+        <div class="site-filter-label">Region</div>
+        <div id="sitesRegionTabs" class="site-filter-row" role="group" aria-label="Filter sites by region">
+          <button class="chip active" type="button" data-sites-region="ALL">All Regions</button>
+          <button class="chip" type="button" data-sites-region="Luzon">Luzon</button>
+          <button class="chip" type="button" data-sites-region="Visayas">Visayas</button>
+          <button class="chip" type="button" data-sites-region="Mindanao">Mindanao</button>
+        </div>
+        <div class="site-filter-label" style="margin-top:10px;">Status</div>
+        <div id="sitesStatusTabs" class="site-filter-row" role="group" aria-label="Filter sites by status">
+          <button class="chip active" type="button" data-sites-status="ALL">All Statuses</button>
+          <button class="chip" type="button" data-sites-status="Operational">Operational</button>
+          <button class="chip" type="button" data-sites-status="Under Maintenance">Under Maintenance</button>
+          <button class="chip" type="button" data-sites-status="Needs Repair">Needs Repair</button>
+          <button class="chip" type="button" data-sites-status="Shutdown">Shutdown</button>
+          <button class="chip" type="button" data-sites-status="Completed">Completed</button>
+        </div>
       </div>
-      <h2>All sites</h2><div id="siteList"></div>
+      <div class="site-header" style="margin:6px 0 10px;">
+        <h2 style="margin:0;">All sites <span id="siteFilterCount" class="muted" style="font-size:13px;font-weight:600;"></span></h2>
+        <button id="refreshSiteDistancesBtn" class="gray small-btn" type="button">🚗 Refresh Distances</button>
+      </div>
+      <input id="siteThumbFile" type="file" class="sr-file-input" accept="image/*">
+      <div id="siteList"></div>
     </div></section>
 
     <section class="page hidden" id="page-dtr"><div class="ct">
@@ -1129,9 +1155,9 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
             <div class="field"><label for="dtrIn">Time in</label><input id="dtrIn" type="time"></div>
             <div class="field"><label for="dtrOut">Time out</label><input id="dtrOut" type="time"></div>
           </div>
-          <div class="field manager-only hidden">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-              <input type="checkbox" id="dtrOvertimeApproved" style="width:auto;"> Overtime Approved by Manager/Admin
+          <div class="field">
+            <label style="display:flex;align-items:center;gap:8px;cursor:default;">
+              <input type="checkbox" id="dtrOvertimeApproved" checked disabled style="width:auto;"> Overtime Approved by Manager/Admin (Always Approved)
             </label>
           </div>
           <div class="inline-actions">
@@ -1189,7 +1215,7 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
         </div>
       </div>
       <div id="dtrPreview" class="hidden">
-        <div class="row" style="max-width:1000px;margin:0 auto 10px;">
+        <div class="row" style="max-width:100%;margin:0 auto 10px;">
           <div class="field">
             <label for="dtrPreviewCutoff">Half-Sheet Cutoff Period (11–25 / 26–10)</label>
             <select id="dtrPreviewCutoff"></select>
@@ -1203,7 +1229,7 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
         <div class="dtr-actions">
           <button class="green" type="button" onclick="downloadDtr()">📷 Download &amp; Share JPEG</button>
           <button class="btn" type="button" onclick="printDtr()">🖨️ Print DTR</button>
-          <button class="gray" type="button" onclick="exportData('dtr',{format:'pdf'})">📑 Full History PDF</button>
+          <button class="gray" type="button" onclick="exportData('dtr',{format:'pdf',clearAfter:true})">📑 Full History PDF</button>
         </div>
         <p class="muted" id="dtrExportHint"></p>
       </div>
@@ -1247,8 +1273,15 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
     <section class="page hidden" id="page-admin"><div class="ct">
       <h1 class="title">⚙️ Admin</h1>
       <div class="card">
-        <p class="muted" style="margin-top:0">Approve new accounts from the <b>Pending</b> page. Change designations and areas below — changes apply immediately on the member's device.</p>
+        <p class="muted" style="margin-top:0">Approve new accounts from the <b>Pending</b> page. Manage roles, remove access, or delete accounts below — changes apply immediately on the member's device.</p>
         <button class="btn" type="button" onclick="go('pending')">Open pending registrations</button>
+      </div>
+      <div class="tabs" id="adminRoleTabs">
+        <button type="button" class="tab active" data-admin-role="all" onclick="setAdminRoleFilter('all')">All</button>
+        <button type="button" class="tab" data-admin-role="admin" onclick="setAdminRoleFilter('admin')">Administrator</button>
+        <button type="button" class="tab" data-admin-role="representative" onclick="setAdminRoleFilter('representative')">Selective Representative</button>
+        <button type="button" class="tab" data-admin-role="technician" onclick="setAdminRoleFilter('technician')">Technician</button>
+        <button type="button" class="tab" data-admin-role="employee" onclick="setAdminRoleFilter('employee')">Employee</button>
       </div>
       <div id="adminList"></div>
     </div></section>
@@ -1305,50 +1338,6 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
         <div class="card">
           <h2 style="margin-top:0">Annual leave balance</h2>
           <div id="leavePageBalances"><p class="muted">Loading balances…</p></div>
-        </div>
-        <div id="leaveFormCard" class="card hidden">
-          <h2 style="margin-top:0">Application for Leave</h2>
-          <div class="row">
-            <div class="field"><label for="leaveFilingDate">Date of Filing</label><input id="leaveFilingDate" type="date"></div>
-            <div class="field"><label for="leaveType">Type of Leave</label><select id="leaveType"><option value="vacation">Vacation</option><option value="sick">Sick</option><option value="emergency">Emergency</option><option value="others">Others (Specify)</option></select></div>
-          </div>
-          <div class="row">
-            <div class="field"><label for="leaveLastName">Last Name</label><input id="leaveLastName" placeholder="Last name"></div>
-            <div class="field"><label for="leaveFirstName">First Name</label><input id="leaveFirstName" placeholder="First name"></div>
-          </div>
-          <div class="row">
-            <div class="field"><label for="leaveMiddleName">Middle Name</label><input id="leaveMiddleName" placeholder="Middle name"></div>
-            <div class="field"><label for="leaveWorkingDays">No. of Working Days Applied For</label><input id="leaveWorkingDays" placeholder="e.g. 2"></div>
-          </div>
-          <div class="field"><label for="leaveOthersSpecify">Others (Specify — if applicable)</label><input id="leaveOthersSpecify" placeholder="Specify leave type"></div>
-          <div class="card" style="padding:12px;margin-bottom:12px;">
-            <b style="font-size:12px;display:block;margin-bottom:6px;">WHERE LEAVE WILL BE SPENT</b>
-            <div class="field" style="margin-bottom:8px;">
-              <label for="leaveVacationPlace">(1) In Case of Vacation Leave</label>
-              <select id="leaveVacationPlace">
-                <option value="">Select location (optional)</option>
-                <option value="within">Within Metro Manila</option>
-                <option value="outside">Outside Metro Manila (Specify below)</option>
-              </select>
-            </div>
-            <div class="field" style="margin-bottom:8px;"><label for="leaveOutsideSpecify">Outside Metro Manila (Specify)</label><input id="leaveOutsideSpecify" placeholder="e.g. Cebu City"></div>
-            <label class="check-row"><input id="leaveInHospital" type="checkbox"> (2) In Case of Sick Leave — In Hospital</label>
-            <div class="field" style="margin-bottom:0;"><label for="leaveHospitalSpecify">Hospital / Confinement Details (Specify)</label><input id="leaveHospitalSpecify" placeholder="Hospital name / home rest"></div>
-          </div>
-          <div class="row">
-            <div class="field"><label for="leaveStart">Inclusive Date From</label><input id="leaveStart" type="date"></div>
-            <div class="field"><label for="leaveEnd">Inclusive Date To</label><input id="leaveEnd" type="date"></div>
-          </div>
-          <div class="field"><label for="leaveApplicantName">Applicant Printed Name</label><input id="leaveApplicantName" placeholder="Full name for signature line"></div>
-          <div class="field"><label for="leaveReason">Reason / Remarks</label><textarea id="leaveReason" maxlength="1000"></textarea></div>
-          <div class="inline-actions">
-            <button class="btn" type="button" onclick="submitLeaveRequest()">Submit request</button>
-            <button class="gray" type="button" onclick="openLeaveSheetPreview()">📄 Preview Form</button>
-            <button id="cancelLeaveFormBtn" class="gray" type="button">Cancel</button>
-          </div>
-          <p id="leaveDaysPreview" class="muted"></p>
-          <p id="leaveFormStatus" class="muted" role="status"></p>
-          <p class="muted">Every day from start date to end date counts toward your selected leave once approved.</p>
         </div>
         <div class="card">
           <h2 style="margin-top:0">My leave requests</h2>
@@ -1465,7 +1454,7 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
     <section class="page hidden" id="page-live-map">
       <div class="ct">
         <h1 class="title">🗺️ Live employee locations</h1>
-        <p class="muted">Administrators only. Refreshes every 10 seconds. Green dot = updated in the last 5 minutes, grey = stale. Monitors Technicians, Selective Representatives &amp; Employees.</p>
+        <p class="muted">Administrators &amp; Selective Representatives. Refreshes every 10 seconds. Green dot = updated in the last 5 minutes, grey = stale. Monitors Technicians, Selective Representatives &amp; Employees.</p>
         <div class="tabs" style="margin-bottom:8px;">
           <button type="button" class="tab active" data-livemap-filter="all" onclick="setLiveMapFilter('all')">All Staff</button>
           <button type="button" class="tab" data-livemap-filter="live" onclick="setLiveMapFilter('live')">🟢 Live Only</button>
@@ -1481,6 +1470,13 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
           </div>
           <button type="button" class="gray small-btn" onclick="fitLiveMapAll()">Fit all</button>
           <button type="button" class="gray small-btn" onclick="loadLiveMap({ fit: false })">Refresh now</button>
+        </div>
+        <div id="liveOnlineMembersCard" class="card" style="padding:12px;margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+            <h2 style="margin:0;font-size:15px;">🟢 Online Members (<span id="liveOnlineCount">0</span>)</h2>
+            <span class="muted" style="font-size:11px;">Tap a member to go to their location</span>
+          </div>
+          <div id="liveOnlineMembersList" style="max-height:210px;overflow-y:auto;"></div>
         </div>
         <div class="card" style="padding:8px"><div id="liveMap"></div></div>
         <p id="liveLocationStatus" class="muted"></p>
@@ -1589,14 +1585,38 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
 </div>
 
 <div id="addSiteOverlay" class="dialog hidden" role="dialog" aria-modal="true" aria-labelledby="addSiteTitle">
-  <div class="card">
+  <div class="card" style="max-height:90dvh;overflow-y:auto;">
     <h2 id="addSiteTitle">Add site</h2>
-    <div class="field"><label for="siteName">Site name</label><input id="siteName"></div>
-    <div class="field"><label for="siteAddress">Address / map search</label><input id="siteAddress"></div>
+    <div class="field"><label for="siteName">Site name (auto-fills address &amp; pin)</label><input id="siteName" autocomplete="off" placeholder="e.g. Ayala Center Cebu, SM City Cebu"></div>
+    <div class="field" id="addSiteSearchWrap" style="position:relative;">
+      <label for="siteAddress">Address / map search</label>
+      <div class="site-map-search-bar">
+        <input id="siteAddress" type="search" autocomplete="off" placeholder="Search address or place name…">
+        <button id="autoLocateSiteBtn" class="gray small-btn" type="button" title="Auto-fill address and pin from site name or address">📍 Auto-Fill</button>
+        <button id="useMyGpsSiteBtn" class="gray small-btn" type="button" title="Pin current GPS location">📡 My GPS</button>
+      </div>
+      <div id="addSiteSearchResults" class="site-map-search-results hidden" role="listbox" aria-label="Site address suggestions"></div>
+    </div>
+    <div id="addSitePinMap" class="add-site-pin-map"></div>
+    <p id="addSitePinStatus" class="muted" style="margin:0 0 10px;font-size:12px;">Type a site name or address to auto-fill address &amp; drop pin (tap or drag pin on map to adjust).</p>
     <div class="field"><label for="siteRegion">Area</label><select id="siteRegion"><option>Visayas</option><option>Luzon</option><option>Mindanao</option></select></div>
-    <div class="field"><label for="siteCity">City / Province</label><input id="siteCity"></div>
+    <div class="field"><label for="siteCity">City / Province</label><input id="siteCity" placeholder="Auto-filled from map pin"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <div class="field"><label for="siteLat">Latitude (auto-filled)</label><input id="siteLat" type="number" step="any" placeholder="e.g. 10.3292"></div>
+      <div class="field"><label for="siteLng">Longitude (auto-filled)</label><input id="siteLng" type="number" step="any" placeholder="e.g. 123.9056"></div>
+    </div>
+    <div class="field"><label for="siteStatus">Status</label><select id="siteStatus"><option>Operational</option><option>Under Maintenance</option><option>Needs Repair</option><option>Shutdown</option><option>Completed</option></select></div>
+    <div class="field">
+      <label>Work site picture (auto-added or upload custom)</label>
+      <div id="addSiteAutoThumbWrap" style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <img id="addSiteThumbPreview" class="site-thumb hidden" alt="Work site picture preview" style="width:78px;height:58px;border-radius:10px;object-fit:cover;flex-shrink:0;">
+        <span id="addSiteThumbNote" class="muted" style="font-size:12px;">A picture is automatically added from Places / landmark photo or map pin when you enter a site name.</span>
+      </div>
+      <input id="siteAutoThumbUrl" type="hidden" value="">
+      <input id="siteAddThumb" type="file" accept="image/*" aria-label="Optional custom work site picture">
+    </div>
     <div class="inline-actions">
-      <button class="btn" type="button" onclick="addSite()">Add site</button>
+      <button class="btn" id="submitAddSiteBtn" type="button" onclick="addSite()">Add site</button>
       <button class="gray" type="button" id="cancelAddSite">Cancel</button>
     </div>
   </div>
@@ -1663,6 +1683,33 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
   </div>
 </div>
 
+<div id="unitFormOverlay" class="dialog hidden" style="z-index:342;overflow:auto;" role="dialog" aria-modal="true" aria-labelledby="unitFormTitle">
+  <div class="card" style="width:min(560px,100%);max-height:90vh;overflow:auto;">
+    <div class="site-header" style="margin-bottom:10px;">
+      <h2 id="unitFormTitle" style="margin:0;">➕ Add unit</h2>
+      <button class="gray small-btn" type="button" onclick="cancelUnitForm()">✕ Close</button>
+    </div>
+    <div class="field"><label for="unitSite">Work site</label><select id="unitSite" required><option value="">Select a work site</option></select></div>
+    <div class="row">
+      <div class="field"><label for="unitName">Unit name / No.</label><input id="unitName" placeholder="e.g. Passenger Elevator 1"></div>
+      <div class="field"><label for="unitType">Unit type</label><select id="unitType"><option value="elevator">Elevator</option><option value="escalator">Escalator</option><option value="moving-walkway">Moving Walkway</option><option value="dumbwaiter">Dumbwaiter</option></select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label for="unitStatus">Status</label><select id="unitStatus"><option>Operational</option><option>Under Maintenance</option><option>Needs Repair</option><option>Shutdown</option></select></div>
+      <div class="field"><label for="unitBrand">Brand / Model</label><input id="unitBrand" placeholder="e.g. Mitsubishi / Kone"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label for="unitSerial">Serial / Permit No.</label><input id="unitSerial"></div>
+      <div class="field"><label for="unitCapacity">Floors / Capacity</label><input id="unitCapacity" placeholder="e.g. 12F / 1000kg"></div>
+    </div>
+    <div class="field"><label for="unitNotes">Notes</label><textarea id="unitNotes" rows="3"></textarea></div>
+    <div class="inline-actions" style="justify-content:flex-end;">
+      <button class="gray" type="button" onclick="cancelUnitForm()">Cancel</button>
+      <button class="btn" type="button" onclick="saveUnit()">Save unit</button>
+    </div>
+  </div>
+</div>
+
 <div id="dtrEditOverlay" class="dialog hidden" style="z-index:345;overflow:auto;" role="dialog" aria-modal="true" aria-labelledby="dtrEditTitle">
   <div class="card" style="width:min(520px,100%);max-height:92vh;overflow:auto;">
     <h2 id="dtrEditTitle" style="margin-top:0;">✏️ Edit DTR Entry</h2>
@@ -1679,8 +1726,8 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
       <div class="field"><label for="editDtrIn">Time Start</label><input id="editDtrIn" type="time"></div>
       <div class="field"><label for="editDtrOut">Time End</label><input id="editDtrOut" type="time"></div>
     </div>
-    <div id="editDtrOvertimeWrap" class="field hidden">
-      <label class="check-row"><input id="editDtrOvertimeApproved" type="checkbox"> Overtime Approved</label>
+    <div id="editDtrOvertimeWrap" class="field">
+      <label class="check-row" style="cursor:default;"><input id="editDtrOvertimeApproved" type="checkbox" checked disabled> Overtime Approved (Always Approved)</label>
     </div>
     <div class="inline-actions" style="justify-content:flex-end;">
       <button class="gray" type="button" onclick="closeEditDtr()">Cancel</button>
@@ -1761,6 +1808,135 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
       <button class="gray small-btn" type="button" onclick="stepStoryViewer(-1)">◀ Previous</button>
       <button class="btn small-btn" type="button" onclick="stepStoryViewer(1)">Next ▶</button>
     </div>
+  </div>
+</div>
+
+<div id="siteUnitsOverlay" class="dialog hidden" style="z-index:338;overflow:auto;" role="dialog" aria-modal="true" aria-labelledby="siteUnitsOverlayTitle">
+  <div class="card" style="width:min(680px,100%);max-height:92vh;overflow-y:auto;">
+    <div class="site-header" style="margin-bottom:8px;">
+      <h2 id="siteUnitsOverlayTitle" style="margin:0;">🛗 Site Units</h2>
+      <div class="inline-actions" style="margin-top:0;">
+        <button id="siteUnitsOverlayMapBtn" class="gray small-btn" type="button">📍 View on Map</button>
+        <button id="siteUnitsOverlayAddBtn" class="btn small-btn" type="button">➕ Add Unit</button>
+        <button class="gray small-btn" type="button" onclick="closeSiteUnitsOverlay()">✕ Close</button>
+      </div>
+    </div>
+    <div id="siteUnitsOverlayMeta" class="muted" style="margin-bottom:10px;"></div>
+    <div id="siteUnitsOverlayBody"></div>
+  </div>
+</div>
+
+<div id="siteMapOverlay" class="dialog hidden" style="z-index:341;overflow:auto;" role="dialog" aria-modal="true" aria-labelledby="siteMapTitle">
+  <div id="siteMapCard" class="card" style="width:min(760px,100%);max-height:92vh;overflow-y:auto;">
+    <div class="site-header" style="margin-bottom:10px;">
+      <h2 id="siteMapTitle" style="margin:0;">Sites Map</h2>
+      <button class="gray small-btn" type="button" onclick="closeSiteMapOverlay()">✕ Close</button>
+    </div>
+    <div id="siteMapSearchWrap" class="site-map-search-wrap">
+      <div class="site-map-search-bar">
+        <input id="siteMapSearchInput" type="search" autocomplete="off" placeholder="Search site address or place (Google Places)…" aria-label="Search site address on map">
+        <button id="siteMapSearchClearBtn" class="gray small-btn hidden" type="button" aria-label="Clear address search">✕</button>
+      </div>
+      <div id="siteMapSearchResults" class="site-map-search-results hidden" role="listbox" aria-label="Address suggestions"></div>
+    </div>
+    <div id="siteGoogleMapWrap" class="site-map-wrap">
+      <div id="siteMapLayerToggle" class="site-map-layer-toggle" role="group" aria-label="Map layer view">
+        <button type="button" class="active" data-site-map-layer="roadmap">🗺️ Roadmap</button>
+        <button type="button" data-site-map-layer="satellite">🛰️ Satellite</button>
+      </div>
+      <div id="siteGoogleMap" class="map"></div>
+    </div>
+    <p id="siteMapStatus" class="muted" style="margin:6px 0 0;">Tap "View on Map" on any site to center the map and load directions.</p>
+    <div id="siteMapDirections" style="margin-top:10px;"></div>
+  </div>
+</div>
+
+<div id="leaveFormOverlay" class="dialog hidden" style="z-index:343;overflow:auto;" role="dialog" aria-modal="true" aria-labelledby="leaveFormTitle">
+  <div id="leaveFormCard" class="card" style="width:min(640px,100%);max-height:92vh;overflow-y:auto;">
+    <div class="site-header" style="margin-bottom:10px;">
+      <h2 id="leaveFormTitle" style="margin:0;">Application for Leave</h2>
+      <button class="gray small-btn" type="button" onclick="closeLeaveFormOverlay()">✕ Close</button>
+    </div>
+    <div class="row">
+      <div class="field"><label for="leaveFilingDate">Date of Filing</label><input id="leaveFilingDate" type="date"></div>
+      <div class="field"><label for="leaveType">Type of Leave</label><select id="leaveType"><option value="vacation">Vacation</option><option value="sick">Sick</option><option value="emergency">Emergency</option><option value="others">Others (Specify)</option></select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label for="leaveLastName">Last Name</label><input id="leaveLastName" placeholder="Last name"></div>
+      <div class="field"><label for="leaveFirstName">First Name</label><input id="leaveFirstName" placeholder="First name"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label for="leaveMiddleName">Middle Name</label><input id="leaveMiddleName" placeholder="Middle name"></div>
+      <div class="field"><label for="leaveWorkingDays">No. of Working Days Applied For</label><input id="leaveWorkingDays" placeholder="e.g. 2"></div>
+    </div>
+    <div class="field"><label for="leaveOthersSpecify">Others (Specify — if applicable)</label><input id="leaveOthersSpecify" placeholder="Specify leave type"></div>
+    <div class="card" style="padding:12px;margin-bottom:12px;">
+      <b style="font-size:12px;display:block;margin-bottom:6px;">WHERE LEAVE WILL BE SPENT</b>
+      <div class="field" style="margin-bottom:8px;">
+        <label for="leaveVacationPlace">(1) In Case of Vacation Leave</label>
+        <select id="leaveVacationPlace">
+          <option value="">Select location (optional)</option>
+          <option value="within">Within Metro Manila</option>
+          <option value="outside">Outside Metro Manila (Specify below)</option>
+        </select>
+      </div>
+      <div class="field" style="margin-bottom:8px;"><label for="leaveOutsideSpecify">Outside Metro Manila (Specify)</label><input id="leaveOutsideSpecify" placeholder="e.g. Cebu City"></div>
+      <label class="check-row"><input id="leaveInHospital" type="checkbox"> (2) In Case of Sick Leave — In Hospital</label>
+      <div class="field" style="margin-bottom:0;"><label for="leaveHospitalSpecify">Hospital / Confinement Details (Specify)</label><input id="leaveHospitalSpecify" placeholder="Hospital name / home rest"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label for="leaveStart">Inclusive Date From</label><input id="leaveStart" type="date"></div>
+      <div class="field"><label for="leaveEnd">Inclusive Date To</label><input id="leaveEnd" type="date"></div>
+    </div>
+    <div class="field"><label for="leaveApplicantName">Applicant Printed Name</label><input id="leaveApplicantName" placeholder="Full name for signature line"></div>
+    <div class="field"><label for="leaveReason">Reason / Remarks</label><textarea id="leaveReason" maxlength="1000"></textarea></div>
+    <div class="inline-actions">
+      <button id="submitLeaveBtn" class="btn" type="button" onclick="submitLeaveRequest()">Submit request</button>
+      <button class="gray" type="button" onclick="openLeaveSheetPreview()">📄 Preview Form</button>
+      <button id="cancelLeaveFormBtn" class="gray" type="button" onclick="closeLeaveFormOverlay()">Cancel</button>
+    </div>
+    <p id="leaveDaysPreview" class="muted"></p>
+    <p id="leaveFormStatus" class="muted" role="status"></p>
+    <p class="muted">Every day from start date to end date counts toward your selected leave once approved.</p>
+  </div>
+</div>
+
+<div id="scheduleFormOverlay" class="dialog hidden" style="z-index:344;overflow:auto;" role="dialog" aria-modal="true" aria-labelledby="scheduleFormTitle">
+  <div id="scheduleFormCard" class="card" style="width:min(620px,100%);max-height:92vh;overflow-y:auto;">
+    <div class="site-header" style="margin-bottom:10px;">
+      <h2 id="scheduleFormTitle" style="margin:0;">📅 Add Schedule</h2>
+      <button class="gray small-btn" type="button" onclick="closeScheduleFormOverlay()">✕ Close</button>
+    </div>
+    <div class="field"><label for="schRegion">Region</label><select id="schRegion" onchange="renderScheduleSiteOptions();renderAssigneesPicker()"><option>Visayas</option><option>Luzon</option><option>Mindanao</option></select></div>
+    <div class="row">
+      <div class="field"><label for="schSite">Work site (connected)</label><select id="schSite"><option value="">Select work site (optional)</option></select></div>
+      <div class="field"><label for="schUnit">Unit (connected)</label><select id="schUnit"><option value="">General / All Units</option></select></div>
+    </div>
+    <div class="field"><label for="schTitle">Job / site</label><input id="schTitle"></div>
+    <div class="row">
+      <div class="field"><label for="schDate">Date</label><input id="schDate" type="date"></div>
+      <div class="field"><label for="schPriority">Priority</label><select id="schPriority"><option>Normal</option><option>High</option><option>Urgent</option></select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label for="schIn">Time in</label><input id="schIn" type="time"></div>
+      <div class="field"><label for="schOut">Time out</label><input id="schOut" type="time"></div>
+    </div>
+    <div class="field"><label>Assign Personnel (Multi-select categorized by Region / Team)</label><div id="assigneesPicker" class="person-picker"></div></div>
+    <div class="field"><label for="schNotes">Notes</label><textarea id="schNotes"></textarea></div>
+    <div class="inline-actions" style="justify-content:flex-end;">
+      <button class="gray" type="button" onclick="closeScheduleFormOverlay()">Cancel</button>
+      <button class="btn" type="button" onclick="saveSchedule()">Save schedule</button>
+    </div>
+  </div>
+</div>
+
+<div id="adminMemberOverlay" class="dialog hidden" style="z-index:346;overflow:auto;" role="dialog" aria-modal="true" aria-labelledby="adminMemberOverlayTitle">
+  <div class="card" style="width:min(500px,100%);max-height:92vh;overflow-y:auto;">
+    <div class="site-header" style="margin-bottom:10px;">
+      <h2 id="adminMemberOverlayTitle" style="margin:0;">⚙️ Manage Member</h2>
+      <button class="gray small-btn" type="button" onclick="closeAdminMemberOverlay()">✕ Close</button>
+    </div>
+    <div id="adminMemberOverlayBody"></div>
   </div>
 </div>
 

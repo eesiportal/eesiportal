@@ -85,6 +85,24 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
+function extractInteractionText(interaction: any): string {
+  if (typeof interaction?.output_text === "string" && interaction.output_text.trim()) {
+    return interaction.output_text.trim();
+  }
+  const steps = Array.isArray(interaction?.steps) ? interaction.steps : [];
+  let combined = "";
+  for (const step of steps) {
+    if (step?.type === "model_output" && Array.isArray(step?.content)) {
+      for (const part of step.content) {
+        if (part?.type === "text" && typeof part.text === "string") {
+          combined += part.text;
+        }
+      }
+    }
+  }
+  return combined.trim();
+}
+
 export default async function handler(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204 });
@@ -145,6 +163,15 @@ export default async function handler(req: Request): Promise<Response> {
       },
     },
   });
+  const aiBeta = new GoogleGenAI({
+    apiKey,
+    apiVersion: "v1beta",
+    httpOptions: {
+      headers: {
+        "User-Agent": "aistudio-build",
+      },
+    },
+  });
 
   const promptText =
     `You are verifying an employee ${modeLabel} check-in photo for a Daily Time Record (DTR) system.\n` +
@@ -157,77 +184,114 @@ export default async function handler(req: Request): Promise<Response> {
     `- If NO time digits or clock are visible anywhere in the photo, set hasVisibleTime=false, time24="", time12="", confidence="low", and explain in summary why no time could be read.\n` +
     `- NEVER invent or guess a time that is not visibly shown in the image.`;
 
-  const modelAttempts = ["gemini-4-hydrogen", "gemini-4-hydrogen", "gemini-3.1-flash-lite"];
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      hasVisibleTime: {
+        type: Type.BOOLEAN,
+        description: "True only if a clear time reading or timestamp watermark is visibly readable in the photo.",
+      },
+      time24: {
+        type: Type.STRING,
+        description: "Extracted time in 24-hour HH:MM format (e.g., 01:22, 08:05, or 17:30), or empty string if none visible.",
+      },
+      time12: {
+        type: Type.STRING,
+        description: "Extracted time in 12-hour format (e.g., 1:22 AM or 8:05 AM), or empty string if none visible.",
+      },
+      dateIso: {
+        type: Type.STRING,
+        description: "Visible date in YYYY-MM-DD format, or empty string if not visible.",
+      },
+      locationText: {
+        type: Type.STRING,
+        description: "Visible site name, address, or GPS overlay text, or empty string.",
+      },
+      confidence: {
+        type: Type.STRING,
+        description: "high, medium, or low confidence based on text legibility.",
+      },
+      summary: {
+        type: Type.STRING,
+        description: "Short plain-text summary describing what time/details were read from the photo.",
+      },
+    },
+    required: ["hasVisibleTime", "time24", "time12", "dateIso", "locationText", "confidence", "summary"],
+  };
+
+  const attempts: Array<{ kind: "interactions" | "generateContent"; model: string; timeoutMs: number }> = [
+    { kind: "interactions", model: "gemini-4-hydrogen", timeoutMs: 6000 },
+    { kind: "interactions", model: "gemini-3.1-flash-lite", timeoutMs: 7000 },
+    { kind: "generateContent", model: "gemini-3.1-flash-lite", timeoutMs: 9000 },
+    { kind: "generateContent", model: "gemini-4-hydrogen", timeoutMs: 10000 },
+  ];
   let lastErr: unknown = null;
 
-  for (let idx = 0; idx < modelAttempts.length; idx++) {
-    const modelName = modelAttempts[idx];
+  for (let idx = 0; idx < attempts.length; idx++) {
+    const attempt = attempts[idx];
     try {
-      const thinkingLevel =
-        modelName === "gemini-3.1-flash-lite" ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW;
-      const response = await withTimeout(
-        ai.models.generateContent({
-          model: modelName,
-          contents: {
-            parts: [
+      let rawText = "{}";
+      if (attempt.kind === "interactions") {
+        const interaction = await withTimeout(
+          aiBeta.interactions.create({
+            model: attempt.model,
+            store: false,
+            system_instruction:
+              "Extract exact visible timestamps and location overlays from employee DTR verification photos. Never fabricate unprinted times.",
+            input: [
               {
-                inlineData: {
-                  mimeType,
-                  data: cleanBase64,
-                },
+                type: "image",
+                data: cleanBase64,
+                mime_type: mimeType,
               },
               {
+                type: "text",
                 text: promptText,
               },
             ],
-          },
-          config: {
-            thinkingConfig: { thinkingLevel },
-            systemInstruction:
-              "Extract exact visible timestamps and location overlays from employee DTR verification photos. Never fabricate unprinted times.",
-            responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              hasVisibleTime: {
-                type: Type.BOOLEAN,
-                description: "True only if a clear time reading or timestamp watermark is visibly readable in the photo.",
-              },
-              time24: {
-                type: Type.STRING,
-                description: "Extracted time in 24-hour HH:MM format (e.g., 01:22, 08:05, or 17:30), or empty string if none visible.",
-              },
-              time12: {
-                type: Type.STRING,
-                description: "Extracted time in 12-hour format (e.g., 1:22 AM or 8:05 AM), or empty string if none visible.",
-              },
-              dateIso: {
-                type: Type.STRING,
-                description: "Visible date in YYYY-MM-DD format, or empty string if not visible.",
-              },
-              locationText: {
-                type: Type.STRING,
-                description: "Visible site name, address, or GPS overlay text, or empty string.",
-              },
-              confidence: {
-                type: Type.STRING,
-                description: "high, medium, or low confidence based on text legibility.",
-              },
-              summary: {
-                type: Type.STRING,
-                description: "Short plain-text summary describing what time/details were read from the photo.",
-              },
+            generation_config: {
+              thinking_level: attempt.model === "gemini-3.1-flash-lite" ? "minimal" : "low",
             },
-            required: ["hasVisibleTime", "time24", "time12", "dateIso", "locationText", "confidence", "summary"],
-          },
-        },
-      }),
-      18000,
-      `Gemini ${modelName}`
-    );
+            response_format: responseSchema as any,
+          }),
+          attempt.timeoutMs,
+          `Gemini Interactions ${attempt.model}`
+        );
+        rawText = extractInteractionText(interaction) || "{}";
+      } else {
+        const thinkingLevel = attempt.model === "gemini-3.1-flash-lite" ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW;
+        const response = await withTimeout(
+          ai.models.generateContent({
+            model: attempt.model,
+            contents: {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType,
+                    data: cleanBase64,
+                  },
+                },
+                {
+                  text: promptText,
+                },
+              ],
+            },
+            config: {
+              thinkingConfig: { thinkingLevel },
+              systemInstruction:
+                "Extract exact visible timestamps and location overlays from employee DTR verification photos. Never fabricate unprinted times.",
+              responseMimeType: "application/json",
+              responseSchema,
+            },
+          }),
+          attempt.timeoutMs,
+          `Gemini ${attempt.model}`
+        );
+        rawText = (response.text || "{}").trim();
+      }
 
-      const rawText = (response.text || "{}").trim();
-      const parsed = JSON.parse(rawText);
+      const jsonMatch = rawText.match(/```json\s*([\s\S]*?)\s*```/) || rawText.match(/(\{[\s\S]*\})/);
+      const parsed = JSON.parse(jsonMatch ? jsonMatch[1] : rawText);
       const rawTime = typeof parsed.time24 === "string" ? parsed.time24.trim() : "";
       const timeMatch = rawTime.match(/^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?$/);
       const normalizedHour = timeMatch ? Number(timeMatch[1]) : -1;
@@ -252,8 +316,13 @@ export default async function handler(req: Request): Promise<Response> {
     } catch (err: unknown) {
       lastErr = err;
       const info = parseGeminiError(err);
-      if (info.transient && idx < modelAttempts.length - 1) {
-        await sleep(700 * (idx + 1) + Math.floor(Math.random() * 250));
+      const canFallback =
+        info.transient ||
+        attempt.kind === "interactions" ||
+        info.httpStatus === 404 ||
+        /no longer available|not found|unsupported/i.test(info.message);
+      if (canFallback && idx < attempts.length - 1) {
+        await sleep(150);
         continue;
       }
       console.error("Netlify time photo analysis error:", err);

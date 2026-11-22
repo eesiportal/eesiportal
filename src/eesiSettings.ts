@@ -1102,11 +1102,31 @@ export function closeIosInstallModal(): void {
 
 export function initPwaInstall(): void {
   if (location.protocol.startsWith("http")) {
-    registerSW({
-      immediate: true,
-      onRegisteredSW() {},
-      onRegisterError() {},
-    });
+    if (import.meta.env.DEV) {
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.getRegistrations().then(regs => {
+          let evicted = false;
+          regs.forEach(reg => {
+            const url = reg.active?.scriptURL || reg.waiting?.scriptURL || reg.installing?.scriptURL || "";
+            if (url.includes("dev-sw") || url.includes("/sw.js")) {
+              evicted = true;
+              void reg.unregister();
+            }
+          });
+          if (evicted && "caches" in window) {
+            caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k)))).catch(() => {});
+          }
+        }).catch(() => {});
+        navigator.serviceWorker.register("/push-sw.js").catch(() => {});
+      }
+    } else {
+      const updateSW = registerSW({
+        immediate: true,
+        onNeedRefresh() { void updateSW(true); },
+        onRegisteredSW(_url, reg) { if (reg) void reg.update(); },
+        onRegisterError() {},
+      });
+    }
   }
   window.addEventListener("beforeinstallprompt", (e: Event) => {
     e.preventDefault();

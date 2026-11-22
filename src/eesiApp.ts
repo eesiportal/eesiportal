@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { createClient } from "@supabase/supabase-js";
 import {
   $,
   SUPABASE_PUBLISHABLE_KEY,
@@ -61,7 +62,9 @@ import {
   fitLiveMapAll,
   fitSiteMapRoute,
   focusLiveEmployee,
+  initAlwaysOnLocation,
   initDataListeners,
+  initSiteMapControls,
   initSitesMapOverview,
   loadAnnouncements,
   loadAppNotifications,
@@ -86,12 +89,16 @@ import {
   loadUnits,
   loadUnread,
   markNoticeRead,
+  refreshVisibleSiteDistances,
   reloadEverything,
+  renderLiveOnlineMembersList,
   resetDataLoadFlags,
   restoreLastView,
   saveLastView,
+  scheduleSiteMapLazyInit,
   setBasemap,
   setLiveMapFilter,
+  setSiteMapLayer,
   setSiteMapTravelMode,
   startEmployeeLocationSharing,
   startLive,
@@ -166,21 +173,29 @@ import {
   captureTimemarkPhoto,
   changePassword,
   checkUpcomingShiftReminders,
+  clearDtrAfterExport,
   clearDtrForm,
   clearPendingPmsFiles,
   clearPendingReportFiles,
   clearSignature,
   clearSignaturePhoto,
+  closeAdminMemberOverlay,
   closeChangePasswordModal,
   closeEditDtr,
+  closeLeaveFormOverlay,
   closeLeaveSheetPreview,
+  closeScheduleFormOverlay,
+  closeSiteMapOverlay,
+  closeSiteUnitsOverlay,
   closeTimemarkCamera,
   closeUnitManualOverlay,
+  deleteAdminMember,
   deleteTimeLog,
   deleteUnit,
   downloadDtr,
   downloadLeaveSheet,
   dtrTab,
+  editLeaveRequest,
   editUnit,
   ensureAmcbUnitsSeeded,
   flipTimemarkCamera,
@@ -188,12 +203,15 @@ import {
   initFeatureWiring,
   loadSavedDrawnSignature,
   loadSavedSignaturePhoto,
+  openAddLeaveModal,
   openAddUnitForSite,
   openEditDtr,
   openLeaveSheetPreview,
   openPmsChecklist,
   openQuickTimeAction,
+  openScheduleFormOverlay,
   openSiteOnMap,
+  openSiteUnitsOverlay,
   openTimemarkCamera,
   openUnitManual,
   openUnitPms,
@@ -202,6 +220,7 @@ import {
   printDtr,
   printLeaveSheet,
   refreshLeaveBalances,
+  removeAdminMember,
   removePhoto,
   renderAdmin,
   renderAll,
@@ -249,6 +268,7 @@ import {
   saveUnit,
   saveUnitManual,
   sendTimeLogNote,
+  setAdminRoleFilter,
   setTimeLogMode,
   submitChangePassword,
   submitLeaveRequest,
@@ -266,11 +286,11 @@ export type ExportKind = "reports" | "pms" | "dtr" | "recommendations";
 
 export function exportData(
   kind: ExportKind,
-  options: { format?: "xlsx" | "doc" | "pdf"; id?: string } = {}
+  options: { format?: "xlsx" | "doc" | "pdf"; id?: string; clearAfter?: boolean } = {}
 ): void {
   const format = options.format || "xlsx";
   if (format === "pdf") {
-    if (kind === "dtr") { void exportDtrHistoryPdf(); return; }
+    if (kind === "dtr") { void exportDtrHistoryPdf({ clearAfter: !!options.clearAfter }); return; }
   }
   if (format === "doc") {
     if (kind === "reports") { exportReports("doc", options.id); return; }
@@ -386,7 +406,7 @@ export function exportData(
     colWidths = [14, 24, 20, 26, 36, 12, 12, 14, 14];
     rows = list.map(d => {
       const p = profileOf(d.user_id);
-      const hrs = calculateDtrHours(d.time_in, d.time_out, d.overtime_approved);
+      const hrs = calculateDtrHours(d.time_in, d.time_out, true);
       return [
         fmtTableDate(d.work_date),
         profileName(d.user_id),
@@ -396,7 +416,7 @@ export function exportData(
         d.time_in || "—",
         d.time_out || "—",
         Number(hrs.toFixed(2)),
-        d.overtime_approved ? "Approved" : "No",
+        "Approved",
       ];
     });
   } else if (kind === "recommendations") {
@@ -527,6 +547,11 @@ function registerHooks(): void {
     markThreadRead,
     checkShiftReminders: checkUpcomingShiftReminders,
     autoFillDtrFromSchedule: () => autoFillDtrFromSchedule(false),
+    refreshVisibleSiteDistances,
+    openSiteOnMap,
+    clearDtrAfterExport,
+    renderLiveOnlineMembers: renderLiveOnlineMembersList,
+    closeSiteUnitsOverlay,
   });
 }
 
@@ -553,6 +578,8 @@ function exposeWindowGlobals(): void {
     renderScheduleSiteOptions,
     renderScheduleUnitOptions,
     saveSchedule,
+    openScheduleFormOverlay,
+    closeScheduleFormOverlay,
     saveUnit,
     cancelUnitForm,
     openAddUnitForSite,
@@ -560,6 +587,8 @@ function exposeWindowGlobals(): void {
     deleteUnit,
     ensureAmcbUnitsSeeded,
     toggleUnitSiteCard,
+    openSiteUnitsOverlay,
+    closeSiteUnitsOverlay,
     closeUnitManualOverlay,
     switchUnitsTab,
     openUnitManual,
@@ -568,13 +597,17 @@ function exposeWindowGlobals(): void {
     openUnitReport,
     openUnitPms,
     openSiteOnMap,
+    closeSiteMapOverlay,
+    setSiteMapLayer,
     setSiteMapTravelMode,
     centerSiteMapOnSelected,
     fitSiteMapRoute,
     initSitesMapOverview,
+    scheduleSiteMapLazyInit,
     dtrTab,
     addDtr,
     clearDtrForm,
+    clearDtrAfterExport,
     openEditDtr,
     closeEditDtr,
     saveEditedDtr,
@@ -601,6 +634,9 @@ function exposeWindowGlobals(): void {
     removePhoto,
     saveProfile,
     refreshLeaveBalances,
+    openAddLeaveModal,
+    closeLeaveFormOverlay,
+    editLeaveRequest,
     submitLeaveRequest,
     openLeaveSheetPreview,
     closeLeaveSheetPreview,
@@ -653,6 +689,10 @@ function exposeWindowGlobals(): void {
     loadLiveMap,
     focusLiveEmployee,
     saveAdminEdit,
+    setAdminRoleFilter,
+    closeAdminMemberOverlay,
+    removeAdminMember,
+    deleteAdminMember,
     markNoticeRead,
     renderDecor,
     startEmployeeLocationSharing,
@@ -737,7 +777,7 @@ async function ensurePendingRequest(session: any): Promise<void> {
     user_id: session.user.id,
     full_name: fullName,
     email: session.user.email,
-    requested_role: "technician",
+    requested_role: "employee",
     status: "pending",
   });
 }
@@ -858,7 +898,16 @@ function resetState(): void {
   runtime.editingMessageId = null;
   runtime.replyingToMsg = null;
   runtime.expandedUnitSiteIds = {};
+  runtime.selectedUnitsSiteId = null;
+  runtime.editingLeaveId = null;
+  runtime.adminRoleFilter = "all";
   runtime.selectedSiteId = null;
+  runtime.sitesRegionFilter = "ALL";
+  runtime.sitesStatusFilter = "ALL";
+  runtime.siteMapLayer = "roadmap";
+  runtime.siteDistances = {};
+  runtime.siteDistanceOriginKey = "";
+  runtime.siteMetaNotices = {};
   runtime.amcbSeedAttempted = false;
   clearPendingReportFiles();
   renderReportAttachmentPreview();
@@ -923,7 +972,7 @@ function initAuthWiring(): void {
       const fullName = val("regName").trim();
       const email = val("regEmail").trim();
       const password = val("regPassword");
-      const requestedRole = val("regRole");
+      const requestedRole = "employee";
       const idNo = val("regId").trim();
       const address = val("regAddress").trim();
       const team = val("regTeam").trim();
@@ -1008,15 +1057,11 @@ async function startSession(): Promise<void> {
 }
 
 export function initEesiApp(): void {
-  if (!window.supabase) {
-    setAuthStatus("Could not load the Supabase library. Check your connection and reload.");
-    return;
-  }
   runtime.APP_REDIRECT_URL =
     location.protocol === "file:"
       ? location.href.split(/[?#]/)[0]
       : window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, "/");
-  runtime.client = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  runtime.client = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
   registerHooks();
   exposeWindowGlobals();
@@ -1046,11 +1091,13 @@ export function initEesiApp(): void {
   initAuthWiring();
   initSettingsWiring();
   initDataListeners();
+  initSiteMapControls();
   initChatWiring();
   initFeatureWiring();
 
   applyDisplaySettings();
   applyTheme(localStorage.getItem("eesi-theme") || "dark");
   startClock();
+  initAlwaysOnLocation();
   startSession();
 }

@@ -19,6 +19,18 @@
   force = true
 
 [[redirects]]
+  from = "/api/geocode"
+  to = "/.netlify/functions/geocode"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/site-photo"
+  to = "/.netlify/functions/site-photo"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200

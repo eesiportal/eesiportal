@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 
 CREATE TABLE IF NOT EXISTS public.user_roles (
   user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  app_role TEXT NOT NULL DEFAULT 'technician'
+  app_role TEXT NOT NULL DEFAULT 'employee'
     CHECK (app_role IN ('admin', 'representative', 'technician', 'employee')),
   approval_status TEXT NOT NULL DEFAULT 'pending'
     CHECK (approval_status IN ('pending', 'approved', 'rejected', 'declined')),
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS public.registration_requests (
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   full_name TEXT NOT NULL,
   email TEXT NOT NULL,
-  requested_role TEXT NOT NULL DEFAULT 'technician',
+  requested_role TEXT NOT NULL DEFAULT 'employee',
   id_no TEXT,
   address TEXT,
   team TEXT,
@@ -73,10 +73,18 @@ CREATE TABLE IF NOT EXISTS public.sites (
   address TEXT,
   city TEXT,
   region TEXT DEFAULT 'Visayas',
+  thumbnail_url TEXT,
+  status TEXT NOT NULL DEFAULT 'Operational',
+  latitude DOUBLE PRECISION,
+  longitude DOUBLE PRECISION,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE public.sites ADD COLUMN IF NOT EXISTS city TEXT;
 ALTER TABLE public.sites ADD COLUMN IF NOT EXISTS region TEXT DEFAULT 'Visayas';
+ALTER TABLE public.sites ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
+ALTER TABLE public.sites ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'Operational';
+ALTER TABLE public.sites ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
+ALTER TABLE public.sites ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
 
 CREATE TABLE IF NOT EXISTS public.site_units (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -406,51 +414,88 @@ AS $$
   );
 $$;
 
-CREATE OR REPLACE FUNCTION public.is_thread_member(tid UUID)
-RETURNS BOOLEAN
-LANGUAGE SQL
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM public.thread_members
-    WHERE thread_id = tid AND user_id = auth.uid()
-  );
-$$;
+DROP FUNCTION IF EXISTS public.is_thread_member(UUID) CASCADE;
+DROP FUNCTION IF EXISTS public.is_thread_member(BIGINT) CASCADE;
+DROP FUNCTION IF EXISTS public.is_thread_member(INTEGER) CASCADE;
+DO $$
+DECLARE
+  v_tid_type TEXT;
+BEGIN
+  SELECT format_type(a.atttypid, a.atttypmod) INTO v_tid_type
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public' AND c.relname = 'threads' AND a.attname = 'id' AND NOT a.attisdropped;
 
-CREATE OR REPLACE FUNCTION public.can_comment_recommendation(rec_id UUID)
-RETURNS BOOLEAN
-LANGUAGE SQL
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  SELECT EXISTS (
-    SELECT 1
-    FROM public.recommendations r
-    LEFT JOIN public.profiles p ON p.user_id = auth.uid()
-    WHERE r.id = rec_id
-      AND (
-        r.user_id = auth.uid()
-        OR public.is_manager()
-        OR (
-          COALESCE(p.full_name, '') <> ''
+  v_tid_type := COALESCE(v_tid_type, 'uuid');
+
+  EXECUTE replace($fn$
+    CREATE OR REPLACE FUNCTION public.is_thread_member(p_thread_id __TID_TYPE__)
+    RETURNS BOOLEAN
+    LANGUAGE SQL
+    STABLE
+    SECURITY DEFINER
+    SET search_path = public
+    AS $body$
+      SELECT EXISTS (
+        SELECT 1 FROM public.thread_members
+        WHERE thread_id = p_thread_id AND user_id = auth.uid()
+      );
+    $body$;
+  $fn$, '__TID_TYPE__', v_tid_type);
+END $$;
+
+DROP FUNCTION IF EXISTS public.can_comment_recommendation(UUID) CASCADE;
+DROP FUNCTION IF EXISTS public.can_comment_recommendation(BIGINT) CASCADE;
+DROP FUNCTION IF EXISTS public.can_comment_recommendation(INTEGER) CASCADE;
+DO $$
+DECLARE
+  v_rec_type TEXT;
+BEGIN
+  SELECT format_type(a.atttypid, a.atttypmod) INTO v_rec_type
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public' AND c.relname = 'recommendations' AND a.attname = 'id' AND NOT a.attisdropped;
+
+  v_rec_type := COALESCE(v_rec_type, 'uuid');
+
+  EXECUTE replace($fn$
+    CREATE OR REPLACE FUNCTION public.can_comment_recommendation(rec_id __REC_ID_TYPE__)
+    RETURNS BOOLEAN
+    LANGUAGE SQL
+    STABLE
+    SECURITY DEFINER
+    SET search_path = public
+    AS $body$
+      SELECT EXISTS (
+        SELECT 1
+        FROM public.recommendations r
+        LEFT JOIN public.profiles p ON p.user_id = auth.uid()
+        WHERE r.id = rec_id
           AND (
-            COALESCE(r.reason, '') ILIKE ('%' || p.full_name || '%')
-            OR COALESCE(r.reason, '') ILIKE ('%@' || p.full_name || '%')
+            r.user_id = auth.uid()
+            OR public.is_manager()
+            OR (
+              COALESCE(p.full_name, '') <> ''
+              AND (
+                COALESCE(r.reason, '') ILIKE ('%' || p.full_name || '%')
+                OR COALESCE(r.reason, '') ILIKE ('%@' || p.full_name || '%')
+              )
+            )
           )
-        )
-      )
-  );
-$$;
+      );
+    $body$;
+  $fn$, '__REC_ID_TYPE__', v_rec_type);
+END $$;
 
 /* 5. RPC FUNCTIONS */
+DROP FUNCTION IF EXISTS public.submit_registration_request(UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT);
 CREATE OR REPLACE FUNCTION public.submit_registration_request(
   p_user_id UUID,
   p_full_name TEXT,
   p_email TEXT,
-  p_requested_role TEXT DEFAULT 'technician',
+  p_requested_role TEXT DEFAULT 'employee',
   p_id_no TEXT DEFAULT NULL,
   p_address TEXT DEFAULT NULL,
   p_team TEXT DEFAULT NULL,
@@ -475,16 +520,17 @@ BEGIN
     area = COALESCE(EXCLUDED.area, public.profiles.area),
     updated_at = NOW();
 
+  -- New registrations always start as Employee; Admin/Representative assigns final designation after approval
   INSERT INTO public.user_roles (user_id, app_role, approval_status, area)
-  VALUES (p_user_id, COALESCE(NULLIF(p_requested_role, ''), 'technician'), 'pending', p_area)
+  VALUES (p_user_id, 'employee', 'pending', p_area)
   ON CONFLICT (user_id) DO NOTHING;
 
   INSERT INTO public.registration_requests (user_id, full_name, email, requested_role, id_no, address, team, phone, area, status)
-  VALUES (p_user_id, p_full_name, p_email, COALESCE(NULLIF(p_requested_role, ''), 'technician'), p_id_no, p_address, p_team, p_phone, p_area, 'pending')
+  VALUES (p_user_id, p_full_name, p_email, 'employee', p_id_no, p_address, p_team, p_phone, p_area, 'pending')
   ON CONFLICT (user_id) DO UPDATE SET
     full_name = EXCLUDED.full_name,
     email = EXCLUDED.email,
-    requested_role = EXCLUDED.requested_role,
+    requested_role = 'employee',
     id_no = EXCLUDED.id_no,
     address = EXCLUDED.address,
     team = EXCLUDED.team,
@@ -494,6 +540,7 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS public.save_push_subscription(TEXT, TEXT, TEXT, TEXT);
 CREATE OR REPLACE FUNCTION public.save_push_subscription(
   p_endpoint TEXT,
   p_p256dh TEXT DEFAULT NULL,
@@ -520,6 +567,7 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS public.get_or_create_direct_thread(UUID);
 CREATE OR REPLACE FUNCTION public.get_or_create_direct_thread(other_user_id UUID)
 RETURNS UUID
 LANGUAGE plpgsql
@@ -556,6 +604,7 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS public.create_group_thread(TEXT, UUID[]);
 CREATE OR REPLACE FUNCTION public.create_group_thread(p_title TEXT, p_member_ids UUID[])
 RETURNS UUID
 LANGUAGE plpgsql
@@ -592,6 +641,7 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS public.react_to_message(BIGINT, TEXT);
 CREATE OR REPLACE FUNCTION public.react_to_message(p_message_id BIGINT, p_emoji TEXT)
 RETURNS VOID
 LANGUAGE plpgsql
@@ -623,6 +673,7 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS public.mark_thread_messages_delivered(UUID);
 CREATE OR REPLACE FUNCTION public.mark_thread_messages_delivered(p_thread_id UUID)
 RETURNS VOID
 LANGUAGE plpgsql
@@ -670,12 +721,31 @@ DROP POLICY IF EXISTS profiles_select ON public.profiles;
 CREATE POLICY profiles_select ON public.profiles FOR SELECT USING (auth.uid() = user_id OR public.is_approved_user());
 DROP POLICY IF EXISTS profiles_upsert ON public.profiles;
 CREATE POLICY profiles_upsert ON public.profiles FOR ALL USING (auth.uid() = user_id OR public.is_admin()) WITH CHECK (auth.uid() = user_id OR public.is_admin());
+DROP POLICY IF EXISTS profiles_manager_insert ON public.profiles;
+CREATE POLICY profiles_manager_insert ON public.profiles FOR INSERT WITH CHECK (public.is_manager());
+DROP POLICY IF EXISTS profiles_manager_update ON public.profiles;
+CREATE POLICY profiles_manager_update ON public.profiles FOR UPDATE
+  USING (
+    public.is_manager() AND NOT EXISTS (
+      SELECT 1 FROM public.user_roles ur
+      WHERE ur.user_id = public.profiles.user_id
+        AND ur.app_role IN ('admin', 'representative')
+    )
+  )
+  WITH CHECK (public.is_manager());
 
 /* User roles */
 DROP POLICY IF EXISTS user_roles_select ON public.user_roles;
 CREATE POLICY user_roles_select ON public.user_roles FOR SELECT USING (auth.uid() = user_id OR public.is_approved_user());
 DROP POLICY IF EXISTS user_roles_admin ON public.user_roles;
 CREATE POLICY user_roles_admin ON public.user_roles FOR ALL USING (public.is_admin()) WITH CHECK (public.is_admin());
+DROP POLICY IF EXISTS user_roles_manager_insert ON public.user_roles;
+CREATE POLICY user_roles_manager_insert ON public.user_roles FOR INSERT
+  WITH CHECK (public.is_manager() AND app_role IN ('employee', 'technician'));
+DROP POLICY IF EXISTS user_roles_manager_update ON public.user_roles;
+CREATE POLICY user_roles_manager_update ON public.user_roles FOR UPDATE
+  USING (public.is_manager() AND app_role IN ('employee', 'technician'))
+  WITH CHECK (public.is_manager() AND app_role IN ('employee', 'technician'));
 
 /* Registration requests */
 DROP POLICY IF EXISTS reg_req_select ON public.registration_requests;
@@ -889,61 +959,73 @@ CREATE INDEX IF NOT EXISTS idx_stories_expires_at ON public.stories (expires_at 
 /* 10. SEED AYALA MALLS CENTRAL BLOC (AMCB) & 34 UNITS */
 DO $$
 DECLARE
-  v_site_id UUID;
+  v_site_id_text TEXT;
+  v_site_type TEXT;
 BEGIN
-  SELECT id INTO v_site_id
+  SELECT format_type(a.atttypid, a.atttypmod) INTO v_site_type
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public' AND c.relname = 'sites' AND a.attname = 'id' AND NOT a.attisdropped;
+
+  v_site_type := COALESCE(v_site_type, 'uuid');
+
+  SELECT id::TEXT INTO v_site_id_text
   FROM public.sites
   WHERE LOWER(name) LIKE '%ayala%central bloc%' OR UPPER(TRIM(name)) = 'AMCB'
   LIMIT 1;
 
-  IF v_site_id IS NULL THEN
+  IF v_site_id_text IS NULL THEN
     INSERT INTO public.sites (name, address, city, region)
     VALUES ('Ayala Malls Central Bloc (AMCB)', 'Cebu IT Park, Apas', 'Cebu City', 'Visayas')
-    RETURNING id INTO v_site_id;
+    RETURNING id::TEXT INTO v_site_id_text;
   END IF;
 
-  INSERT INTO public.site_units (site_id, unit_name, unit_type, status, capacity_floors, notes)
-  SELECT v_site_id, u.unit_name, u.unit_type, 'Operational', u.capacity_floors, u.notes
-  FROM (VALUES
-    ('Esc. No. 19 B2-B3', 'escalator', 'B2-B3', 'SEDA SIDE · DOWN'),
-    ('Esc. No. 20 B3-B2', 'escalator', 'B3-B2', 'SEDA SIDE · UP'),
-    ('Esc. No. 21 B1-B2', 'escalator', 'B1-B2', 'SEDA SIDE · DOWN'),
-    ('Esc. No. 22 B2-B1', 'escalator', 'B2-B1', 'SEDA SIDE · UP'),
-    ('Esc. No. 3 G-B1', 'escalator', 'G-B1', 'SEDA SIDE · DOWN'),
-    ('Esc. No. 4 B1-G', 'escalator', 'B1-G', 'SEDA SIDE · UP'),
-    ('Esc. No. 26 2-G', 'escalator', '2-G', 'SEDA SIDE · DOWN · 2 Lgt. Newel Guide Roller (Leftside), 2 Lgt. Newel Guide Roller (Rightside)'),
-    ('Esc. No. 25 G-2', 'escalator', 'G-2', 'SEDA SIDE · UP'),
-    ('Esc. No. 27 3-2', 'escalator', '3-2', 'SEDA SIDE · DOWN'),
-    ('Esc. No. 28 2-3', 'escalator', '2-3', 'SEDA SIDE · UP'),
-    ('Esc. No. 17 4-3', 'escalator', '4-3', 'SEDA SIDE · DOWN'),
-    ('Esc. No. 18 3-4', 'escalator', '3-4', 'SEDA SIDE · UP'),
-    ('Esc. No. 2 B1-B2', 'escalator', 'B1-B2', 'IVILLA SIDE · DOWN'),
-    ('Esc. No. 1 B2-B1', 'escalator', 'B2-B1', 'IVILLA SIDE · UP'),
-    ('Esc. No. 23 (G-B1)', 'escalator', 'G-B1', 'IVILLA SIDE · DOWN · 1 Lgt. Rubber Handrail (Leftside), 2pcs. Newel Guide Roller (Leftside), 1 Lot. Flywheel (Leftside)'),
-    ('Esc. No. 24 B1-G', 'escalator', 'B1-G', 'IVILLA SIDE · UP'),
-    ('Esc. No. 6 2-G', 'escalator', '2-G', 'IVILLA SIDE · DOWN'),
-    ('Esc. No. 5 G-2', 'escalator', 'G-2', 'IVILLA SIDE · UP'),
-    ('Esc. No. 7 3-2', 'escalator', '3-2', 'IVILLA SIDE · DOWN'),
-    ('Esc. No. 8 2-3', 'escalator', '2-3', 'IVILLA SIDE · UP'),
-    ('Esc. No. 9 4-3', 'escalator', '4-3', 'IVILLA SIDE · DOWN'),
-    ('Esc. No. 10 3-4', 'escalator', '3-4', 'IVILLA SIDE · UP'),
-    ('Esc. No. 12 5-4', 'escalator', '5-4', 'IVILLA SIDE · DOWN'),
-    ('Esc. No. 11 4-5', 'escalator', '4-5', 'IVILLA SIDE · UP'),
-    ('PE1', 'elevator', NULL, 'IVILLA SIDE · Passenger Elevator'),
-    ('PE2', 'elevator', NULL, 'IVILLA SIDE · Passenger Elevator'),
-    ('PE3', 'elevator', NULL, 'IVILLA SIDE · Passenger Elevator'),
-    ('Esc. No. 14 2-G', 'escalator', '2-G', 'PADRIGA SIDE · DOWN'),
-    ('Esc. No. 13 G-2', 'escalator', 'G-2', 'PADRIGA SIDE · UP'),
-    ('Esc. No. 30 3-2', 'escalator', '3-2', 'PADRIGA SIDE · DOWN'),
-    ('Esc. No. 29 2-3', 'escalator', '2-3', 'PADRIGA SIDE · UP'),
-    ('Esc. No. 16 4-3', 'escalator', '4-3', 'PADRIGA SIDE · DOWN'),
-    ('Esc. No. 15 3-4', 'escalator', '3-4', 'PADRIGA SIDE · UP'),
-    ('CARGO', 'elevator', NULL, 'PADRIGA SIDE · Cargo Elevator')
-  ) AS u(unit_name, unit_type, capacity_floors, notes)
-  WHERE NOT EXISTS (
-    SELECT 1 FROM public.site_units su
-    WHERE su.site_id = v_site_id AND LOWER(TRIM(su.unit_name)) = LOWER(TRIM(u.unit_name))
-  );
+  EXECUTE replace($ins$
+    INSERT INTO public.site_units (site_id, unit_name, unit_type, status, capacity_floors, notes)
+    SELECT $1::__SITE_ID_TYPE__, u.unit_name, u.unit_type, 'Operational', u.capacity_floors, u.notes
+    FROM (VALUES
+      ('Esc. No. 19 B2-B3', 'escalator', 'B2-B3', 'SEDA SIDE · DOWN'),
+      ('Esc. No. 20 B3-B2', 'escalator', 'B3-B2', 'SEDA SIDE · UP'),
+      ('Esc. No. 21 B1-B2', 'escalator', 'B1-B2', 'SEDA SIDE · DOWN'),
+      ('Esc. No. 22 B2-B1', 'escalator', 'B2-B1', 'SEDA SIDE · UP'),
+      ('Esc. No. 3 G-B1', 'escalator', 'G-B1', 'SEDA SIDE · DOWN'),
+      ('Esc. No. 4 B1-G', 'escalator', 'B1-G', 'SEDA SIDE · UP'),
+      ('Esc. No. 26 2-G', 'escalator', '2-G', 'SEDA SIDE · DOWN · 2 Lgt. Newel Guide Roller (Leftside), 2 Lgt. Newel Guide Roller (Rightside)'),
+      ('Esc. No. 25 G-2', 'escalator', 'G-2', 'SEDA SIDE · UP'),
+      ('Esc. No. 27 3-2', 'escalator', '3-2', 'SEDA SIDE · DOWN'),
+      ('Esc. No. 28 2-3', 'escalator', '2-3', 'SEDA SIDE · UP'),
+      ('Esc. No. 17 4-3', 'escalator', '4-3', 'SEDA SIDE · DOWN'),
+      ('Esc. No. 18 3-4', 'escalator', '3-4', 'SEDA SIDE · UP'),
+      ('Esc. No. 2 B1-B2', 'escalator', 'B1-B2', 'IVILLA SIDE · DOWN'),
+      ('Esc. No. 1 B2-B1', 'escalator', 'B2-B1', 'IVILLA SIDE · UP'),
+      ('Esc. No. 23 (G-B1)', 'escalator', 'G-B1', 'IVILLA SIDE · DOWN · 1 Lgt. Rubber Handrail (Leftside), 2pcs. Newel Guide Roller (Leftside), 1 Lot. Flywheel (Leftside)'),
+      ('Esc. No. 24 B1-G', 'escalator', 'B1-G', 'IVILLA SIDE · UP'),
+      ('Esc. No. 6 2-G', 'escalator', '2-G', 'IVILLA SIDE · DOWN'),
+      ('Esc. No. 5 G-2', 'escalator', 'G-2', 'IVILLA SIDE · UP'),
+      ('Esc. No. 7 3-2', 'escalator', '3-2', 'IVILLA SIDE · DOWN'),
+      ('Esc. No. 8 2-3', 'escalator', '2-3', 'IVILLA SIDE · UP'),
+      ('Esc. No. 9 4-3', 'escalator', '4-3', 'IVILLA SIDE · DOWN'),
+      ('Esc. No. 10 3-4', 'escalator', '3-4', 'IVILLA SIDE · UP'),
+      ('Esc. No. 12 5-4', 'escalator', '5-4', 'IVILLA SIDE · DOWN'),
+      ('Esc. No. 11 4-5', 'escalator', '4-5', 'IVILLA SIDE · UP'),
+      ('PE1', 'elevator', NULL, 'IVILLA SIDE · Passenger Elevator'),
+      ('PE2', 'elevator', NULL, 'IVILLA SIDE · Passenger Elevator'),
+      ('PE3', 'elevator', NULL, 'IVILLA SIDE · Passenger Elevator'),
+      ('Esc. No. 14 2-G', 'escalator', '2-G', 'PADRIGA SIDE · DOWN'),
+      ('Esc. No. 13 G-2', 'escalator', 'G-2', 'PADRIGA SIDE · UP'),
+      ('Esc. No. 30 3-2', 'escalator', '3-2', 'PADRIGA SIDE · DOWN'),
+      ('Esc. No. 29 2-3', 'escalator', '2-3', 'PADRIGA SIDE · UP'),
+      ('Esc. No. 16 4-3', 'escalator', '4-3', 'PADRIGA SIDE · DOWN'),
+      ('Esc. No. 15 3-4', 'escalator', '3-4', 'PADRIGA SIDE · UP'),
+      ('CARGO', 'elevator', NULL, 'PADRIGA SIDE · Cargo Elevator')
+    ) AS u(unit_name, unit_type, capacity_floors, notes)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM public.site_units su
+      WHERE su.site_id = $1::__SITE_ID_TYPE__ AND LOWER(TRIM(su.unit_name)) = LOWER(TRIM(u.unit_name))
+    );
+  $ins$, '__SITE_ID_TYPE__', v_site_type)
+  USING v_site_id_text;
 END $$;
 
 NOTIFY pgrst, 'reload schema';

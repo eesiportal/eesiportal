@@ -11,7 +11,7 @@ export default defineConfig(() => {
       react(),
       tailwindcss(),
       VitePWA({
-        registerType: 'prompt',
+        registerType: 'autoUpdate',
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'push-sw.js', 'icons/icon-192.png'],
         manifest: {
           id: '/',
@@ -47,6 +47,9 @@ export default defineConfig(() => {
         },
         workbox: {
           importScripts: ['/push-sw.js'],
+          skipWaiting: true,
+          clientsClaim: true,
+          cleanupOutdatedCaches: true,
           globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
           navigateFallbackDenylist: [/^\/api\//, /^\/\.netlify\//],
           runtimeCaching: [
@@ -71,7 +74,7 @@ export default defineConfig(() => {
           ],
         },
         devOptions: {
-          enabled: true,
+          enabled: false,
         },
       }),
       // Copies src/assets into dist/ so root-relative URLs like

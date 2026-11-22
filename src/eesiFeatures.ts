@@ -2,12 +2,14 @@ import {
   $,
   BLANK_IMG,
   PMS_ITEMS,
+  SITE_STATUS_OPTIONS,
   TimeLogNoticeMeta,
   UNIT_MANUAL_DEFAULTS,
   buildDtrJobWithApproval,
   buildLeaveReasonWithMeta,
   buildRecReasonWithMeta,
   buildReportDetailsWithUnit,
+  buildSiteMetaAppNoticeBody,
   buildTimeLogAppNoticeBody,
   buildUnitNotesWithManual,
   calculateDtrHours,
@@ -29,17 +31,20 @@ import {
   fmtTableDate,
   fmtTime12h,
   getDtrCutoffForDate,
+  getSiteEffectiveStatus,
+  getSiteThumbnailUrl,
   hooks,
   isAdmin,
+  isHiddenSystemNotice,
   isImageFile,
   isImageUrl,
   isManager,
   isMissingTableError,
-  isStoryNotice,
   isVideoUrl,
   leaveDaysCount,
   listAvailableDtrCutoffs,
   localDateKey,
+  openPhotoPreview,
   openSheet,
   parseDtrJobMeta,
   parseLeaveMeta,
@@ -64,6 +69,8 @@ import {
   val,
 } from "./eesiTypes";
 import {
+  createSiteAutoSnapshotFile,
+  initAddSitePinPicker,
   initSitesMapOverview,
   isNoticeMarkedRead,
   loadAnnouncements,
@@ -87,7 +94,12 @@ import {
   markNoticeRead,
   onlineIds,
   openSiteGoogleMap,
+  refreshVisibleSiteDistances,
+  resetAddSitePinPicker,
+  resolveSiteAddressAndPin,
+  resolveSiteAutoPhotoUrl,
   saveLastView,
+  scheduleSiteMapLazyInit,
   timelineReports,
 } from "./eesiData";
 import {
@@ -126,6 +138,13 @@ export function updateAccess(): void {
   document.querySelector('[data-report-type="checklist"]')?.classList.toggle("hidden", !canCreateChecklist);
   document.querySelectorAll(".admin-only").forEach(el => el.classList.toggle("hidden", !isAdmin()));
   document.querySelectorAll(".manager-only").forEach(el => el.classList.toggle("hidden", !isManager()));
+  document.querySelectorAll<HTMLElement>('[onclick*="go(\'members\')"]').forEach(el => el.classList.toggle("hidden", !isManager()));
+  if (!isManager() && ["members", "pending"].includes(runtime.currentPage)) {
+    runtime.currentPage = "home";
+    $("page-members")?.classList.add("hidden");
+    $("page-pending")?.classList.add("hidden");
+    $("page-home")?.classList.remove("hidden");
+  }
   if (isManager() && state.reportType === "checklist") state.reportType = "service";
   renderPmsChecklist();
 }
@@ -133,8 +152,8 @@ export function updateAccess(): void {
 export function go(p: string, opts: { skipScrollReset?: boolean } = {}): void {
   if (["members", "pending"].includes(p) && !isManager()) { toast("Admin or Representative access only"); return; }
   if (p === "admin" && !isAdmin()) { toast("Administrator only"); return; }
-  if (p === "live-map" && !isAdmin()) { toast("Administrator only"); return; }
-  if (p === "live-map") setTimeout(() => loadLiveMap(), 50);
+  if (p === "live-map" && !isManager()) { toast("Admin or Representative access only"); return; }
+  if (p === "live-map") setTimeout(() => { hooks.renderLiveOnlineMembers?.(); loadLiveMap(); }, 50);
   const pageEl = $("page-" + p);
   if (!pageEl) { toast("Page not found"); return; }
   document.querySelectorAll(".page").forEach(el => el.classList.add("hidden"));
@@ -149,7 +168,9 @@ export function go(p: string, opts: { skipScrollReset?: boolean } = {}): void {
   if (p === "notices") { loadAppNotifications(); loadApprovalNotifications(); loadRecentChatNotices(); }
   if (p === "admin") renderAdmin();
   if (p === "schedule") { renderScheduleSiteOptions(); renderAssigneesPicker(); }
-  if (p === "sites") { void initSitesMapOverview(); }
+  if (p === "sites") {
+    scheduleSiteMapLazyInit();
+  }
   if (p === "notes") { renderConnectedPickers(); }
   if (p === "dtr") { renderConnectedPickers(); autoFillDtrFromSchedule(false); renderTimeLog(); }
   renderAll();
@@ -379,7 +400,7 @@ export function getNoticeItems(): any[] {
     label: "Notification", approvalId: n.id, isRead: !!n.is_read,
   }));
   state.appNotifications.forEach(n => {
-    if (isStoryNotice(n)) return;
+    if (isHiddenSystemNotice(n)) return;
     const isDtrNotice = !n.report_id && /Time In|Time Out/i.test(String(n.title || ""));
     const isOut = /Time Out|🔴/i.test(String(n.title || ""));
     items.push({
@@ -509,7 +530,7 @@ export function renderHomeDtrStatus(): void {
   );
   const activeEntry = myToday.find(d => d.time_in && (!d.time_out || d.time_out === d.time_in));
   let totalHours = myToday.reduce(
-    (sum, d) => sum + calculateDtrHours(d.time_in, d.time_out, !!d.overtime_approved),
+    (sum, d) => sum + calculateDtrHours(d.time_in, d.time_out, true),
     0
   );
   if (activeEntry && activeEntry.time_in) {
@@ -638,17 +659,25 @@ export function renderNotices(): void {
 
 /* ==================== MEMBERS / ONLINE / PENDING / ADMIN ==================== */
 function memberRow(p: any): string {
-  const online = onlineIds().has(String(p.user_id));
+  const uid = String(p.user_id || "");
+  const online = onlineIds().has(uid);
   const role = state.roles[p.user_id];
-  const label = role ? roleLabel(role.app_role) : (p.team || "Member");
-  return '<div class="person"><span class="tap" data-act="person-menu" data-id="' + esc(p.user_id) + '">' + face(p) +
-    '</span><span class="person-info"><button type="button" class="text-button" data-act="person-menu" data-id="' + esc(p.user_id) + '">' + esc(p.full_name || "Member") +
+  const appRole = role?.app_role || "employee";
+  const label = role ? roleLabel(appRole) : (p.team || "Member");
+  const canSetDesignation = isManager() && (isAdmin() || (appRole !== "admin" && appRole !== "representative"));
+  return '<div class="person"><span class="tap" data-act="person-menu" data-id="' + esc(uid) + '">' + face(p) +
+    '</span><span class="person-info"><button type="button" class="text-button" data-act="person-menu" data-id="' + esc(uid) + '">' + esc(p.full_name || "Member") +
     '</button><span class="muted"><span class="online-dot ' + (online ? "on" : "") + '"></span>' + (online ? "Online" : "Offline") + " · " + esc(label) + (p.area ? " · " + esc(p.area) : "") +
-    "</span></span>" + (String(p.user_id) !== String(state.userId) ? '<button class="btn small-btn" type="button" data-act="open-dm" data-id="' + esc(p.user_id) + '">Chat</button>' : "") + "</div>";
+    "</span></span>" +
+    '<div class="inline-actions" style="margin-top:0;flex-wrap:wrap;justify-content:flex-end;">' +
+    (canSetDesignation ? '<button class="gray small-btn" type="button" data-act="admin-edit" data-id="' + esc(uid) + '">⚙️ Designation</button>' : "") +
+    (uid !== String(state.userId) ? '<button class="btn small-btn" type="button" data-act="open-dm" data-id="' + esc(uid) + '">Chat</button>' : "") +
+    "</div></div>";
 }
 export function renderMembers(): void {
   const box = $("members");
   if (!state.userId || !box) return;
+  if (!isManager()) { box.innerHTML = ""; return; }
   box.innerHTML = state.profiles.map(memberRow).join("") || '<p class="muted">No members yet.</p>';
 }
 export function renderOnline(): void {
@@ -660,36 +689,75 @@ export function renderOnline(): void {
   const offEl = $("offline");
   if (onEl) onEl.innerHTML = on.map(memberRow).join("") || '<p class="muted">Nobody is online.</p>';
   if (offEl) offEl.innerHTML = off.map(memberRow).join("") || '<p class="muted">Nobody is offline.</p>';
+  hooks.renderLiveOnlineMembers?.();
 }
 export function renderPending(): void {
   const box = $("pending");
   if (!isManager() || !box) return;
-  box.innerHTML = state.pending.map(r =>
-    '<div class="item"><b>' + esc(r.full_name) + "</b> — " + esc(roleLabel(r.requested_role)) +
-    '<div class="muted">' + esc(r.email || "") + " · requested " + esc(fmtDate(r.created_at)) + '</div>' +
-    '<div class="inline-actions"><button class="green small-btn" type="button" data-act="approve" data-id="' + esc(r.id) + '">Approve</button>' +
-    '<button class="red small-btn" type="button" data-act="decline" data-id="' + esc(r.id) + '">Decline</button></div></div>'
-  ).join("") || '<p class="muted">No pending registrations.</p>';
+  const assignableRoles = isAdmin() ? ["employee", "technician", "representative", "admin"] : ["employee", "technician"];
+  box.innerHTML = state.pending.map(r => {
+    const reqRole = assignableRoles.includes(String(r.requested_role || "")) ? String(r.requested_role) : "employee";
+    const optsHtml = assignableRoles.map(roleVal =>
+      '<option value="' + esc(roleVal) + '"' + (roleVal === reqRole ? " selected" : "") + ">" + esc(roleLabel(roleVal)) + "</option>"
+    ).join("");
+    return '<div class="item"><b>' + esc(r.full_name) + "</b> — " + esc(roleLabel(r.requested_role || "employee")) +
+      '<div class="muted">' + esc(r.email || "") + " · requested " + esc(fmtDate(r.created_at)) + '</div>' +
+      '<div class="field" style="margin:8px 0 4px;"><label for="pendingRole_' + esc(r.id) + '" style="font-size:12px;">Assign designation</label>' +
+      '<select id="pendingRole_' + esc(r.id) + '">' + optsHtml + "</select></div>" +
+      '<div class="inline-actions"><button class="green small-btn" type="button" data-act="approve" data-id="' + esc(r.id) + '">Approve</button>' +
+      '<button class="red small-btn" type="button" data-act="decline" data-id="' + esc(r.id) + '">Decline</button></div></div>';
+  }).join("") || '<p class="muted">No pending registrations.</p>';
+}
+export function setAdminRoleFilter(filter: string): void {
+  runtime.adminRoleFilter = filter || "all";
+  document.querySelectorAll<HTMLElement>("#adminRoleTabs [data-admin-role]").forEach(btn =>
+    btn.classList.toggle("active", (btn.dataset.adminRole || "all") === runtime.adminRoleFilter)
+  );
+  renderAdmin();
 }
 export function renderAdmin(): void {
   const box = $("adminList");
   if (!box) return;
   if (!isAdmin()) { box.innerHTML = '<p class="muted">Admin only.</p>'; return; }
-  box.innerHTML = state.profiles.map(p => {
+  const activeFilter = runtime.adminRoleFilter || "all";
+  document.querySelectorAll<HTMLElement>("#adminRoleTabs [data-admin-role]").forEach(btn =>
+    btn.classList.toggle("active", (btn.dataset.adminRole || "all") === activeFilter)
+  );
+  const filtered = state.profiles.filter(p => {
+    const role = state.roles[p.user_id];
+    if (role?.approval_status === "declined") return false;
+    const appRole = role?.app_role || "employee";
+    if (activeFilter !== "all" && appRole !== activeFilter) return false;
+    return true;
+  });
+  box.innerHTML = filtered.map(p => {
+    const uid = String(p.user_id || "");
     const role = state.roles[p.user_id];
     const roleText = role ? roleLabel(role.app_role) : "—";
+    const isSelf = uid === String(state.userId);
     return '<div class="person">' + face(p) + '<span class="person-info"><b>' + esc(p.full_name || "Member") + '</b><span class="muted">' +
-      esc(roleText) + (p.area ? " · " + esc(p.area) : "") + '</span></span><button class="gray small-btn" type="button" data-act="admin-edit" data-id="' + esc(p.user_id) + '">Edit</button></div>';
-  }).join("") || '<p class="muted">No members.</p>';
+      esc(roleText) + (p.area ? " · " + esc(p.area) : "") + (p.team ? " · " + esc(p.team) : "") + '</span></span>' +
+      '<div class="inline-actions" style="margin-top:0;flex-wrap:wrap;justify-content:flex-end;">' +
+      '<button class="gray small-btn" type="button" data-act="admin-edit" data-id="' + esc(uid) + '">⚙️ Manage</button>' +
+      (!isSelf
+        ? '<button class="gray small-btn" type="button" onclick="removeAdminMember(\'' + esc(uid) + '\')">Remove</button>' +
+          '<button class="red small-btn" type="button" onclick="deleteAdminMember(\'' + esc(uid) + '\')">Delete</button>'
+        : "") +
+      "</div></div>";
+  }).join("") || '<p class="muted">No members in this category.</p>';
 }
 
 async function approveRequest(id: string, approve: boolean): Promise<void> {
+  if (!isManager()) { toast("Admin or Representative access only"); return; }
   const req = state.pending.find(r => String(r.id) === String(id));
   if (!req) return;
   if (approve) {
+    const allowedRoles = isAdmin() ? ["employee", "technician", "representative", "admin"] : ["employee", "technician"];
+    const pickedRole = val("pendingRole_" + String(id)) || req.requested_role || "employee";
+    const assignedRole = allowedRoles.includes(pickedRole) ? pickedRole : "employee";
     const { error: roleErr } = await runtime.client
       .from("user_roles")
-      .upsert({ user_id: req.user_id, app_role: req.requested_role || "technician", approval_status: "approved" }, { onConflict: "user_id" });
+      .upsert({ user_id: req.user_id, app_role: assignedRole, approval_status: "approved" }, { onConflict: "user_id" });
     if (roleErr) { toast("Could not approve: " + roleErr.message); return; }
     await runtime.client.from("profiles").upsert({
       user_id: req.user_id, full_name: req.full_name, email: req.email,
@@ -705,40 +773,130 @@ async function approveRequest(id: string, approve: boolean): Promise<void> {
   });
   suppressNotifications();
   await loadPending();
-  if (approve) { await loadProfiles(); await loadRoles(); }
+  if (approve) {
+    await Promise.all([loadProfiles(), loadRoles()]);
+    renderMembers();
+    renderOnline();
+    renderAdmin();
+  }
   toast(approve ? "Approved" : "Declined");
 }
 
+export function closeAdminMemberOverlay(): void {
+  $("adminMemberOverlay")?.classList.add("hidden");
+}
+
 async function openAdminEdit(userId: string): Promise<void> {
+  if (!isManager()) { toast("Admin or Representative access only"); return; }
   const p = profileOf(userId);
   const role = state.roles[userId];
   if (!p) return;
-  openSheet(
-    '<h2>Edit member</h2><div class="field"><label>Full name</label><input id="admName" value="' + esc(p.full_name || "") +
-    '"></div><div class="field"><label>ID No.</label><input id="admId" value="' + esc(p.id_no || "") +
-    '"></div><div class="field"><label>Team</label><input id="admTeam" value="' + esc(p.team || "") +
-    '"></div><div class="field"><label>Area</label><select id="admArea">' +
+  const uid = String(userId);
+  const currentRole = role?.app_role || "employee";
+  if (!isAdmin() && (currentRole === "admin" || currentRole === "representative")) {
+    toast("Only Administrator can manage Admin or Selective Representative accounts.");
+    return;
+  }
+  const isSelf = uid === String(state.userId);
+  const ttl = $("adminMemberOverlayTitle");
+  const body = $("adminMemberOverlayBody");
+  if (!body) return;
+  const roleChoices = isAdmin() ? ["admin", "representative", "technician", "employee"] : ["employee", "technician"];
+  const selectedRole = roleChoices.includes(currentRole) ? currentRole : "employee";
+  if (ttl) ttl.textContent = (isAdmin() ? "⚙️ Manage " : "⚙️ Set Designation: ") + (p.full_name || "Member");
+  body.innerHTML =
+    '<div class="field"><label for="admName">Full name</label><input id="admName" value="' + esc(p.full_name || "") + '"></div>' +
+    '<div class="field"><label for="admId">ID No.</label><input id="admId" value="' + esc(p.id_no || "") + '"></div>' +
+    '<div class="field"><label for="admTeam">Team</label><input id="admTeam" value="' + esc(p.team || "") + '"></div>' +
+    '<div class="field"><label for="admArea">Area</label><select id="admArea">' +
     ["", "Visayas", "Luzon", "Mindanao"].map(a => '<option value="' + a + '"' + (p.area === a ? " selected" : "") + ">" + (a || "—") + "</option>").join("") +
-    '</select></div><div class="field"><label>Designation</label><select id="admRole">' +
-    ["admin", "representative", "technician", "employee"].map(r => '<option value="' + r + '"' + ((role ? role.app_role : "") === r ? " selected" : "") + ">" + esc(roleLabel(r)) + "</option>").join("") +
-    '</select></div><button class="btn" style="width:100%" onclick="saveAdminEdit(\'' + esc(userId) + "')\">Save</button>" + sheetClose()
-  );
+    '</select></div><div class="field"><label for="admRole">Designation</label><select id="admRole">' +
+    roleChoices.map(r => '<option value="' + r + '"' + (selectedRole === r ? " selected" : "") + ">" + esc(roleLabel(r)) + "</option>").join("") +
+    '</select>' +
+    (!isAdmin() ? '<p class="muted" style="font-size:11px;margin-top:4px;">Selective Representatives can assign Employee or Technician. Only Admin can assign Selective Representative.</p>' : "") +
+    "</div>" +
+    '<div class="inline-actions" style="justify-content:space-between;flex-wrap:wrap;margin-top:12px;">' +
+    '<button class="btn" type="button" style="flex:1;" onclick="saveAdminEdit(\'' + esc(uid) + '\')">💾 Save Changes</button>' +
+    '<button class="gray" type="button" onclick="closeAdminMemberOverlay()">Cancel</button>' +
+    "</div>" +
+    (isAdmin() && !isSelf
+      ? '<div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--border);display:flex;gap:8px;flex-wrap:wrap;">' +
+        '<button class="gray small-btn" style="flex:1;" type="button" onclick="removeAdminMember(\'' + esc(uid) + '\')">🚫 Remove Access</button>' +
+        '<button class="red small-btn" style="flex:1;" type="button" onclick="deleteAdminMember(\'' + esc(uid) + '\')">🗑 Delete Member</button>' +
+        "</div>"
+      : "");
+  $("adminMemberOverlay")?.classList.remove("hidden");
 }
+
 export async function saveAdminEdit(userId: string): Promise<void> {
+  if (!isManager()) { toast("Admin or Representative access only"); return; }
+  const currentRole = state.roles[userId]?.app_role || "employee";
+  if (!isAdmin() && (currentRole === "admin" || currentRole === "representative")) {
+    toast("Only Administrator can modify Admin or Selective Representative accounts.");
+    return;
+  }
+  const allowedRoles = isAdmin() ? ["admin", "representative", "technician", "employee"] : ["employee", "technician"];
+  const pickedRole = val("admRole");
+  if (!allowedRoles.includes(pickedRole)) {
+    toast("Only Administrator can assign Selective Representative or Administrator.");
+    return;
+  }
   const { error: pe } = await runtime.client.from("profiles").update({
     full_name: val("admName").trim(), id_no: val("admId").trim() || null, team: val("admTeam").trim() || null, area: val("admArea") || null,
   }).eq("user_id", userId);
   if (pe) { toast("Profile update failed: " + pe.message); return; }
   const { error: re } = await runtime.client.from("user_roles").upsert({
-    user_id: userId, app_role: val("admRole"), approval_status: "approved",
+    user_id: userId, app_role: pickedRole, approval_status: state.roles[userId]?.approval_status || "approved",
   }, { onConflict: "user_id" });
   if (re) { toast("Role update failed: " + re.message); return; }
-  closeSheet();
+  closeAdminMemberOverlay();
   suppressNotifications();
-  await loadProfiles();
-  await loadRoles();
+  await Promise.all([loadProfiles(), loadRoles()]);
   renderAdmin();
+  renderMembers();
+  renderOnline();
   toast("Member updated");
+}
+
+export async function removeAdminMember(userId: string): Promise<void> {
+  if (!isAdmin() || !checkNetwork()) return;
+  const uid = String(userId || "");
+  if (!uid || uid === String(state.userId)) { toast("You cannot remove your own account."); return; }
+  const name = profileName(uid);
+  if (!(await confirmDialog(`Remove "${name}" from active company access? They will no longer be able to sign in.`, "Remove Member"))) return;
+  const { error: roleErr } = await runtime.client
+    .from("user_roles")
+    .update({ approval_status: "declined" })
+    .eq("user_id", uid);
+  if (roleErr) { toast("Remove failed: " + roleErr.message); return; }
+  await runtime.client.from("profiles").update({ team: null, area: null }).eq("user_id", uid);
+  closeAdminMemberOverlay();
+  suppressNotifications();
+  await Promise.all([loadProfiles(), loadRoles(), loadPending()]);
+  renderAdmin();
+  toast(`${name} removed`);
+}
+
+export async function deleteAdminMember(userId: string): Promise<void> {
+  if (!isAdmin() || !checkNetwork()) return;
+  const uid = String(userId || "");
+  if (!uid || uid === String(state.userId)) { toast("You cannot delete your own account."); return; }
+  const name = profileName(uid);
+  if (!(await confirmDialog(`Permanently delete "${name}" and their access records? This cannot be undone.`, "Delete Member"))) return;
+  await runtime.client.from("employee_locations").delete().eq("user_id", uid);
+  await runtime.client.from("registration_requests").delete().eq("user_id", uid);
+  const { error: roleErr } = await runtime.client.from("user_roles").delete().eq("user_id", uid);
+  if (roleErr) { toast("Could not delete role record: " + roleErr.message); return; }
+  const { error: profErr } = await runtime.client.from("profiles").delete().eq("user_id", uid);
+  closeAdminMemberOverlay();
+  suppressNotifications();
+  await Promise.all([loadProfiles(), loadRoles(), loadPending()]);
+  renderAdmin();
+  if (profErr) {
+    toast(`${name} access removed (profile kept for historical records)`);
+  } else {
+    toast(`${name} deleted`);
+  }
 }
 
 /* ==================== ANNOUNCEMENTS / SCHEDULES / SITES ==================== */
@@ -849,6 +1007,18 @@ export function renderSchedules(): void {
   }).join("") || '<p class="muted">No schedules assigned to you.</p>';
 }
 
+export function openScheduleFormOverlay(): void {
+  if (!isManager()) return;
+  renderScheduleSiteOptions();
+  renderAssigneesPicker();
+  $("scheduleFormOverlay")?.classList.remove("hidden");
+  setTimeout(() => ($("schTitle") as HTMLInputElement | null)?.focus(), 40);
+}
+
+export function closeScheduleFormOverlay(): void {
+  $("scheduleFormOverlay")?.classList.add("hidden");
+}
+
 export async function saveSchedule(): Promise<void> {
   if (!isManager()) return;
   const title = val("schTitle").trim();
@@ -868,60 +1038,418 @@ export async function saveSchedule(): Promise<void> {
   document.querySelectorAll<HTMLInputElement>('input[name="schPersonnel"]:checked').forEach(i => { i.checked = false; });
   suppressNotifications();
   await loadSchedules();
-  $("scheduleFormCard")?.classList.add("hidden");
+  closeScheduleFormOverlay();
   toast("Schedule saved");
 }
 
+let pendingSiteThumbTargetId: string | null = null;
+
+export function getFilteredSites(): any[] {
+  const reg = String(runtime.sitesRegionFilter || "ALL");
+  const st = String(runtime.sitesStatusFilter || "ALL");
+  return state.sites.filter(s => {
+    if (reg !== "ALL" && String(s.region || "").toLowerCase() !== reg.toLowerCase()) return false;
+    if (st !== "ALL" && getSiteEffectiveStatus(s, state.units) !== st) return false;
+    return true;
+  });
+}
+
+async function persistSiteMetaFallback(
+  siteId: string,
+  patch: { thumbnail_url?: string | null; status?: string | null; latitude?: number | null; longitude?: number | null }
+): Promise<void> {
+  const sid = String(siteId);
+  const now = new Date().toISOString();
+  const prev = runtime.siteMetaNotices[sid] || {};
+  const nextMeta = {
+    site_id: sid,
+    thumbnail_url: patch.thumbnail_url !== undefined ? patch.thumbnail_url : prev.thumbnail_url,
+    status: patch.status !== undefined ? patch.status : prev.status,
+    latitude: patch.latitude !== undefined ? patch.latitude : prev.latitude,
+    longitude: patch.longitude !== undefined ? patch.longitude : prev.longitude,
+    updated_at: now,
+  };
+  runtime.siteMetaNotices[sid] = nextMeta;
+  const site = state.sites.find(x => String(x.id) === sid);
+  if (site) {
+    if (patch.thumbnail_url !== undefined) site.thumbnail_url = patch.thumbnail_url;
+    if (patch.status !== undefined) site.status = patch.status;
+    if (patch.latitude !== undefined) site.latitude = patch.latitude;
+    if (patch.longitude !== undefined) site.longitude = patch.longitude;
+  }
+  suppressNotifications();
+  const body = buildSiteMetaAppNoticeBody(nextMeta);
+  const { error } = await runtime.client.from("app_notifications").insert({
+    title: "Site Metadata",
+    body,
+    is_read: true,
+  });
+  if (error) {
+    console.warn("persistSiteMetaFallback failed:", error.message);
+  }
+}
+
+async function uploadSiteThumbnailFile(siteId: string, rawFile: File, opts: { silent?: boolean } = {}): Promise<string | null> {
+  if (!isManager()) { toast("Managers only"); return null; }
+  if (!checkNetwork()) return null;
+  if (!isImageFile(rawFile)) { toast("Please select an image file."); return null; }
+
+  const sid = String(siteId);
+  const site = state.sites.find(x => String(x.id) === sid);
+  const oldUrl = site ? getSiteThumbnailUrl(site) : null;
+  if (!opts.silent) toast("Uploading site thumbnail…");
+
+  const prepared = await prepareImageFile(rawFile, 1280, 0.85);
+  const safeName = prepared.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const path = `sites/${sid}/${Date.now()}-${safeName}`;
+  const { error: upErr } = await runtime.client.storage.from("reports").upload(path, prepared, {
+    upsert: false,
+    contentType: prepared.type || "image/jpeg",
+  });
+  if (upErr) {
+    toast("Thumbnail upload failed: " + upErr.message);
+    return null;
+  }
+  const { data: pub } = runtime.client.storage.from("reports").getPublicUrl(path);
+  const publicUrl = pub.publicUrl;
+
+  let persistedDirect = false;
+  if (!runtime.sitesExtraColsMissing) {
+    const { error } = await runtime.client.from("sites").update({ thumbnail_url: publicUrl }).eq("id", sid);
+    if (!error) {
+      persistedDirect = true;
+    } else if (/thumbnail_url|42703|PGRST204/i.test(error.message || "")) {
+      runtime.sitesExtraColsMissing = true;
+    } else {
+      toast("Could not save thumbnail: " + error.message);
+      return null;
+    }
+  }
+  if (!persistedDirect) {
+    await persistSiteMetaFallback(sid, { thumbnail_url: publicUrl });
+  }
+  if (oldUrl && oldUrl.includes("/storage/v1/object/")) {
+    await deleteStorageFile("reports", oldUrl);
+  }
+  if (site) site.thumbnail_url = publicUrl;
+  suppressNotifications();
+  await loadSites();
+  if (!opts.silent) toast("Site thumbnail updated");
+  return publicUrl;
+}
+
+async function updateSiteStatus(siteId: string, nextStatus: string): Promise<void> {
+  if (!isManager()) return;
+  if (!checkNetwork()) return;
+  const sid = String(siteId);
+  const site = state.sites.find(x => String(x.id) === sid);
+  if (site) site.status = nextStatus;
+
+  let persistedDirect = false;
+  if (!runtime.sitesExtraColsMissing) {
+    const { error } = await runtime.client.from("sites").update({ status: nextStatus }).eq("id", sid);
+    if (!error) {
+      persistedDirect = true;
+    } else if (/status|42703|PGRST204/i.test(error.message || "")) {
+      runtime.sitesExtraColsMissing = true;
+    } else {
+      toast("Status update failed: " + error.message);
+      return;
+    }
+  }
+  if (!persistedDirect) {
+    await persistSiteMetaFallback(sid, { status: nextStatus });
+  }
+  suppressNotifications();
+  await loadSites();
+  toast("Site status updated to " + nextStatus);
+}
+
+function formatSiteDistanceBadge(siteId: string): string {
+  const d = runtime.siteDistances[String(siteId)];
+  if (!d || d.status === "idle") {
+    return '<span class="site-dist-badge muted-dist">🚗 Distance pending…</span>';
+  }
+  if (d.status === "loading") {
+    return '<span class="site-dist-badge muted-dist">⏳ Calculating distance…</span>';
+  }
+  if (d.status === "ready") {
+    const parts = [d.distanceText, d.durationText ? d.durationText + " drive" : ""].filter(Boolean).join(" · ");
+    return '<span class="site-dist-badge">🚗 ' + esc(parts) + "</span>";
+  }
+  if (d.status === "no_gps") {
+    return '<span class="site-dist-badge muted-dist">📍 Enable GPS for distance</span>';
+  }
+  if (d.status === "no_route") {
+    return '<span class="site-dist-badge muted-dist">🛣️ ' + esc(d.message || "No driving route") + "</span>";
+  }
+  return '<span class="site-dist-badge muted-dist">⚠️ ' + esc(d.message || "Distance unavailable") + "</span>";
+}
+
 export function renderSites(): void {
+  document.querySelectorAll<HTMLElement>("[data-sites-region]").forEach(btn => {
+    btn.classList.toggle("active", (btn.dataset.sitesRegion || "ALL") === runtime.sitesRegionFilter);
+  });
+  document.querySelectorAll<HTMLElement>("[data-sites-status]").forEach(btn => {
+    btn.classList.toggle("active", (btn.dataset.sitesStatus || "ALL") === runtime.sitesStatusFilter);
+  });
+
+  const filtered = getFilteredSites();
+  const cnt = $("siteFilterCount");
+  if (cnt) {
+    cnt.textContent = filtered.length === state.sites.length
+      ? `(${state.sites.length})`
+      : `(${filtered.length} of ${state.sites.length})`;
+  }
+
   const box = $("siteList");
   if (!box) return;
-  box.innerHTML = state.sites.map(s => {
-    const isSel = runtime.selectedSiteId && String(runtime.selectedSiteId) === String(s.id);
-    return '<div class="item' + (isSel ? " site-selected" : "") + '"><b>' + esc(s.name) + '</b><div class="muted">' +
-      esc([s.address, s.city, s.region].filter(Boolean).join(" · ")) +
-      '</div><div class="inline-actions"><button class="btn small-btn" type="button" data-act="map" data-id="' + esc(s.id) + '">📍 View on Map</button>' +
-      (isManager() ? '<button class="red small-btn" type="button" data-act="del-site" data-id="' + esc(s.id) + '">Delete</button>' : "") + "</div></div>";
-  }).join("") || '<p class="muted">No sites yet.</p>';
+  box.innerHTML = filtered.map(s => {
+    const sid = String(s.id);
+    const isSel = runtime.selectedSiteId && String(runtime.selectedSiteId) === sid;
+    const thumbUrl = getSiteThumbnailUrl(s);
+    const effStatus = getSiteEffectiveStatus(s, state.units);
+    const thumbHtml = thumbUrl
+      ? '<img class="site-thumb" src="' + esc(thumbUrl) + '" alt="' + esc(s.name) + '" data-act="preview-site-thumb" data-id="' + esc(sid) + '">'
+      : '<div class="site-thumb-empty">📷<span>No photo</span></div>';
+
+    const statusOptionsHtml = SITE_STATUS_OPTIONS.map(opt =>
+      '<option value="' + esc(opt) + '"' + (opt === effStatus ? " selected" : "") + ">" + esc(opt) + "</option>"
+    ).join("");
+
+    return '<div class="item' + (isSel ? " site-selected" : "") + '">' +
+      '<div class="site-card-row">' +
+        thumbHtml +
+        '<div class="site-card-body">' +
+          '<b>' + esc(s.name) + '</b>' +
+          '<div class="muted">' + esc([s.address, s.city, s.region].filter(Boolean).join(" · ")) + '</div>' +
+          '<div class="site-meta-badges">' +
+            '<span class="badge">' + esc(effStatus) + '</span>' +
+            formatSiteDistanceBadge(sid) +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="inline-actions">' +
+        '<button class="btn small-btn" type="button" data-act="map" data-id="' + esc(sid) + '">📍 View on Map</button>' +
+        (isManager()
+          ? '<button class="gray small-btn" type="button" data-act="upload-site-thumb" data-id="' + esc(sid) + '">' + (thumbUrl ? "📷 Change Photo" : "📷 Upload Photo") + '</button>' +
+            '<select class="site-status-select" data-site-status-select="' + esc(sid) + '" aria-label="Status for ' + esc(s.name) + '">' + statusOptionsHtml + '</select>' +
+            '<button class="red small-btn" type="button" data-act="del-site" data-id="' + esc(sid) + '">Delete</button>'
+          : "") +
+      '</div>' +
+    '</div>';
+  }).join("") || '<p class="muted">' + (state.sites.length ? "No sites match the selected region/status filters." : "No sites yet.") + "</p>";
 }
 
 export async function addSite(): Promise<void> {
   const name = val("siteName").trim();
   if (!name) { toast("Enter a site name"); return; }
-  const { error } = await runtime.client.from("sites").insert({
-    name, address: val("siteAddress").trim() || null, region: val("siteRegion"), city: val("siteCity").trim() || null,
-  });
-  if (error) { toast("Could not add: " + error.message); return; }
-  $("addSiteOverlay")?.classList.add("hidden");
-  setVal("siteName", "");
-  setVal("siteAddress", "");
-  setVal("siteCity", "");
-  suppressNotifications();
-  await loadSites();
-  toast("Site added");
+
+  const submitBtn = $("submitAddSiteBtn") as HTMLButtonElement | null;
+  const pinStatusEl = $("addSitePinStatus");
+  if (submitBtn?.disabled) return;
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Locating & Saving…";
+  }
+
+  try {
+    let address = val("siteAddress").trim() || null;
+    let region = val("siteRegion");
+    let city = val("siteCity").trim() || null;
+    const status = val("siteStatus") || "Operational";
+    const rawLat = val("siteLat").trim();
+    const rawLng = val("siteLng").trim();
+    const parsedLat = rawLat ? Number(rawLat) : null;
+    const parsedLng = rawLng ? Number(rawLng) : null;
+    let latitude = parsedLat !== null && Number.isFinite(parsedLat) ? parsedLat : null;
+    let longitude = parsedLng !== null && Number.isFinite(parsedLng) ? parsedLng : null;
+    const thumbInput = $("siteAddThumb") as HTMLInputElement | null;
+    const rawThumb = thumbInput?.files?.[0] || null;
+    let autoPlacesPhotoUrl = "";
+
+    if (!address || !city || latitude === null || longitude === null) {
+      if (pinStatusEl) pinStatusEl.textContent = `🔍 Auto-resolving address & map pin for "${name}"…`;
+      const auto = await resolveSiteAddressAndPin({
+        name,
+        address,
+        city,
+        region,
+        lat: latitude,
+        lng: longitude,
+      });
+      if (auto) {
+        if (!address && auto.address) {
+          address = auto.address;
+          setVal("siteAddress", auto.address);
+        }
+        if (!city && auto.city) {
+          city = auto.city;
+          setVal("siteCity", auto.city);
+        }
+        if (auto.region) {
+          region = auto.region;
+          setVal("siteRegion", auto.region);
+        }
+        if (latitude === null && auto.lat !== null) {
+          latitude = auto.lat;
+          setVal("siteLat", auto.lat.toFixed(6));
+        }
+        if (longitude === null && auto.lng !== null) {
+          longitude = auto.lng;
+          setVal("siteLng", auto.lng.toFixed(6));
+        }
+        if (auto.photoUrl) {
+          autoPlacesPhotoUrl = auto.photoUrl;
+        }
+      }
+    }
+
+    let autoExternalThumbUrl = "";
+    let autoSnapshotUrlFallback = "";
+    if (!rawThumb) {
+      const preResolvedUrl = val("siteAutoThumbUrl").trim();
+      if (preResolvedUrl.startsWith("http")) {
+        autoExternalThumbUrl = preResolvedUrl;
+      } else {
+        const photoFound = await resolveSiteAutoPhotoUrl({
+          name,
+          city,
+          lat: latitude,
+          lng: longitude,
+          placesPhotoUrl: autoPlacesPhotoUrl,
+        });
+        if (photoFound?.photoUrl) {
+          if (photoFound.photoUrl.startsWith("http") && photoFound.source !== "osm_tile") {
+            autoExternalThumbUrl = photoFound.photoUrl;
+          } else {
+            autoSnapshotUrlFallback = photoFound.photoUrl;
+          }
+        }
+      }
+    }
+
+    let inserted: any = null;
+    let usedFallback = false;
+
+    if (!runtime.sitesExtraColsMissing) {
+      const payload: Record<string, any> = { name, address, region, city, status };
+      if (latitude !== null && longitude !== null) {
+        payload.latitude = latitude;
+        payload.longitude = longitude;
+      }
+      if (autoExternalThumbUrl) {
+        payload.thumbnail_url = autoExternalThumbUrl;
+      }
+      const res = await runtime.client
+        .from("sites")
+        .insert(payload)
+        .select()
+        .single();
+      if (!res.error) {
+        inserted = res.data;
+      } else if (/status|thumbnail_url|latitude|longitude|42703|PGRST204/i.test(res.error.message || "")) {
+        runtime.sitesExtraColsMissing = true;
+        usedFallback = true;
+      } else {
+        toast("Could not add: " + res.error.message);
+        return;
+      }
+    } else {
+      usedFallback = true;
+    }
+
+    if (usedFallback) {
+      const res = await runtime.client
+        .from("sites")
+        .insert({ name, address, region, city })
+        .select()
+        .single();
+      if (res.error) { toast("Could not add: " + res.error.message); return; }
+      inserted = res.data;
+      if (inserted?.id && ((status && status !== "Operational") || (latitude !== null && longitude !== null) || autoExternalThumbUrl)) {
+        await persistSiteMetaFallback(String(inserted.id), {
+          status: status || "Operational",
+          latitude,
+          longitude,
+          ...(autoExternalThumbUrl ? { thumbnail_url: autoExternalThumbUrl } : {}),
+        });
+      }
+    }
+
+    if (inserted?.id) {
+      const sid = String(inserted.id);
+      if (rawThumb && isManager()) {
+        await uploadSiteThumbnailFile(sid, rawThumb, { silent: true });
+      } else if (!autoExternalThumbUrl) {
+        const snapFile = await createSiteAutoSnapshotFile(name, city || region || "", latitude, longitude);
+        let uploadedSnap: string | null = null;
+        if (snapFile && isManager()) {
+          uploadedSnap = await uploadSiteThumbnailFile(sid, snapFile, { silent: true });
+        }
+        if (!uploadedSnap && autoSnapshotUrlFallback) {
+          if (!runtime.sitesExtraColsMissing) {
+            await runtime.client.from("sites").update({ thumbnail_url: autoSnapshotUrlFallback }).eq("id", sid);
+          }
+          await persistSiteMetaFallback(sid, { thumbnail_url: autoSnapshotUrlFallback });
+        }
+      }
+    }
+
+    $("addSiteOverlay")?.classList.add("hidden");
+    setVal("siteName", "");
+    setVal("siteAddress", "");
+    setVal("siteCity", "");
+    setVal("siteLat", "");
+    setVal("siteLng", "");
+    setVal("siteStatus", "Operational");
+    setVal("siteAutoThumbUrl", "");
+    if (thumbInput) thumbInput.value = "";
+    resetAddSitePinPicker();
+    suppressNotifications();
+    await loadSites();
+    toast(latitude !== null && longitude !== null ? "Site added with picture & map pin" : "Site added with picture");
+    if (inserted?.id) {
+      openSiteOnMap(String(inserted.id));
+    }
+    void refreshVisibleSiteDistances(getFilteredSites());
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Add site";
+    }
+  }
+}
+
+export function closeSiteMapOverlay(): void {
+  $("siteMapOverlay")?.classList.add("hidden");
 }
 
 export function openSiteOnMap(siteId: string): void {
   const s = state.sites.find(x => String(x.id) === String(siteId));
   if (!s) return;
   runtime.selectedSiteId = String(s.id);
-  if (runtime.currentPage !== "sites") {
+  const unitsOverlayOpen = !$("siteUnitsOverlay")?.classList.contains("hidden");
+  if (!unitsOverlayOpen && runtime.currentPage !== "sites") {
     go("sites", { skipScrollReset: true });
-  } else {
+  } else if (runtime.currentPage === "sites") {
     renderSites();
   }
+  $("siteMapOverlay")?.classList.remove("hidden");
   $("siteMapCard")?.classList.remove("hidden");
   const ttl = $("siteMapTitle");
   if (ttl) ttl.textContent = s.name;
   const cleanName = String(s.name || "").replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s+/g, " ").trim();
-  const query = [s.name, s.address, s.city, s.region, "Philippines"].filter(Boolean).join(", ");
-  const fallbackQueries = [
+  const query = [s.name, s.address, s.city, "Philippines"].filter(Boolean).join(", ");
+  const fallbackQueries = [...new Set([
     [cleanName, s.address, s.city, "Philippines"].filter(Boolean).join(", "),
     [cleanName, s.city, "Philippines"].filter(Boolean).join(", "),
     [s.address, s.city, "Philippines"].filter(Boolean).join(", "),
-    [s.name, "Philippines"].filter(Boolean).join(", "),
-  ];
+    cleanName ? `${cleanName}, Philippines` : "",
+    s.name ? `${s.name}, Philippines` : "",
+    s.city ? `${s.city}, Philippines` : "",
+  ].filter(Boolean))];
   void openSiteGoogleMap("siteGoogleMap", query, s.name, "siteMapStatus", fallbackQueries);
-  $("siteMapCard")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 /* ==================== UNITS & MANUALS ==================== */
@@ -1022,10 +1550,65 @@ export async function ensureAmcbUnitsSeeded(): Promise<void> {
   } catch {}
 }
 
+function buildSiteUnitsHtml(site: any, siteUnits: any[]): string {
+  if (!siteUnits.length) {
+    return '<p class="muted" style="margin:8px 0 0;">No units added for this site yet.</p>';
+  }
+  const hasSideTags = siteUnits.some(u => !!parseUnitSideTag(parseUnitManualMeta(u.notes).cleanNotes).side);
+  if (hasSideTags) {
+    const sideOrder = ["SEDA SIDE", "IVILLA SIDE", "PADRIGA SIDE"];
+    const grouped: Record<string, any[]> = {};
+    siteUnits.forEach(u => {
+      const sTag = parseUnitSideTag(parseUnitManualMeta(u.notes).cleanNotes).side || "OTHER UNITS";
+      (grouped[sTag] = grouped[sTag] || []).push(u);
+    });
+    const orderedSides = [
+      ...sideOrder.filter(k => grouped[k]?.length),
+      ...Object.keys(grouped).filter(k => !sideOrder.includes(k)).sort(),
+    ];
+    return orderedSides.map(sideName =>
+      `<div class="person-group-title" style="margin-top:10px;">${esc(sideName)} (${grouped[sideName].length})</div>` +
+      grouped[sideName].map(u => renderUnitCardRow(u, site)).join("")
+    ).join("");
+  }
+  return [...siteUnits]
+    .sort((a, b) => String(a.unit_name || "").localeCompare(String(b.unit_name || "")))
+    .map(u => renderUnitCardRow(u, site))
+    .join("");
+}
+
+export function openSiteUnitsOverlay(siteId: string): void {
+  const site = state.sites.find(s => String(s.id) === String(siteId));
+  if (!site) return;
+  runtime.selectedUnitsSiteId = String(site.id);
+  const siteUnits = state.units.filter(u => String(u.site_id) === String(site.id));
+  const loc = [site.address, site.city, site.region].filter(Boolean).join(" · ");
+  const siteReportsCount = state.reports.filter(r => String(r.site_id) === String(site.id)).length;
+  const sitePmsCount = state.pmsRecords.filter(r => String(r.site_id) === String(site.id)).length;
+
+  const ttl = $("siteUnitsOverlayTitle");
+  if (ttl) ttl.textContent = `🛗 ${site.name} (${siteUnits.length})`;
+  const meta = $("siteUnitsOverlayMeta");
+  if (meta) {
+    meta.textContent = `📍 ${loc || site.name} · ${siteReportsCount} report(s) · ${sitePmsCount} PMS`;
+  }
+  const mapBtn = $("siteUnitsOverlayMapBtn") as HTMLButtonElement | null;
+  if (mapBtn) mapBtn.onclick = () => openSiteOnMap(String(site.id));
+  const addBtn = $("siteUnitsOverlayAddBtn") as HTMLButtonElement | null;
+  if (addBtn) addBtn.onclick = () => openAddUnitForSite(String(site.id));
+  const body = $("siteUnitsOverlayBody");
+  if (body) body.innerHTML = buildSiteUnitsHtml(site, siteUnits);
+
+  $("siteUnitsOverlay")?.classList.remove("hidden");
+}
+
+export function closeSiteUnitsOverlay(): void {
+  $("siteUnitsOverlay")?.classList.add("hidden");
+  runtime.selectedUnitsSiteId = null;
+}
+
 export function toggleUnitSiteCard(siteId: string): void {
-  const key = String(siteId);
-  runtime.expandedUnitSiteIds[key] = !runtime.expandedUnitSiteIds[key];
-  renderUnits();
+  openSiteUnitsOverlay(siteId);
 }
 
 export function switchUnitsTab(_tab: "list" | "manual"): void {
@@ -1147,6 +1730,7 @@ export function triggerUnitManualUpload(unitId: string): void {
 }
 
 export function openUnitReport(siteId: string, unitName: string, unitId = ""): void {
+  closeSiteUnitsOverlay();
   state.reportType = "service";
   runtime.reportsViewMode = "list";
   document.querySelectorAll<HTMLElement>("#reportTypeTabs .tab").forEach(x => x.classList.toggle("active", x.dataset.reportType === "service"));
@@ -1168,6 +1752,7 @@ export function openUnitReport(siteId: string, unitName: string, unitId = ""): v
 }
 
 export function openUnitPms(siteId: string, region: string, unitType: string, unitId = ""): void {
+  closeSiteUnitsOverlay();
   if (isManager()) {
     runtime.reportsViewMode = "pms-records";
     $("pmsRecordsTab")?.click();
@@ -1206,13 +1791,22 @@ export function renderUnitSiteOptions(): void {
   if (state.sites.some(s => String(s.id) === cur)) sel.value = cur;
 }
 
-export function openAddUnitForSite(siteId: string): void {
-  go("units");
+export function openAddUnitForSite(siteId = ""): void {
+  if (runtime.currentPage !== "units") {
+    go("units", { skipScrollReset: true });
+  }
   runtime.editingUnitId = null;
   const ttl = $("unitFormTitle");
-  if (ttl) ttl.textContent = "Add unit";
+  if (ttl) ttl.textContent = "➕ Add unit";
   renderUnitSiteOptions();
-  setVal("unitSite", siteId);
+  if (siteId) {
+    setVal("unitSite", siteId);
+  } else {
+    const firstInRegion = runtime.unitsRegion === "ALL"
+      ? state.sites[0]
+      : state.sites.find(s => s.region === runtime.unitsRegion);
+    if (firstInRegion) setVal("unitSite", String(firstInRegion.id));
+  }
   setVal("unitName", "");
   setVal("unitType", "elevator");
   setVal("unitStatus", "Operational");
@@ -1220,8 +1814,8 @@ export function openAddUnitForSite(siteId: string): void {
   setVal("unitSerial", "");
   setVal("unitCapacity", "");
   setVal("unitNotes", "");
-  $("unitFormCard")?.classList.remove("hidden");
-  $("unitFormCard")?.scrollIntoView({ behavior: "smooth" });
+  $("unitFormOverlay")?.classList.remove("hidden");
+  setTimeout(() => ($("unitName") as HTMLInputElement | null)?.focus(), 40);
 }
 
 export function editUnit(unitId: string): void {
@@ -1229,7 +1823,7 @@ export function editUnit(unitId: string): void {
   if (!u) return;
   runtime.editingUnitId = String(u.id);
   const ttl = $("unitFormTitle");
-  if (ttl) ttl.textContent = "Edit unit";
+  if (ttl) ttl.textContent = "✏️ Edit unit";
   renderUnitSiteOptions();
   setVal("unitSite", String(u.site_id || ""));
   setVal("unitName", u.unit_name || "");
@@ -1239,20 +1833,20 @@ export function editUnit(unitId: string): void {
   setVal("unitSerial", u.serial_no || "");
   setVal("unitCapacity", u.capacity_floors || "");
   setVal("unitNotes", parseUnitManualMeta(u.notes).cleanNotes || "");
-  $("unitFormCard")?.classList.remove("hidden");
-  $("unitFormCard")?.scrollIntoView({ behavior: "smooth" });
+  $("unitFormOverlay")?.classList.remove("hidden");
+  setTimeout(() => ($("unitName") as HTMLInputElement | null)?.focus(), 40);
 }
 
 export function cancelUnitForm(): void {
   runtime.editingUnitId = null;
   const ttl = $("unitFormTitle");
-  if (ttl) ttl.textContent = "Add unit";
+  if (ttl) ttl.textContent = "➕ Add unit";
   setVal("unitName", "");
   setVal("unitBrand", "");
   setVal("unitSerial", "");
   setVal("unitCapacity", "");
   setVal("unitNotes", "");
-  $("unitFormCard")?.classList.add("hidden");
+  $("unitFormOverlay")?.classList.add("hidden");
 }
 
 export async function saveUnit(): Promise<void> {
@@ -1293,7 +1887,11 @@ export async function saveUnit(): Promise<void> {
 
 export async function deleteUnit(unitId: string): Promise<void> {
   if (!checkNetwork()) return;
-  if (!(await confirmDialog("Delete this unit permanently?", "Delete Unit"))) return;
+  const u = state.units.find(x => String(x.id) === String(unitId));
+  const site = u ? state.sites.find(s => String(s.id) === String(u.site_id)) : null;
+  const unitLabel = u?.unit_name ? `"${u.unit_name}"` : "this unit";
+  const siteSuffix = site?.name ? ` from ${site.name}` : "";
+  if (!(await confirmDialog(`Are you sure you want to delete ${unitLabel}${siteSuffix}? This action cannot be undone.`, "Confirm Delete Unit"))) return;
   const { error } = await runtime.client.from("site_units").delete().eq("id", unitId);
   if (error) { toast("Failed to delete unit: " + error.message); return; }
   suppressNotifications();
@@ -1346,53 +1944,19 @@ export function renderUnits(): void {
     const areasHtml = Object.keys(byArea).sort().map(area => {
       const sitesHtml = byArea[area].map(site => {
         const siteUnits = state.units.filter(u => String(u.site_id) === String(site.id));
-        const isExpanded = !!runtime.expandedUnitSiteIds[String(site.id)];
         const loc = [site.address, site.city, site.region].filter(Boolean).join(" · ");
-
-        let unitsHtml = "";
-        if (isExpanded) {
-          if (!siteUnits.length) {
-            unitsHtml = '<p class="muted" style="margin:8px 0 0;">No units added for this site yet.</p>';
-          } else {
-            const hasSideTags = siteUnits.some(u => !!parseUnitSideTag(parseUnitManualMeta(u.notes).cleanNotes).side);
-            if (hasSideTags) {
-              const sideOrder = ["SEDA SIDE", "IVILLA SIDE", "PADRIGA SIDE"];
-              const grouped: Record<string, any[]> = {};
-              siteUnits.forEach(u => {
-                const sTag = parseUnitSideTag(parseUnitManualMeta(u.notes).cleanNotes).side || "OTHER UNITS";
-                (grouped[sTag] = grouped[sTag] || []).push(u);
-              });
-              const orderedSides = [
-                ...sideOrder.filter(k => grouped[k]?.length),
-                ...Object.keys(grouped).filter(k => !sideOrder.includes(k)).sort(),
-              ];
-              unitsHtml = orderedSides.map(sideName =>
-                `<div class="person-group-title" style="margin-top:10px;">${esc(sideName)} (${grouped[sideName].length})</div>` +
-                grouped[sideName].map(u => renderUnitCardRow(u, site)).join("")
-              ).join("");
-            } else {
-              unitsHtml = [...siteUnits]
-                .sort((a, b) => String(a.unit_name || "").localeCompare(String(b.unit_name || "")))
-                .map(u => renderUnitCardRow(u, site))
-                .join("");
-            }
-          }
-        }
-
         const siteReportsCount = state.reports.filter(r => String(r.site_id) === String(site.id)).length;
         const sitePmsCount = state.pmsRecords.filter(r => String(r.site_id) === String(site.id)).length;
         return '<div class="card" style="margin-bottom:10px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">' +
           '<div class="clickable" style="flex:1;min-width:0;" onclick="toggleUnitSiteCard(\'' + esc(site.id) + '\')">' +
-          '<h2 style="margin:0 0 4px;font-size:16px;">' + (isExpanded ? "▾ " : "▸ ") + esc(site.name) +
+          '<h2 style="margin:0 0 4px;font-size:16px;">▸ ' + esc(site.name) +
           ' <span class="badge">' + siteUnits.length + (siteUnits.length === 1 ? " unit" : " units") + "</span></h2>" +
           '<div class="muted">📍 ' + esc(loc) + ' · ' + siteReportsCount + ' report(s) · ' + sitePmsCount + ' PMS</div>' +
-          '<div class="muted" style="font-size:11px;margin-top:2px;">' + (isExpanded ? "Tap to hide units" : "Tap site name to view units") + "</div>" +
+          '<div class="muted" style="font-size:11px;margin-top:2px;">Tap site to view units</div>' +
           "</div>" +
           '<button class="gray small-btn" type="button" onclick="openSiteOnMap(\'' + esc(site.id) + '\')">📍 Map</button>' +
-          "</div>" +
-          (isExpanded ? '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);">' + unitsHtml + "</div>" : "") +
-          "</div>";
+          "</div></div>";
       }).join("");
 
       return `<div class="person-group-title">📍 Area: ${esc(area)}</div>${sitesHtml}`;
@@ -1402,6 +1966,9 @@ export function renderUnits(): void {
   }).filter(Boolean).join("");
 
   box.innerHTML = html || '<p class="muted">No work sites in ' + esc(regFilter) + " yet.</p>";
+  if (!$("siteUnitsOverlay")?.classList.contains("hidden") && runtime.selectedUnitsSiteId) {
+    openSiteUnitsOverlay(runtime.selectedUnitsSiteId);
+  }
 }
 
 /* ==================== REPORTS, PMS & SEARCH ==================== */
@@ -1910,17 +2477,15 @@ export function renderDtr(): void {
   }
 
   tbody.innerHTML = rows.map(d => {
-    const hrs = calculateDtrHours(d.time_in, d.time_out, d.overtime_approved);
+    const hrs = calculateDtrHours(d.time_in, d.time_out, true);
     const otMins = calculateOtMinutes(d.time_in, d.time_out);
     const meta = parseDtrJobMeta(d.job, d.approved_by);
-    const canApprove = isManager() && otMins > 0 && !d.overtime_approved;
     const canDelete = String(d.user_id) === String(state.userId) || isManager();
     const jobText = [meta.unitName ? `[${meta.unitName}]` : "", meta.cleanJob, meta.approvedBy ? `(${meta.approvedBy})` : ""].filter(Boolean).join(" ");
     return "<tr><td>" + esc(fmtTableDate(d.work_date)) + "</td><td>" + esc(employeeDisplayName(d.user_id)) + "</td><td>" +
       esc([d.location, jobText].filter(Boolean).join(" · ")) + "</td><td><b>" + esc(d.time_in || "—") + "</b></td><td><b>" +
-      esc(d.time_out || "—") + "</b></td><td>" + hrs.toFixed(2) + (otMins > 0 ? (d.overtime_approved ? " (OT✓)" : " (OT)") : "") + "</td><td>" +
+      esc(d.time_out || "—") + "</b></td><td>" + hrs.toFixed(2) + (otMins > 0 ? " (OT✓)" : "") + "</td><td>" +
       (canDelete ? '<button class="gray small-btn" type="button" onclick="openEditDtr(\'' + esc(d.id) + '\')" aria-label="Edit DTR">✏️</button> ' : "") +
-      (canApprove ? '<button class="green small-btn" type="button" data-act="approve-ot" data-id="' + esc(d.id) + '">Approve OT</button> ' : "") +
       (canDelete ? '<button class="red small-btn" type="button" data-act="del-dtr" data-id="' + esc(d.id) + '">×</button>' : "") + "</td></tr>";
   }).join("") || '<tr><td colspan="7" class="muted">No DTR entries for this cutoff period.</td></tr>';
   if (!$("dtrPreview")?.classList.contains("hidden")) buildDtrPaper();
@@ -2174,7 +2739,6 @@ async function insertDtrEntrySafe(payload: {
 export async function addDtr(): Promise<void> {
   const date = val("dtrDate");
   if (!date) { toast("Choose a date"); return; }
-  const otEl = $("dtrOvertimeApproved") as HTMLInputElement | null;
   const unitName = val("dtrUnit").trim();
   const jobRaw = val("dtrJob").trim();
   const jobFull = [unitName ? `[Unit: ${unitName}]` : "", jobRaw].filter(Boolean).join(" ");
@@ -2186,7 +2750,7 @@ export async function addDtr(): Promise<void> {
       job: jobFull || null,
       time_in: val("dtrIn") || null,
       time_out: val("dtrOut") || null,
-      overtime_approved: otEl ? otEl.checked : false,
+      overtime_approved: true,
     });
   } catch (err: any) {
     toast("Could not add: " + (err?.message || err));
@@ -2214,7 +2778,7 @@ export function clearDtrForm(): void {
   if (jobEl) delete jobEl.dataset.autoFilled;
   ["dtrDate", "dtrLocation", "dtrUnit", "dtrJob", "dtrIn", "dtrOut"].forEach(id => setVal(id, ""));
   const otEl = $("dtrOvertimeApproved") as HTMLInputElement | null;
-  if (otEl) otEl.checked = false;
+  if (otEl) otEl.checked = true;
 }
 
 export function setTimeLogMode(mode: "time_in" | "time_out"): void {
@@ -2414,7 +2978,7 @@ async function writeAnalyzedTimeToDtr(
         job: jobLabel || null,
         time_in: time24,
         time_out: null,
-        overtime_approved: false,
+        overtime_approved: true,
       });
     }
   } else {
@@ -2427,6 +2991,7 @@ async function writeAnalyzedTimeToDtr(
         .from("dtr_entries")
         .update({
           time_out: time24,
+          overtime_approved: true,
           ...(location && !targetRow.location ? { location } : {}),
         })
         .eq("id", targetRow.id);
@@ -2441,7 +3006,7 @@ async function writeAnalyzedTimeToDtr(
         job: jobLabel || null,
         time_in: null,
         time_out: time24,
-        overtime_approved: false,
+        overtime_approved: true,
       });
     }
   }
@@ -2724,9 +3289,9 @@ export function openEditDtr(id: string): void {
   setVal("editDtrOut", String(row.time_out || ""));
   setVal("editDtrApprovedBy", meta.approvedBy || "");
   const otWrap = $("editDtrOvertimeWrap");
-  if (otWrap) otWrap.classList.toggle("hidden", !isManager());
+  if (otWrap) otWrap.classList.remove("hidden");
   const otBox = $("editDtrOvertimeApproved") as HTMLInputElement | null;
-  if (otBox) otBox.checked = !!row.overtime_approved;
+  if (otBox) otBox.checked = true;
   $("dtrEditOverlay")?.classList.remove("hidden");
 }
 
@@ -2745,7 +3310,6 @@ export async function saveEditedDtr(): Promise<void> {
   const timeIn = val("editDtrIn").trim();
   const timeOut = val("editDtrOut").trim();
   const approvedBy = val("editDtrApprovedBy").trim();
-  const otEl = $("editDtrOvertimeApproved") as HTMLInputElement | null;
 
   const basePayload: Record<string, any> = {
     work_date: workDate,
@@ -2753,8 +3317,8 @@ export async function saveEditedDtr(): Promise<void> {
     job: buildDtrJobWithApproval(unitName, cleanJob, approvedBy, runtime.dtrApprovedByColMissing) || null,
     time_in: timeIn || null,
     time_out: timeOut || null,
+    overtime_approved: true,
   };
-  if (isManager() && otEl) basePayload.overtime_approved = otEl.checked;
   if (!runtime.dtrApprovedByColMissing) basePayload.approved_by = approvedBy || null;
 
   try {
@@ -2808,7 +3372,7 @@ function buildDtrPaper(): void {
     const timeRange = (tIn && tOut) ? `${tIn} - ${tOut}` : (tIn || tOut || "—");
     const desc = [meta.cleanJob, meta.unitName ? `(${meta.unitName})` : ""].filter(Boolean).join(" ") || meta.unitName || "";
     const approvedTxt = meta.approvedBy ||
-      (isSunday ? "SUNDAY DUTY" : (d.overtime_approved || calculateOtMinutes(d.time_in, d.time_out) > 0 ? "EXTEND" : ""));
+      (isSunday ? "SUNDAY DUTY" : (calculateOtMinutes(d.time_in, d.time_out) > 0 ? "EXTEND" : ""));
     return '<tr class="clickable" data-edit-dtr="' + esc(d.id) + '" title="Tap to edit DTR entry">' +
       "<td>" + esc(fmtHalfSheetDate(d.work_date)) + "</td>" +
       "<td>" + esc(d.location || "") + "</td>" +
@@ -3005,29 +3569,73 @@ export function captureTimemarkPhoto(): void {
   }, "image/jpeg", 0.92);
 }
 
+function getCurrentPreviewExportedIds(): string[] {
+  const pickedUid = isManager() && val("dtrPreviewEmployee") ? val("dtrPreviewEmployee") : String(state.userId || "");
+  const employeeRows = (state.dtrs || []).filter(d => String(d.user_id) === String(pickedUid));
+  const { rows } = filterDtrRowsByCutoff(employeeRows, getActiveDtrCutoffKey());
+  return rows.map(d => String(d.id)).filter(Boolean);
+}
+
+export async function clearDtrAfterExport(ids?: string[]): Promise<void> {
+  const targetIds = [...new Set((ids && ids.length ? ids : getCurrentPreviewExportedIds()).map(String).filter(Boolean))];
+  if (targetIds.length && runtime.client && navigator.onLine) {
+    try {
+      const { error } = await runtime.client.from("dtr_entries").delete().in("id", targetIds);
+      if (error) {
+        for (const id of targetIds) {
+          await runtime.client.from("dtr_entries").delete().eq("id", id);
+        }
+      }
+      suppressNotifications();
+      await loadDtrs();
+    } catch {}
+  }
+  clearDtrForm();
+  buildDtrPaper();
+}
+
 export async function downloadDtr(): Promise<void> {
   const paper = $("dtrPaper");
   if (!paper) return;
   if (!window.html2canvas) { toast("Image export library is still loading. Try again in a moment."); return; }
+  const exportedIds = getCurrentPreviewExportedIds();
   try {
     const canvas = await window.html2canvas(paper, { backgroundColor: "#fff", scale: 2 });
     canvas.toBlob(async (blob: Blob | null) => {
       if (!blob) return;
       const file = new File([blob], "DTR-" + new Date().toISOString().slice(0, 10) + ".jpg", { type: "image/jpeg" });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        try { await navigator.share({ files: [file], title: "Daily Time Record" }); return; } catch {}
+        try {
+          await navigator.share({ files: [file], title: "Daily Time Record" });
+          await clearDtrAfterExport(exportedIds);
+          toast("DTR downloaded & cleared");
+          return;
+        } catch {}
       }
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = file.name;
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      await clearDtrAfterExport(exportedIds);
+      toast("DTR downloaded & cleared");
     }, "image/jpeg", 0.92);
   } catch (err: any) { toast(err?.message || "Could not export."); }
 }
 export function printDtr(): void {
   document.body.classList.remove("printing-leave");
+  const exportedIds = getCurrentPreviewExportedIds();
+  let cleared = false;
+  const finalizeClear = () => {
+    if (cleared) return;
+    cleared = true;
+    void clearDtrAfterExport(exportedIds).then(() => {
+      toast("DTR printed & cleared");
+    });
+  };
+  window.addEventListener("afterprint", finalizeClear, { once: true });
   window.print();
+  setTimeout(finalizeClear, 1800);
 }
 
 /* ==================== NOTES, RECS, LEAVE, PROFILE ==================== */
@@ -3216,6 +3824,81 @@ function collectLeaveMetaFromForm() {
   };
 }
 
+export function closeLeaveFormOverlay(): void {
+  $("leaveFormOverlay")?.classList.add("hidden");
+  runtime.editingLeaveId = null;
+  const ttl = $("leaveFormTitle");
+  if (ttl) ttl.textContent = "Application for Leave";
+  const btn = $("submitLeaveBtn");
+  if (btn) btn.textContent = "Submit request";
+}
+
+export function openAddLeaveModal(): void {
+  runtime.editingLeaveId = null;
+  const ttl = $("leaveFormTitle");
+  if (ttl) ttl.textContent = "Application for Leave";
+  const btn = $("submitLeaveBtn");
+  if (btn) btn.textContent = "Submit request";
+  setVal("leaveFilingDate", localDateKey(new Date()));
+  setVal("leaveType", "vacation");
+  const defParts = splitFullNameParts(state.profile?.full_name || "");
+  setVal("leaveLastName", defParts.lastName || "");
+  setVal("leaveFirstName", defParts.firstName || "");
+  setVal("leaveMiddleName", defParts.middleName || "");
+  setVal("leaveApplicantName", state.profile?.full_name || "");
+  ["leaveStart", "leaveEnd", "leaveReason", "leaveOthersSpecify", "leaveVacationPlace", "leaveOutsideSpecify", "leaveHospitalSpecify", "leaveWorkingDays"].forEach(id => setVal(id, ""));
+  const wdEl = $("leaveWorkingDays") as HTMLInputElement | null;
+  if (wdEl) wdEl.dataset.autoFilled = "1";
+  const hospEl = $("leaveInHospital") as HTMLInputElement | null;
+  if (hospEl) hospEl.checked = false;
+  const st = $("leaveFormStatus");
+  if (st) st.textContent = "";
+  updateLeaveDaysPreview();
+  $("leaveFormOverlay")?.classList.remove("hidden");
+}
+
+export function editLeaveRequest(id: string): void {
+  const req = state.leaveRequests.find(r => String(r.id) === String(id));
+  if (!req) return;
+  if (String(req.user_id) !== String(state.userId) && !isManager()) {
+    toast("You can only edit your own leave requests.");
+    return;
+  }
+  runtime.editingLeaveId = String(req.id);
+  const meta = parseLeaveMeta(req.reason);
+  const defParts = splitFullNameParts(profileName(req.user_id) || state.profile?.full_name || "");
+  const ttl = $("leaveFormTitle");
+  if (ttl) ttl.textContent = "✏️ Edit Leave Request";
+  const btn = $("submitLeaveBtn");
+  if (btn) btn.textContent = "Save changes";
+
+  setVal("leaveFilingDate", meta.filingDate || String(req.created_at || "").slice(0, 10) || localDateKey(new Date()));
+  const lType = (meta.displayType || req.leave_type || "vacation").toLowerCase();
+  setVal("leaveType", ["vacation", "sick", "emergency", "others"].includes(lType) ? lType : "vacation");
+  setVal("leaveLastName", meta.lastName || defParts.lastName || "");
+  setVal("leaveFirstName", meta.firstName || defParts.firstName || "");
+  setVal("leaveMiddleName", meta.middleName || defParts.middleName || "");
+  setVal("leaveOthersSpecify", meta.othersSpecify || "");
+  setVal("leaveVacationPlace", meta.vacationPlace || "");
+  setVal("leaveOutsideSpecify", meta.outsideSpecify || "");
+  const hospEl = $("leaveInHospital") as HTMLInputElement | null;
+  if (hospEl) hospEl.checked = !!meta.inHospital;
+  setVal("leaveHospitalSpecify", meta.hospitalSpecify || "");
+  setVal("leaveStart", req.start_date || "");
+  setVal("leaveEnd", req.end_date || "");
+  const wdEl = $("leaveWorkingDays") as HTMLInputElement | null;
+  if (wdEl) {
+    wdEl.dataset.autoFilled = "0";
+    wdEl.value = meta.workingDays || String(req.workdays || req.calendar_days || "");
+  }
+  setVal("leaveApplicantName", meta.applicantName || profileName(req.user_id) || state.profile?.full_name || "");
+  setVal("leaveReason", meta.cleanReason || "");
+  const st = $("leaveFormStatus");
+  if (st) st.textContent = "";
+  updateLeaveDaysPreview();
+  $("leaveFormOverlay")?.classList.remove("hidden");
+}
+
 export async function submitLeaveRequest(): Promise<void> {
   const start = val("leaveStart");
   const end = val("leaveEnd");
@@ -3229,40 +3912,45 @@ export async function submitLeaveRequest(): Promise<void> {
     workingDays: meta.workingDays || String(days),
   });
 
-  let { error } = await runtime.client.from("leave_requests").insert({
-    user_id: state.userId,
+  const isEditing = !!runtime.editingLeaveId;
+  const payload = {
     leave_type: dbType,
     start_date: start,
     end_date: end,
     calendar_days: days,
     workdays: Number(meta.workingDays) || days,
     reason: encodedReason || null,
-    status: "pending",
-  });
+  };
+
+  let { error } = isEditing
+    ? await runtime.client.from("leave_requests").update(payload).eq("id", runtime.editingLeaveId)
+    : await runtime.client.from("leave_requests").insert({
+        user_id: state.userId,
+        ...payload,
+        status: "pending",
+      });
   if (error && dbType === "others" && (error.code === "23514" || /leave_requests_leave_type_check/i.test(error.message || ""))) {
-    const retry = await runtime.client.from("leave_requests").insert({
-      user_id: state.userId,
-      leave_type: "emergency",
-      start_date: start,
-      end_date: end,
-      calendar_days: days,
-      workdays: Number(meta.workingDays) || days,
-      reason: encodedReason || null,
-      status: "pending",
-    });
+    const retry = isEditing
+      ? await runtime.client.from("leave_requests").update({ ...payload, leave_type: "emergency" }).eq("id", runtime.editingLeaveId)
+      : await runtime.client.from("leave_requests").insert({
+          user_id: state.userId,
+          ...payload,
+          leave_type: "emergency",
+          status: "pending",
+        });
     error = retry.error;
   }
 
   const st = $("leaveFormStatus");
   if (error) { if (st) st.textContent = "Failed: " + error.message; return; }
   ["leaveReason", "leaveOthersSpecify", "leaveOutsideSpecify", "leaveHospitalSpecify", "leaveWorkingDays"].forEach(id => setVal(id, ""));
-  if (st) st.textContent = "Request submitted (" + days + " day(s)).";
+  if (st) st.textContent = (isEditing ? "Request updated (" : "Request submitted (") + days + " day(s)).";
   updateLeaveDaysPreview();
-  $("leaveFormCard")?.classList.add("hidden");
+  closeLeaveFormOverlay();
   suppressNotifications();
   await loadLeaveRequests();
   renderLeaveBalances();
-  toast("Leave request submitted");
+  toast(isEditing ? "Leave request updated" : "Leave request submitted");
 }
 
 export function renderLeave(): void {
@@ -3278,7 +3966,9 @@ export function renderLeave(): void {
         esc(fmtDay(r.start_date)) + " – " + esc(fmtDay(r.end_date)) + " · " + (meta.workingDays || days) + " working day(s)" +
         (meta.filingDate ? " · Filed " + esc(fmtDay(meta.filingDate)) : "") + "</div>" +
         (meta.cleanReason ? "<div>" + esc(meta.cleanReason) + "</div>" : "") +
-        '<div class="inline-actions"><button class="gray small-btn" type="button" onclick="openLeaveSheetPreview(\'' + esc(r.id) + '\')">📄 View / Print Form</button></div></div>';
+        '<div class="inline-actions">' +
+        '<button class="gray small-btn" type="button" onclick="editLeaveRequest(\'' + esc(r.id) + '\')">✏️ Edit</button>' +
+        '<button class="gray small-btn" type="button" onclick="openLeaveSheetPreview(\'' + esc(r.id) + '\')">📄 View / Print Form</button></div></div>';
     }).join("") || '<p class="muted">No requests yet.</p>';
   }
   const revBox = $("leaveReviewList");
@@ -3607,21 +4297,10 @@ export function initFeatureWiring(): void {
   });
 
   $("toggleUnitFormBtn")?.addEventListener("click", () => {
-    const card = $("unitFormCard");
-    if (!card) return;
-    const opening = card.classList.contains("hidden");
-    if (opening) {
-      runtime.editingUnitId = null;
-      const ttl = $("unitFormTitle");
-      if (ttl) ttl.textContent = "Add unit";
-      renderUnitSiteOptions();
-      const firstInRegion = runtime.unitsRegion === "ALL"
-        ? state.sites[0]
-        : state.sites.find(s => s.region === runtime.unitsRegion);
-      if (firstInRegion) setVal("unitSite", String(firstInRegion.id));
-    }
-    card.classList.toggle("hidden");
-    if (opening) card.scrollIntoView({ behavior: "smooth" });
+    openAddUnitForSite("");
+  });
+  $("unitFormOverlay")?.addEventListener("click", ev => {
+    if (ev.target === $("unitFormOverlay")) cancelUnitForm();
   });
 
   $("reportPhotoPreview")?.addEventListener("click", e => {
@@ -3665,22 +4344,19 @@ export function initFeatureWiring(): void {
   $("submitReportButton")?.addEventListener("click", submitReport);
   ["leaveStart", "leaveEnd", "leaveType"].forEach(id => $(id)?.addEventListener("change", updateLeaveDaysPreview));
   $("toggleLeaveFormBtn")?.addEventListener("click", () => {
-    const card = $("leaveFormCard");
-    if (!card) return;
-    const opening = card.classList.contains("hidden");
-    if (opening) {
-      if (!val("leaveFilingDate")) setVal("leaveFilingDate", localDateKey(new Date()));
-      const defParts = splitFullNameParts(state.profile?.full_name || "");
-      if (!val("leaveLastName") && defParts.lastName) setVal("leaveLastName", defParts.lastName);
-      if (!val("leaveFirstName") && defParts.firstName) setVal("leaveFirstName", defParts.firstName);
-      if (!val("leaveMiddleName") && defParts.middleName) setVal("leaveMiddleName", defParts.middleName);
-      if (!val("leaveApplicantName") && state.profile?.full_name) setVal("leaveApplicantName", state.profile.full_name);
-    }
-    card.classList.toggle("hidden");
-    if (opening) card.scrollIntoView({ behavior: "smooth" });
+    openAddLeaveModal();
   });
-  $("cancelLeaveFormBtn")?.addEventListener("click", () => {
-    $("leaveFormCard")?.classList.add("hidden");
+  $("leaveFormOverlay")?.addEventListener("click", ev => {
+    if (ev.target === $("leaveFormOverlay")) closeLeaveFormOverlay();
+  });
+  $("siteUnitsOverlay")?.addEventListener("click", ev => {
+    if (ev.target === $("siteUnitsOverlay")) closeSiteUnitsOverlay();
+  });
+  $("siteMapOverlay")?.addEventListener("click", ev => {
+    if (ev.target === $("siteMapOverlay")) closeSiteMapOverlay();
+  });
+  $("adminMemberOverlay")?.addEventListener("click", ev => {
+    if (ev.target === $("adminMemberOverlay")) closeAdminMemberOverlay();
   });
 
   const sigPhoto = $("signaturePhoto") as HTMLInputElement | null;
@@ -3883,16 +4559,54 @@ export function initFeatureWiring(): void {
     runSearch();
   });
 
-  $("cancelAddSite")?.addEventListener("click", () => $("addSiteOverlay")?.classList.add("hidden"));
-  $("openAddSite")?.addEventListener("click", () => $("addSiteOverlay")?.classList.remove("hidden"));
+  $("cancelAddSite")?.addEventListener("click", () => {
+    $("addSiteOverlay")?.classList.add("hidden");
+    resetAddSitePinPicker();
+  });
+  $("openAddSite")?.addEventListener("click", () => {
+    $("addSiteOverlay")?.classList.remove("hidden");
+    resetAddSitePinPicker();
+    initAddSitePinPicker();
+  });
+
+  document.querySelectorAll<HTMLElement>("[data-sites-region]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      runtime.sitesRegionFilter = btn.dataset.sitesRegion || "ALL";
+      renderSites();
+      void refreshVisibleSiteDistances(getFilteredSites());
+    });
+  });
+  document.querySelectorAll<HTMLElement>("[data-sites-status]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      runtime.sitesStatusFilter = btn.dataset.sitesStatus || "ALL";
+      renderSites();
+      void refreshVisibleSiteDistances(getFilteredSites());
+    });
+  });
+  $("refreshSiteDistancesBtn")?.addEventListener("click", () => {
+    void refreshVisibleSiteDistances(getFilteredSites(), { force: true });
+  });
+  ($("siteThumbFile") as HTMLInputElement | null)?.addEventListener("change", async ev => {
+    const input = ev.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    const targetId = pendingSiteThumbTargetId;
+    pendingSiteThumbTargetId = null;
+    if (!file || !targetId) return;
+    await uploadSiteThumbnailFile(targetId, file);
+  });
+  $("siteList")?.addEventListener("change", async ev => {
+    const sel = (ev.target as HTMLElement | null)?.closest<HTMLSelectElement>("[data-site-status-select]");
+    if (!sel) return;
+    const siteId = sel.dataset.siteStatusSelect || "";
+    if (!siteId) return;
+    await updateSiteStatus(siteId, sel.value);
+  });
   $("toggleScheduleFormBtn")?.addEventListener("click", () => {
-    const form = $("scheduleFormCard");
-    if (form) {
-      const opening = form.classList.contains("hidden");
-      if (opening) { renderScheduleSiteOptions(); renderAssigneesPicker(); }
-      form.classList.toggle("hidden");
-      if (opening) form.scrollIntoView({ behavior: "smooth" });
-    }
+    openScheduleFormOverlay();
+  });
+  $("scheduleFormOverlay")?.addEventListener("click", ev => {
+    if (ev.target === $("scheduleFormOverlay")) closeScheduleFormOverlay();
   });
   $("toggleReportFormBtn")?.addEventListener("click", () => {
     const card = $("reportFormCard");
@@ -4144,6 +4858,18 @@ export function initFeatureWiring(): void {
       }
       case "map": {
         openSiteOnMap(id);
+        return;
+      }
+      case "upload-site-thumb": {
+        if (!isManager()) return;
+        pendingSiteThumbTargetId = id;
+        ($("siteThumbFile") as HTMLInputElement | null)?.click();
+        return;
+      }
+      case "preview-site-thumb": {
+        const site = state.sites.find(x => String(x.id) === String(id));
+        const url = site ? getSiteThumbnailUrl(site) : null;
+        if (url) openPhotoPreview(url, site?.name || "Site Thumbnail");
         return;
       }
       case "approve-ot": {

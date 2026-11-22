@@ -8,6 +8,7 @@ import {
   fmtDate,
   fmtDay,
   fmtTableDate,
+  hooks,
   isManager,
   parseDtrJobMeta,
   parseRecMeta,
@@ -432,10 +433,11 @@ function formatPdfTime(t: string | null | undefined): string {
   return `${h}:${min} ${suffix}`;
 }
 
-export async function exportDtrHistoryPdf(): Promise<void> {
-  const rawList = isManager()
+export async function exportDtrHistoryPdf(opts: { clearAfter?: boolean } = {}): Promise<void> {
+  const pickedUid = isManager() && val("dtrPreviewEmployee") ? val("dtrPreviewEmployee") : String(state.userId || "");
+  const rawList = isManager() && !opts?.clearAfter
     ? [...(state.dtrs || [])]
-    : (state.dtrs || []).filter(d => String(d.user_id) === String(state.userId));
+    : (state.dtrs || []).filter(d => String(d.user_id) === String(opts?.clearAfter ? pickedUid : state.userId));
 
   if (!rawList.length) {
     toast("No DTR history entries available to export.");
@@ -479,22 +481,21 @@ export async function exportDtrHistoryPdf(): Promise<void> {
     let totalRegularHours = 0;
     let totalApprovedOtHours = 0;
     let approvedOtCount = 0;
-    let pendingOtCount = 0;
+    const pendingOtCount = 0;
 
     const tableRows = list.map((d, idx) => {
       const p = profileOf(d.user_id);
       const jobMeta = parseDtrJobMeta(d.job, d.approved_by);
       const isSunday = d.work_date ? new Date(String(d.work_date) + "T00:00:00").getDay() === 0 : false;
-      const hrs = calculateDtrHours(d.time_in, d.time_out, d.overtime_approved);
+      const hrs = calculateDtrHours(d.time_in, d.time_out, true);
       const otMins = calculateOtMinutes(d.time_in, d.time_out);
       const otHrs = otMins / 60;
       totalHours += hrs;
-      if (otMins > 0 && d.overtime_approved) {
+      if (otMins > 0) {
         approvedOtCount++;
         totalApprovedOtHours += otHrs;
         totalRegularHours += Math.max(0, hrs - otHrs);
       } else {
-        if (otMins > 0) pendingOtCount++;
         totalRegularHours += hrs;
       }
 
@@ -503,9 +504,7 @@ export async function exportDtrHistoryPdf(): Promise<void> {
         (isSunday
           ? "SUNDAY DUTY"
           : otMins > 0
-            ? d.overtime_approved
-              ? `EXTEND (+${otHrs.toFixed(1)}h)`
-              : `OT Pending (${otHrs.toFixed(1)}h)`
+            ? `EXTEND (+${otHrs.toFixed(1)}h)`
             : "Standard");
 
       const displayJob = [jobMeta.unitName ? `[${jobMeta.unitName}]` : "", jobMeta.cleanJob].filter(Boolean).join(" ") || "—";
@@ -740,7 +739,12 @@ export async function exportDtrHistoryPdf(): Promise<void> {
 
     const filename = `eesi-dtr-audit-history-${stamp()}.pdf`;
     doc.save(filename);
-    toast("Exported " + filename);
+    if (opts?.clearAfter) {
+      await hooks.clearDtrAfterExport?.(list.map(d => String(d.id)));
+      toast("Exported " + filename + " and cleared DTR");
+    } else {
+      toast("Exported " + filename);
+    }
   } catch (err: any) {
     console.error("DTR PDF export failed:", err);
     toast("PDF export failed: " + (err?.message || err));

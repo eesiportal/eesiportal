@@ -1,15 +1,18 @@
 import {
   $,
   esc,
+  face,
   fmtDate,
   fmtDay,
   getDeletedForMeSet,
   hooks,
   isAdmin,
+  isHiddenSystemNotice,
   isManager,
   isMissingTableError,
-  isStoryNotice,
+  isSiteMetaNotice,
   isWithinSelfActionWindow,
+  parseSiteMetaFromAppNotice,
   parseStoryFromAppNotice,
   parseTimeLogFromAppNotice,
   profileName,
@@ -22,6 +25,7 @@ import {
   state,
   stripTimeLogMeta,
   toast,
+  val,
 } from "./eesiTypes";
 import { setOptions, importLibrary } from "@googlemaps/js-api-loader";
 import { triggerAlert, updateLiveWeather } from "./eesiSettings";
@@ -128,8 +132,14 @@ export async function restoreLastView(): Promise<void> {
         (document.querySelector('#reportTypeTabs [data-report-type="checklist"]') as HTMLElement | null)?.click();
       }
     }
-    hooks.go(saved.page, { skipScrollReset: true });
-    if (saved.page === "chat" && saved.activeThread && state.threads.some(t => String(t.id) === String(saved.activeThread))) {
+    const targetPage =
+      saved.page === "admin" && !isAdmin()
+        ? "home"
+        : (saved.page === "members" || saved.page === "pending" || saved.page === "live-map") && !isManager()
+          ? "home"
+          : saved.page;
+    hooks.go(targetPage, { skipScrollReset: true });
+    if (targetPage === "chat" && saved.activeThread && state.threads.some(t => String(t.id) === String(saved.activeThread))) {
       await hooks.openThread(String(saved.activeThread));
     }
     if (typeof saved.scrollY === "number" && saved.scrollY > 0) {
@@ -186,6 +196,10 @@ export function resetDataLoadFlags(): void {
   runtime.dtrTimeLogsTableMissing = false;
   runtime.dtrApprovedByColMissing = false;
   runtime.storiesTableMissing = false;
+  runtime.sitesExtraColsMissing = false;
+  runtime.siteDistances = {};
+  runtime.siteDistanceOriginKey = "";
+  runtime.siteMetaNotices = {};
   runtime.amcbSeedAttempted = false;
 }
 
@@ -246,9 +260,38 @@ export async function loadRoles(): Promise<void> {
 }
 
 export async function loadSites(): Promise<void> {
-  const { data, error } = await runtime.client.from("sites").select("id,name,address,city,region").order("name");
-  if (error) { setupError("Could not load sites", error); return; }
-  state.sites = data || [];
+  let rows: any[] | null = null;
+  if (!runtime.sitesExtraColsMissing) {
+    const res = await runtime.client
+      .from("sites")
+      .select("id,name,address,city,region,thumbnail_url,status,latitude,longitude")
+      .order("name");
+    if (!res.error) {
+      rows = res.data || [];
+    } else if (/thumbnail_url|status|latitude|longitude|42703|PGRST204/i.test(String(res.error.message || "") + " " + String(res.error.code || ""))) {
+      runtime.sitesExtraColsMissing = true;
+    } else {
+      setupError("Could not load sites", res.error);
+      return;
+    }
+  }
+  if (rows === null) {
+    const { data, error } = await runtime.client.from("sites").select("id,name,address,city,region").order("name");
+    if (error) { setupError("Could not load sites", error); return; }
+    rows = data || [];
+  }
+  state.sites = (rows || []).map((s: any) => {
+    const meta = runtime.siteMetaNotices[String(s.id)];
+    const hasLat = s.latitude !== undefined && s.latitude !== null && s.latitude !== "" && Number.isFinite(Number(s.latitude));
+    const hasLng = s.longitude !== undefined && s.longitude !== null && s.longitude !== "" && Number.isFinite(Number(s.longitude));
+    return {
+      ...s,
+      thumbnail_url: s.thumbnail_url || meta?.thumbnail_url || null,
+      status: s.status || meta?.status || undefined,
+      latitude: hasLat ? Number(s.latitude) : (meta?.latitude ?? null),
+      longitude: hasLng ? Number(s.longitude) : (meta?.longitude ?? null),
+    };
+  });
   hooks.renderSites();
   hooks.renderUnitSiteOptions();
   hooks.renderUnits();
@@ -260,6 +303,9 @@ export async function loadSites(): Promise<void> {
   hooks.renderReports();
   hooks.renderPmsRecordsFilters();
   hooks.renderConnectedPickers?.();
+  if (runtime.currentPage === "sites" && (siteMapWasActivated || siteMapInstance)) {
+    void refreshVisibleSiteDistances();
+  }
 }
 
 export async function loadUnits(): Promise<void> {
@@ -339,6 +385,37 @@ export async function loadAppNotifications(): Promise<void> {
   const newItems = appNotificationsLoaded ? (data || []).filter((item: any) => !previousIds.has(String(item.id))) : [];
   state.appNotifications = data || [];
   appNotificationsLoaded = true;
+  let siteMetaUpdated = false;
+  const nextMeta: Record<string, { thumbnail_url?: string | null; status?: string | null; updated_at?: string }> = {};
+  state.appNotifications.forEach((n: any) => {
+    if (!isSiteMetaNotice(n)) return;
+    const parsed = parseSiteMetaFromAppNotice(n);
+    if (!parsed) return;
+    const prev = nextMeta[parsed.site_id];
+    const prevTs = prev?.updated_at ? new Date(prev.updated_at).getTime() : 0;
+    const curTs = parsed.updated_at ? new Date(parsed.updated_at).getTime() : 0;
+    if (!prev || curTs >= prevTs) {
+      nextMeta[parsed.site_id] = {
+        thumbnail_url: parsed.thumbnail_url !== undefined ? parsed.thumbnail_url : prev?.thumbnail_url,
+        status: parsed.status !== undefined ? parsed.status : prev?.status,
+        updated_at: parsed.updated_at,
+      };
+      siteMetaUpdated = true;
+    }
+  });
+  if (siteMetaUpdated) {
+    runtime.siteMetaNotices = nextMeta;
+    state.sites = (state.sites || []).map((s: any) => {
+      const m = nextMeta[String(s.id)];
+      if (!m) return s;
+      return {
+        ...s,
+        thumbnail_url: s.thumbnail_url || m.thumbnail_url || null,
+        status: s.status || m.status || undefined,
+      };
+    });
+    hooks.renderSites();
+  }
   if (runtime.dtrTimeLogsTableMissing) {
     syncTimeLogsFromAppNotices();
   }
@@ -347,7 +424,7 @@ export async function loadAppNotifications(): Promise<void> {
   }
   hooks.renderNotices();
   hooks.renderHome();
-  const visibleNew = newItems.filter((it: any) => !isStoryNotice(it));
+  const visibleNew = newItems.filter((it: any) => !isHiddenSystemNotice(it));
   if (visibleNew.length && !isWithinSelfActionWindow()) {
     const firstTitle = visibleNew[0].title || "Report";
     const cleanBody = stripTimeLogMeta(visibleNew[0].body);
@@ -882,6 +959,7 @@ export function startLive(): void {
     hooks.renderMembers();
     hooks.renderHome();
     hooks.renderChatList();
+    hooks.renderLiveOnlineMembers?.();
   });
   presence.subscribe(async (status: string) => {
     if (status === "SUBSCRIBED") {
@@ -922,17 +1000,53 @@ export async function reloadEverything(): Promise<void> {
   if (state.activeThread) await loadMessages(state.activeThread);
 }
 
-/* ==================== LIVE MAP & GPS LOCATION SHARING ==================== */
+/* ==================== LIVE MAP & ALWAYS-ON GPS LOCATION SHARING ==================== */
 let locationHeartbeatTimer: any = null;
 let lastLocationUploadAt = 0;
+let lastKnownCoords: { lat: number; lng: number; acc: number; updatedAt: number } | null = null;
+let locationLifecycleBound = false;
+
+function recordLocalPosition(pos: GeolocationPosition): void {
+  const lat = pos.coords.latitude;
+  const lng = pos.coords.longitude;
+  const acc = Math.round(pos.coords.accuracy || 0);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+  const now = Date.now();
+  // Prefer significantly more accurate recent fixes unless older than 45s
+  if (
+    lastKnownCoords &&
+    now - lastKnownCoords.updatedAt < 45000 &&
+    acc > Math.max(250, lastKnownCoords.acc * 2.5)
+  ) {
+    return;
+  }
+  lastKnownCoords = { lat, lng, acc, updatedAt: now };
+
+  const statusEl = $("locationStatus");
+  if (statusEl) {
+    statusEl.classList.remove("hidden");
+    statusEl.textContent = "Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + " (±" + acc + " m)";
+  }
+  if (Math.abs(lat - runtime.lastWeatherLat) > 0.02 || Math.abs(lng - runtime.lastWeatherLon) > 0.02) {
+    updateLiveWeather(lat, lng);
+  }
+}
 
 async function uploadEmployeeCoordinates(pos: GeolocationPosition, isInitial = false): Promise<void> {
+  recordLocalPosition(pos);
   if (!state.userId || !runtime.client) return;
   const statusEl = $("locationStatus");
   const acc = Math.round(pos.coords.accuracy || 0);
-  const maxAcc = isInitial ? 350 : 150;
+  // Accept indoor / Wi-Fi / network fixes up to 5000m when we don't have a recent upload yet,
+  // while continuing to refine whenever finer GPS fixes arrive.
+  const hasRecentUpload = lastLocationUploadAt > 0 && Date.now() - lastLocationUploadAt < 120000;
+  const maxAcc = !hasRecentUpload ? 5000 : isInitial ? 1000 : 500;
   if (acc > maxAcc) {
-    if (statusEl) statusEl.textContent = "Refining GPS signal (±" + acc + " m)…";
+    if (statusEl) {
+      statusEl.classList.remove("hidden");
+      statusEl.textContent = "Refining GPS signal (±" + acc + " m)…";
+    }
     return;
   }
   const now = Date.now();
@@ -941,17 +1055,23 @@ async function uploadEmployeeCoordinates(pos: GeolocationPosition, isInitial = f
 
   const { latitude, longitude } = pos.coords;
   if (statusEl) {
+    statusEl.classList.remove("hidden");
     statusEl.textContent = "Live GPS: " + latitude.toFixed(5) + ", " + longitude.toFixed(5) + " (±" + acc + " m)";
-  }
-  if (Math.abs(latitude - runtime.lastWeatherLat) > 0.02 || Math.abs(longitude - runtime.lastWeatherLon) > 0.02) {
-    updateLiveWeather(latitude, longitude);
   }
   await runtime.client
     .from("employee_locations")
     .upsert({ user_id: state.userId, latitude, longitude, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
 }
 
-export function startEmployeeLocationSharing(): void {
+function handleGeoFix(pos: GeolocationPosition, isInitial = false): void {
+  if (state.userId && runtime.client) {
+    void uploadEmployeeCoordinates(pos, isInitial);
+  } else {
+    recordLocalPosition(pos);
+  }
+}
+
+function startLocationWatch(): void {
   const statusEl = $("locationStatus");
   if (!navigator.geolocation) {
     if (statusEl) {
@@ -960,34 +1080,93 @@ export function startEmployeeLocationSharing(): void {
     }
     return;
   }
-  if (!state.userId || runtime.locationWatchId != null) return;
   if (statusEl) {
     statusEl.classList.remove("hidden");
-    statusEl.textContent = "Acquiring accurate GPS location…";
+    if (!lastKnownCoords) statusEl.textContent = "Acquiring GPS location…";
   }
 
-  // Immediate first GPS fix so Live Map shows user right away
   navigator.geolocation.getCurrentPosition(
-    pos => { uploadEmployeeCoordinates(pos, true); },
-    () => {},
-    { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+    pos => { handleGeoFix(pos, true); },
+    () => {
+      // High-accuracy GPS can time out indoors; fall back to network/Wi-Fi geolocation immediately
+      navigator.geolocation.getCurrentPosition(
+        pos => { handleGeoFix(pos, true); },
+        err => {
+          if (statusEl && !lastKnownCoords) {
+            statusEl.textContent = err.code === 1
+              ? "GPS permission needed — allow Location access to keep Live GPS active."
+              : "Acquiring GPS location…";
+          }
+        },
+        { enableHighAccuracy: false, maximumAge: 60000, timeout: 12000 }
+      );
+    },
+    { enableHighAccuracy: true, maximumAge: 10000, timeout: 12000 }
   );
 
-  runtime.locationWatchId = navigator.geolocation.watchPosition(
-    pos => { uploadEmployeeCoordinates(pos, false); },
-    err => { if (statusEl) statusEl.textContent = "Location error: " + err.message; },
-    { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
-  );
+  if (runtime.locationWatchId == null) {
+    runtime.locationWatchId = navigator.geolocation.watchPosition(
+      pos => { handleGeoFix(pos, false); },
+      err => {
+        if (err?.code === 1 && statusEl && !lastKnownCoords) {
+          statusEl.textContent = "Location permission denied — please enable device GPS.";
+        }
+      },
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
+    );
+  }
 
   if (locationHeartbeatTimer) clearInterval(locationHeartbeatTimer);
   locationHeartbeatTimer = setInterval(() => {
-    if (!state.userId || !navigator.onLine || document.visibilityState !== "visible") return;
+    if (document.visibilityState !== "visible") return;
     navigator.geolocation.getCurrentPosition(
-      pos => { uploadEmployeeCoordinates(pos, false); },
+      pos => { handleGeoFix(pos, false); },
       () => {},
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 10000 }
     );
   }, 15000);
+}
+
+export function initAlwaysOnLocation(): void {
+  startLocationWatch();
+  if (locationLifecycleBound) return;
+  locationLifecycleBound = true;
+
+  const refreshFix = () => {
+    if (document.visibilityState === "visible") startLocationWatch();
+  };
+  document.addEventListener("visibilitychange", refreshFix);
+  window.addEventListener("focus", refreshFix);
+
+  try {
+    if (navigator.permissions?.query) {
+      navigator.permissions.query({ name: "geolocation" as PermissionName }).then(perm => {
+        perm.onchange = () => {
+          if (perm.state === "granted") {
+            if (runtime.locationWatchId != null) {
+              try { navigator.geolocation.clearWatch(runtime.locationWatchId); } catch {}
+              runtime.locationWatchId = null;
+            }
+            startLocationWatch();
+          }
+        };
+      }).catch(() => {});
+    }
+  } catch {}
+}
+
+export function startEmployeeLocationSharing(): void {
+  initAlwaysOnLocation();
+  if (state.userId && runtime.client && lastKnownCoords) {
+    const c = lastKnownCoords;
+    lastLocationUploadAt = Date.now();
+    void runtime.client
+      .from("employee_locations")
+      .upsert(
+        { user_id: state.userId, latitude: c.lat, longitude: c.lng, updated_at: new Date().toISOString() },
+        { onConflict: "user_id" }
+      );
+  }
 }
 
 const MAPS_ATTRIBUTION_ID = "gmp_mcp_codeassist_v1_aistudio";
@@ -1002,8 +1181,13 @@ async function loadGoogleMapsLibraries(): Promise<{
   InfoWindow: typeof google.maps.InfoWindow;
   AdvancedMarkerElement: typeof google.maps.marker.AdvancedMarkerElement;
   LatLngBounds: typeof google.maps.LatLngBounds;
+  UnitSystem: typeof google.maps.UnitSystem;
   Place: typeof google.maps.places.Place;
+  AutocompleteSuggestion: typeof google.maps.places.AutocompleteSuggestion;
+  AutocompleteSessionToken: typeof google.maps.places.AutocompleteSessionToken;
   Route: typeof google.maps.routes.Route;
+  RouteMatrix: typeof google.maps.routes.RouteMatrix;
+  spherical: typeof google.maps.geometry.spherical;
 }> {
   const apiKey = getGoogleMapsKey();
   if (!apiKey) {
@@ -1013,20 +1197,26 @@ async function loadGoogleMapsLibraries(): Promise<{
     setOptions({ key: apiKey, v: "weekly" });
     mapsConfigured = true;
   }
-  const [mapsLib, markerLib, coreLib, placesLib, routesLib] = await Promise.all([
+  const [mapsLib, markerLib, coreLib, placesLib, routesLib, geometryLib] = await Promise.all([
     importLibrary("maps") as Promise<google.maps.MapsLibrary>,
     importLibrary("marker") as Promise<google.maps.MarkerLibrary>,
     importLibrary("core") as Promise<google.maps.CoreLibrary>,
     importLibrary("places") as Promise<google.maps.PlacesLibrary>,
     importLibrary("routes") as Promise<google.maps.RoutesLibrary>,
+    importLibrary("geometry") as Promise<google.maps.GeometryLibrary>,
   ]);
   return {
     Map: mapsLib.Map,
     InfoWindow: mapsLib.InfoWindow,
     AdvancedMarkerElement: markerLib.AdvancedMarkerElement,
     LatLngBounds: coreLib.LatLngBounds,
+    UnitSystem: coreLib.UnitSystem,
     Place: placesLib.Place,
+    AutocompleteSuggestion: placesLib.AutocompleteSuggestion,
+    AutocompleteSessionToken: placesLib.AutocompleteSessionToken,
     Route: routesLib.Route,
+    RouteMatrix: routesLib.RouteMatrix,
+    spherical: geometryLib.spherical,
   };
 }
 
@@ -1035,6 +1225,7 @@ let liveInfoWindow: google.maps.InfoWindow | null = null;
 let liveFitted = false;
 let liveBusy = false;
 let liveLastPoints: Array<{ lat: number; lng: number }> = [];
+let liveAllLocationRows: any[] = [];
 const liveMarkers = new Map<
   string,
   { marker: google.maps.marker.AdvancedMarkerElement; infoHtml: string; position: { lat: number; lng: number } }
@@ -1077,6 +1268,7 @@ export function setLiveMapFilter(filter: string): void {
   document.querySelectorAll<HTMLElement>("[data-livemap-filter]").forEach(btn =>
     btn.classList.toggle("active", btn.dataset.livemapFilter === runtime.liveMapFilter)
   );
+  renderLiveOnlineMembersList();
   loadLiveMap({ fit: true });
 }
 
@@ -1119,14 +1311,139 @@ export function fitLiveMapAll(): void {
   void fitLiveMap(liveLastPoints);
 }
 
-export function focusLiveEmployee(userId: string): void {
-  const entry = liveMarkers.get(userId);
-  if (!entry || !liveMapInstance) return;
-  liveMapInstance.setCenter(entry.position);
-  liveMapInstance.setZoom(17);
+export function renderLiveOnlineMembersList(): void {
+  const listEl = $("liveOnlineMembersList");
+  const countEl = $("liveOnlineCount");
+  if (!listEl && !countEl) return;
+  if (!isManager()) {
+    if (countEl) countEl.textContent = "0";
+    if (listEl) listEl.innerHTML = "";
+    return;
+  }
+
+  const ids = onlineIds();
+  const filter = runtime.liveMapFilter || "all";
+  const locByUser = new Map<string, any>();
+  liveAllLocationRows.forEach((r: any) => {
+    if (r?.user_id) locByUser.set(String(r.user_id), r);
+  });
+
+  const onlineMembers = (state.profiles || []).filter(p => {
+    const uid = String(p.user_id || "");
+    if (!uid || !ids.has(uid)) return false;
+    if (filter === "technician" || filter === "representative" || filter === "employee") {
+      const userRole = state.roles[uid]?.app_role || "employee";
+      return userRole === filter;
+    }
+    return true;
+  });
+
+  onlineMembers.sort((a, b) => {
+    const aHasLoc = locByUser.has(String(a.user_id)) ? 1 : 0;
+    const bHasLoc = locByUser.has(String(b.user_id)) ? 1 : 0;
+    if (aHasLoc !== bHasLoc) return bHasLoc - aHasLoc;
+    return String(a.full_name || "").localeCompare(String(b.full_name || ""));
+  });
+
+  if (countEl) countEl.textContent = String(onlineMembers.length);
+  if (!listEl) return;
+  if (!onlineMembers.length) {
+    listEl.innerHTML = '<p class="muted" style="margin:0;">No online members right now.</p>';
+    return;
+  }
+
+  const now = Date.now();
+  listEl.innerHTML = onlineMembers
+    .map(p => {
+      const uid = String(p.user_id);
+      const userRole = state.roles[uid]?.app_role || "employee";
+      const roleText = roleLabel(userRole);
+      const areaTeam = [p.team, p.area].filter(Boolean).join(" · ");
+      const loc = locByUser.get(uid);
+      const hasCoords = !!loc && Number.isFinite(+loc.latitude) && Number.isFinite(+loc.longitude);
+      const fresh = hasCoords && now - new Date(loc.updated_at).getTime() <= LIVE_STALE_MS;
+      const age = hasCoords ? formatAgeLabel(loc.updated_at) : "";
+      const gpsLabel = hasCoords
+        ? `${fresh ? "🟢 GPS Live" : "🟡 Last GPS"} (${age})`
+        : "⚪ Waiting for GPS";
+
+      return (
+        `<div class="person clickable" style="margin-bottom:6px;" onclick="focusLiveEmployee('${esc(uid)}')">` +
+        face(p) +
+        `<span class="person-info">` +
+        `<b>${esc(p.full_name || "Member")} <span class="badge">${esc(roleText)}</span></b>` +
+        `<span class="muted"><span class="online-dot on"></span>Online${areaTeam ? " · " + esc(areaTeam) : ""} · ${esc(gpsLabel)}</span>` +
+        `</span>` +
+        `<button class="btn small-btn" type="button" onclick="event.stopPropagation();focusLiveEmployee('${esc(uid)}')">📍 Locate</button>` +
+        `</div>`
+      );
+    })
+    .join("");
+}
+
+export async function focusLiveEmployee(userId: string): Promise<void> {
+  const uid = String(userId || "");
+  if (!uid) return;
+  const map = await ensureLiveMap();
+  if (!map) return;
+
+  let entry = liveMarkers.get(uid);
+  if (!entry) {
+    let locRow = liveAllLocationRows.find((r: any) => String(r.user_id) === uid);
+    if (!locRow && runtime.client) {
+      const { data } = await runtime.client
+        .from("employee_locations")
+        .select("user_id,latitude,longitude,updated_at")
+        .eq("user_id", uid)
+        .maybeSingle();
+      if (data && Number.isFinite(+data.latitude) && Number.isFinite(+data.longitude)) {
+        locRow = data;
+      }
+    }
+    if (!locRow) {
+      toast(`${profileName(uid)} is online, but GPS location is not shared yet.`);
+      return;
+    }
+
+    const { AdvancedMarkerElement } = await loadGoogleMapsLibraries();
+    const p = profileOf(uid);
+    const name = p ? p.full_name : "Member";
+    const userRole = state.roles[uid]?.app_role || "employee";
+    const roleText = roleLabel(userRole);
+    const areaTeam = [p?.team, p?.area].filter(Boolean).join(" · ");
+    const fresh = Date.now() - new Date(locRow.updated_at).getTime() <= LIVE_STALE_MS;
+    const age = formatAgeLabel(locRow.updated_at);
+    const position = { lat: +locRow.latitude, lng: +locRow.longitude };
+    const infoHtml =
+      `<div style="font-size:13px;line-height:1.4;">` +
+      `<b>${esc(name)}</b><br>` +
+      `<span>${esc(roleText)}${areaTeam ? " · " + esc(areaTeam) : ""}</span><br>` +
+      `<span>${position.lat.toFixed(5)}, ${position.lng.toFixed(5)}</span><br>` +
+      `<small>${esc(fmtDate(locRow.updated_at))} (${esc(age)}${fresh ? " · LIVE" : " · stale"})</small>` +
+      `</div>`;
+    const marker = new AdvancedMarkerElement({
+      map,
+      position,
+      title: name,
+      content: buildEmployeePinElement(name, fresh),
+    });
+    entry = { marker, infoHtml, position };
+    marker.addListener("click", () => {
+      if (liveInfoWindow && liveMapInstance) {
+        liveInfoWindow.setContent(entry!.infoHtml);
+        liveInfoWindow.open({ map: liveMapInstance, anchor: entry!.marker });
+      }
+    });
+    liveMarkers.set(uid, entry);
+  }
+
+  try { google.maps.event.trigger(map, "resize"); } catch {}
+  map.setCenter(entry.position);
+  map.panTo(entry.position);
+  map.setZoom(17);
   if (liveInfoWindow) {
     liveInfoWindow.setContent(entry.infoHtml);
-    liveInfoWindow.open({ map: liveMapInstance, anchor: entry.marker });
+    liveInfoWindow.open({ map, anchor: entry.marker });
   }
   $("liveMap")?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
@@ -1142,7 +1459,7 @@ function formatAgeLabel(iso: string): string {
 }
 
 export async function loadLiveMap(opts: { fit?: boolean } = {}): Promise<void> {
-  if (!$("liveMap") || !isAdmin() || liveBusy) return;
+  if (!$("liveMap") || !isManager() || liveBusy) return;
   liveBusy = true;
   const statusEl = $("liveLocationStatus");
   const listEl = $("liveLocationList");
@@ -1158,6 +1475,8 @@ export async function loadLiveMap(opts: { fit?: boolean } = {}): Promise<void> {
     const filter = runtime.liveMapFilter || "all";
     const now = Date.now();
     const allRows = (data || []).filter((r: any) => Number.isFinite(+r.latitude) && Number.isFinite(+r.longitude));
+    liveAllLocationRows = allRows;
+    renderLiveOnlineMembersList();
     const filteredRows = allRows.filter((row: any) => {
       const userRole = state.roles[row.user_id]?.app_role || "employee";
       const fresh = now - new Date(row.updated_at).getTime() <= LIVE_STALE_MS;
@@ -1250,6 +1569,7 @@ export async function loadLiveMap(opts: { fit?: boolean } = {}): Promise<void> {
     }
   } catch (err: any) {
     if (statusEl) statusEl.textContent = "Could not load Google Live Map: " + (err?.message || err);
+    renderLiveOnlineMembersList();
   } finally {
     liveBusy = false;
   }
@@ -1265,8 +1585,11 @@ let siteLastDestPos: { lat: number; lng: number } | null = null;
 let siteLastRouteBounds: google.maps.LatLngBounds | null = null;
 const siteLocationCache = new Map<
   string,
-  { lat: number; lng: number; displayName: string; formattedAddress: string }
+  { lat: number; lng: number; displayName: string; formattedAddress: string; city?: string; regionHint?: string; photoUrl?: string }
 >();
+let placesTextSearchDenied = false;
+let siteMapLazyObserver: IntersectionObserver | null = null;
+let siteMapWasActivated = false;
 let lastSiteMapArgs: {
   containerId: string;
   query: string;
@@ -1290,6 +1613,37 @@ function buildOriginPinElement(): HTMLElement {
   return el;
 }
 
+function buildSitePinElement(label: string, selected: boolean): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "site-pin-wrap" + (selected ? " is-selected" : "");
+
+  const pulse = document.createElement("div");
+  pulse.className = "site-pin-pulse";
+
+  const core = document.createElement("div");
+  core.className = "site-pin-core";
+
+  const tag = document.createElement("div");
+  tag.className = "site-pin-label";
+  tag.textContent = label || "Work Site";
+
+  wrap.appendChild(pulse);
+  wrap.appendChild(core);
+  wrap.appendChild(tag);
+  return wrap;
+}
+
+export function setSiteMapLayer(layer: "roadmap" | "satellite"): void {
+  const normalized: "roadmap" | "satellite" = layer === "satellite" ? "satellite" : "roadmap";
+  runtime.siteMapLayer = normalized;
+  document.querySelectorAll<HTMLElement>("[data-site-map-layer]").forEach(btn => {
+    btn.classList.toggle("active", (btn.dataset.siteMapLayer || "roadmap") === normalized);
+  });
+  if (siteMapInstance) {
+    siteMapInstance.setMapTypeId(normalized === "satellite" ? "hybrid" : "roadmap");
+  }
+}
+
 async function ensureSiteMapInstance(containerId: string) {
   const container = $(containerId);
   if (!container) return null;
@@ -1300,7 +1654,8 @@ async function ensureSiteMapInstance(containerId: string) {
       center: { lat: 10.3157, lng: 123.8854 },
       zoom: 12,
       mapId: "DEMO_MAP_ID",
-      mapTypeControl: true,
+      mapTypeId: runtime.siteMapLayer === "satellite" ? "hybrid" : "roadmap",
+      mapTypeControl: false,
       streetViewControl: false,
       fullscreenControl: true,
       gestureHandling: "cooperative",
@@ -1310,19 +1665,26 @@ async function ensureSiteMapInstance(containerId: string) {
     siteMapMarker = null;
     siteOriginMarker = null;
   }
+  setSiteMapLayer(runtime.siteMapLayer || "roadmap");
   return { container, ...libs };
 }
 
 export async function initSitesMapOverview(): Promise<void> {
   const container = $("siteGoogleMap");
   if (!container) return;
+  if (siteMapLazyObserver) {
+    siteMapLazyObserver.disconnect();
+    siteMapLazyObserver = null;
+  }
+  siteMapWasActivated = true;
+  initSiteMapControls();
   const statusEl = $("siteMapStatus");
   const dirBox = $("siteMapDirections");
   try {
     await ensureSiteMapInstance("siteGoogleMap");
     if (!lastSiteMapArgs) {
       if (statusEl) {
-        statusEl.textContent = "Tap \"View on Map\" on any site below to center the map and load directions.";
+        statusEl.textContent = "Search an address above or tap \"View on Map\" on any site below.";
       }
       if (dirBox && !dirBox.innerHTML.trim()) dirBox.innerHTML = "";
     }
@@ -1330,6 +1692,60 @@ export async function initSitesMapOverview(): Promise<void> {
     if (statusEl) {
       statusEl.textContent = "Unable to load map right now: " + (err?.message || err);
     }
+  }
+}
+
+export function scheduleSiteMapLazyInit(): void {
+  const pageEl = $("page-sites");
+  const overlayEl = $("siteMapOverlay");
+  const container = $("siteGoogleMap");
+  if (!pageEl || !container || pageEl.classList.contains("hidden") || overlayEl?.classList.contains("hidden") || runtime.currentPage !== "sites") {
+    return;
+  }
+
+  if (siteMapInstance) {
+    siteMapWasActivated = true;
+    try {
+      google.maps.event.trigger(siteMapInstance, "resize");
+    } catch {}
+    void hooks.refreshVisibleSiteDistances?.();
+    return;
+  }
+
+  const statusEl = $("siteMapStatus");
+  if (statusEl && !lastSiteMapArgs) {
+    statusEl.textContent = "Google Maps will initialize automatically once visible on screen…";
+  }
+
+  const activateNow = () => {
+    if (siteMapLazyObserver) {
+      siteMapLazyObserver.disconnect();
+      siteMapLazyObserver = null;
+    }
+    if (runtime.currentPage !== "sites" || pageEl.classList.contains("hidden")) return;
+    siteMapWasActivated = true;
+    void initSitesMapOverview().then(() => {
+      void hooks.refreshVisibleSiteDistances?.();
+    });
+  };
+
+  if (siteMapLazyObserver) {
+    siteMapLazyObserver.disconnect();
+    siteMapLazyObserver = null;
+  }
+
+  if (typeof IntersectionObserver !== "undefined") {
+    siteMapLazyObserver = new IntersectionObserver(
+      entries => {
+        if (entries.some(e => e.isIntersecting)) {
+          activateNow();
+        }
+      },
+      { root: null, rootMargin: "120px", threshold: 0.01 }
+    );
+    siteMapLazyObserver.observe(container);
+  } else {
+    requestAnimationFrame(() => activateNow());
   }
 }
 
@@ -1353,17 +1769,30 @@ export function fitSiteMapRoute(): void {
 }
 
 async function getCurrentOriginLatLng(): Promise<{ lat: number; lng: number } | null> {
+  if (lastKnownCoords && Date.now() - lastKnownCoords.updatedAt < 60000) {
+    return { lat: lastKnownCoords.lat, lng: lastKnownCoords.lng };
+  }
   if (navigator.geolocation) {
     const pos = await new Promise<GeolocationPosition | null>(resolve => {
       navigator.geolocation.getCurrentPosition(
         p => resolve(p),
-        () => resolve(null),
-        { enableHighAccuracy: true, maximumAge: 15000, timeout: 6000 }
+        () => {
+          navigator.geolocation.getCurrentPosition(
+            p2 => resolve(p2),
+            () => resolve(null),
+            { enableHighAccuracy: false, maximumAge: 60000, timeout: 5000 }
+          );
+        },
+        { enableHighAccuracy: true, maximumAge: 20000, timeout: 6000 }
       );
     });
     if (pos) {
+      handleGeoFix(pos, false);
       return { lat: pos.coords.latitude, lng: pos.coords.longitude };
     }
+  }
+  if (lastKnownCoords) {
+    return { lat: lastKnownCoords.lat, lng: lastKnownCoords.lng };
   }
   if (state.userId && runtime.client) {
     try {
@@ -1409,6 +1838,627 @@ export function setSiteMapTravelMode(mode: "DRIVING" | "WALKING" | "TWO_WHEELER"
   }
 }
 
+function isGenericRegionQuery(q: string): boolean {
+  return /^(?:(?:luzon|visayas|mindanao|philippines)\s*,?\s*)+$/i.test(String(q || "").trim());
+}
+
+function buildSiteCandidates(site: any): { primary: string; fallbacks: string[] } {
+  const rawName = String(site?.name || "").trim();
+  const cleanName = rawName.replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s+/g, " ").trim();
+  const addr = String(site?.address || "").trim();
+  const city = String(site?.city || "").trim();
+  const reg = String(site?.region || "").trim();
+
+  const rawList = [
+    [rawName, addr, city, "Philippines"].filter(Boolean).join(", "),
+    [cleanName, addr, city, "Philippines"].filter(Boolean).join(", "),
+    [cleanName, city, "Philippines"].filter(Boolean).join(", "),
+    [rawName, addr, city, reg, "Philippines"].filter(Boolean).join(", "),
+    addr || city ? [addr, city, "Philippines"].filter(Boolean).join(", ") : "",
+    cleanName ? `${cleanName}, Philippines` : "",
+    rawName ? `${rawName}, Philippines` : "",
+    city ? `${city}, Philippines` : "",
+  ]
+    .map(s => s.trim())
+    .filter(s => s && !isGenericRegionQuery(s));
+
+  const unique = [...new Set(rawList)];
+  return {
+    primary: unique[0] || rawName || addr || city || "",
+    fallbacks: unique.slice(1),
+  };
+}
+
+export function inferPhRegionFromTextOrCoords(text: string, lat?: number, lng?: number): "Luzon" | "Visayas" | "Mindanao" {
+  const low = String(text || "").toLowerCase();
+  if (/(davao|cagayan de oro|zamboanga|general santos|gensan|butuan|iligan|surigao|cotabato|mindanao|dipolog|pagadian|tagum|koronadal|valencia|malaybalay|caraga|soccsksargen|barmm|bukidnon|agusan|misamis)/i.test(low)) {
+    return "Mindanao";
+  }
+  if (/(cebu|mandaue|lapu-lapu|talisay|consolacion|liloan|iloilo|bacolod|negros|tacloban|ormoc|bohol|tagbilaran|dumaguete|kalibo|boracay|aklan|capiz|roxas|leyte|samar|visayas|bantayan|camotes|siquijor|antique|guimaras)/i.test(low)) {
+    return "Visayas";
+  }
+  if (/(manila|makati|taguig|bgc|pasig|ortigas|quezon city|mandaluyong|pasay|paranaque|para\u00f1aque|muntinlupa|alabang|las pinas|caloocan|marikina|san juan|valenzuela|tagaytay|cavite|laguna|batangas|rizal|bulacan|pampanga|clark|angeles|subic|zambales|baguio|benguet|tarlac|pangasinan|bicol|naga|legazpi|luzon|ncr|metro manila|ilocos|la union|isabela|cagayan|palawan|puerto princesa|mindoro)/i.test(low)) {
+    return "Luzon";
+  }
+  if (typeof lat === "number" && Number.isFinite(lat)) {
+    if (lat >= 12.6) return "Luzon";
+    if (lat >= 9.15 && (lng === undefined || lng < 126.3)) return "Visayas";
+    return "Mindanao";
+  }
+  return "Visayas";
+}
+
+function extractCityFromAddressComponents(
+  components?: google.maps.places.AddressComponent[] | null,
+  formattedAddress = ""
+): string {
+  if (Array.isArray(components) && components.length) {
+    const findType = (t: string) => components.find(c => Array.isArray(c.types) && c.types.includes(t))?.longText || "";
+    const picked =
+      findType("locality") ||
+      findType("administrative_area_level_3") ||
+      findType("administrative_area_level_2") ||
+      findType("sublocality_level_1");
+    if (picked) return String(picked).trim();
+  }
+  const parts = String(formattedAddress || "").split(",").map(s => s.trim()).filter(Boolean);
+  if (parts.length >= 3) {
+    const cand = parts.find(p => /\bcity\b/i.test(p)) || parts[parts.length - 3];
+    if (cand && !/philippines/i.test(cand)) return cand.replace(/^\d{4}\s+/, "").trim();
+  }
+  return "";
+}
+
+async function tryDirectClientGeocode(
+  candidates: string[],
+  siteTitle: string
+): Promise<{ lat: number; lng: number; displayName: string; formattedAddress: string; city?: string; regionHint?: string } | null> {
+  const cleaned = [...new Set(candidates.map(q => q.trim()).filter(q => q && !isGenericRegionQuery(q)))].slice(0, 4);
+  for (const q of cleaned) {
+    const queryWithPh = /philippines|\bph\b/i.test(q) ? q : `${q}, Philippines`;
+    // 1) Photon (CORS-enabled OSM geocoder biased to Philippines)
+    try {
+      const pUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(queryWithPh)}&limit=1&lat=12.8797&lon=121.774`;
+      const pRes = await fetch(pUrl);
+      if (pRes.ok) {
+        const pData: any = await pRes.json();
+        const feat = pData?.features?.[0];
+        const coords = feat?.geometry?.coordinates;
+        if (Array.isArray(coords) && coords.length >= 2) {
+          const lng = Number(coords[0]);
+          const lat = Number(coords[1]);
+          if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            const props = feat?.properties || {};
+            const formattedAddress = [props.name, props.street, props.district || props.suburb, props.city || props.county, props.state, props.country]
+              .filter(Boolean)
+              .filter((v, i, arr) => arr.indexOf(v) === i)
+              .join(", ");
+            const city = String(props.city || props.county || extractCityFromAddressComponents(null, formattedAddress) || "").trim();
+            return {
+              lat,
+              lng,
+              displayName: String(props.name || siteTitle),
+              formattedAddress: formattedAddress || queryWithPh,
+              city,
+              regionHint: inferPhRegionFromTextOrCoords(`${siteTitle} ${city} ${formattedAddress}`, lat, lng),
+            };
+          }
+        }
+      }
+    } catch {}
+
+    // 2) Nominatim direct fallback
+    try {
+      const nUrl = `https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&countrycodes=ph&limit=1&q=${encodeURIComponent(queryWithPh)}`;
+      const nRes = await fetch(nUrl);
+      if (nRes.ok) {
+        const nList: any = await nRes.json();
+        const hit = Array.isArray(nList) ? nList[0] : null;
+        const lat = Number(hit?.lat);
+        const lng = Number(hit?.lon);
+        if (hit && Number.isFinite(lat) && Number.isFinite(lng)) {
+          const addrObj = hit.address || {};
+          const city = String(addrObj.city || addrObj.town || addrObj.municipality || addrObj.county || "").trim();
+          const formattedAddress = String(hit.display_name || queryWithPh);
+          return {
+            lat,
+            lng,
+            displayName: String(hit.name || siteTitle),
+            formattedAddress,
+            city,
+            regionHint: inferPhRegionFromTextOrCoords(`${siteTitle} ${city} ${formattedAddress}`, lat, lng),
+          };
+        }
+      }
+    } catch {}
+  }
+  return null;
+}
+
+async function fetchFallbackGeocode(
+  candidates: string[],
+  siteTitle: string
+): Promise<{ lat: number; lng: number; displayName: string; formattedAddress: string; city?: string; regionHint?: string } | null> {
+  const usable = candidates.map(c => c.trim()).filter(c => c && !isGenericRegionQuery(c));
+  if (!usable.length) return null;
+  try {
+    const res = await fetch("/api/geocode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ queries: usable }),
+    });
+    if (res.ok) {
+      const data: any = await res.json();
+      const lat = Number(data?.lat);
+      const lng = Number(data?.lng);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        const formattedAddress = String(data?.formattedAddress || "");
+        const city = String(data?.city || extractCityFromAddressComponents(null, formattedAddress) || "").trim();
+        return {
+          lat,
+          lng,
+          displayName: String(data?.displayName || siteTitle),
+          formattedAddress,
+          city,
+          regionHint: String(data?.regionHint || inferPhRegionFromTextOrCoords(`${siteTitle} ${city} ${formattedAddress}`, lat, lng)),
+        };
+      }
+    }
+  } catch {}
+  return await tryDirectClientGeocode(usable, siteTitle);
+}
+
+async function fetchReverseGeocode(
+  lat: number,
+  lng: number
+): Promise<{ lat: number; lng: number; formattedAddress: string; city: string; regionHint: "Luzon" | "Visayas" | "Mindanao" } | null> {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  try {
+    const res = await fetch("/api/geocode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lat, lng }),
+    });
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    const formattedAddress = String(data?.formattedAddress || `${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+    const city = String(data?.city || extractCityFromAddressComponents(null, formattedAddress) || "").trim();
+    const regionHint = inferPhRegionFromTextOrCoords(`${city} ${formattedAddress}`, lat, lng);
+    return { lat, lng, formattedAddress, city, regionHint };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveCoordsByQueries(
+  Place: typeof google.maps.places.Place,
+  query: string,
+  siteTitle: string,
+  fallbackQueries: string[] = [],
+  siteHint?: { latitude?: unknown; longitude?: unknown; address?: string | null; city?: string | null; region?: string | null }
+): Promise<{ lat: number; lng: number; displayName: string; formattedAddress: string; city?: string; regionHint?: string; photoUrl?: string; errorMsg?: string } | null> {
+  const hintLat = Number(siteHint?.latitude);
+  const hintLng = Number(siteHint?.longitude);
+  if (
+    siteHint?.latitude !== null &&
+    siteHint?.latitude !== undefined &&
+    siteHint?.latitude !== "" &&
+    siteHint?.longitude !== null &&
+    siteHint?.longitude !== undefined &&
+    siteHint?.longitude !== "" &&
+    Number.isFinite(hintLat) &&
+    Number.isFinite(hintLng)
+  ) {
+    return {
+      lat: hintLat,
+      lng: hintLng,
+      displayName: siteTitle,
+      formattedAddress: [siteHint.address, siteHint.city, siteHint.region].filter(Boolean).join(", "),
+      city: siteHint.city || "",
+      regionHint: siteHint.region || inferPhRegionFromTextOrCoords(`${siteHint.address || ""} ${siteHint.city || ""}`, hintLat, hintLng),
+    };
+  }
+
+  const cacheKey = query.trim().toLowerCase();
+  const cached = siteLocationCache.get(cacheKey);
+  if (cached) return cached;
+  let lastErr = "";
+  const candidates = [...new Set([query, ...fallbackQueries].map(q => q.trim()).filter(Boolean))];
+
+  if (!placesTextSearchDenied) {
+    for (const q of candidates) {
+      try {
+        const { places } = await Place.searchByText({
+          textQuery: q,
+          fields: ["displayName", "location", "formattedAddress", "addressComponents", "photos"],
+          maxResultCount: 1,
+          internalUsageAttributionIds: [MAPS_ATTRIBUTION_ID],
+        } as any);
+        const match = places?.[0];
+        if (match?.location) {
+          const lat = typeof match.location.lat === "function" ? match.location.lat() : Number((match.location as any).lat);
+          const lng = typeof match.location.lng === "function" ? match.location.lng() : Number((match.location as any).lng);
+          if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            const formattedAddress = match.formattedAddress || "";
+            const city = extractCityFromAddressComponents(match.addressComponents, formattedAddress);
+            let photoUrl = "";
+            try {
+              const firstPhoto: any = Array.isArray((match as any).photos) ? (match as any).photos[0] : null;
+              if (firstPhoto && typeof firstPhoto.getURI === "function") {
+                photoUrl = String(firstPhoto.getURI({ maxWidth: 800, maxHeight: 600 }) || "");
+              }
+            } catch {}
+            const resolved = {
+              lat,
+              lng,
+              displayName: match.displayName || siteTitle,
+              formattedAddress,
+              city,
+              regionHint: inferPhRegionFromTextOrCoords(`${q} ${city} ${formattedAddress}`, lat, lng),
+              ...(photoUrl ? { photoUrl } : {}),
+            };
+            siteLocationCache.set(cacheKey, resolved);
+            return resolved;
+          }
+        }
+      } catch (err: any) {
+        lastErr = err?.message || String(err || "");
+        if (/PERMISSION_DENIED|Permission denied|not activated|API_KEY/i.test(lastErr)) {
+          placesTextSearchDenied = true;
+          break;
+        }
+      }
+    }
+  }
+
+  const fb = await fetchFallbackGeocode(candidates, siteTitle);
+  if (fb) {
+    siteLocationCache.set(cacheKey, fb);
+    return fb;
+  }
+
+  return lastErr ? { lat: NaN, lng: NaN, displayName: siteTitle, formattedAddress: "", errorMsg: lastErr } : null;
+}
+
+export async function resolveSiteAddressAndPin(opts: {
+  name: string;
+  address?: string | null;
+  city?: string | null;
+  region?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+}): Promise<{
+  address: string;
+  city: string;
+  region: "Luzon" | "Visayas" | "Mindanao";
+  lat: number | null;
+  lng: number | null;
+  displayName: string;
+  photoUrl?: string;
+} | null> {
+  const cleanName = String(opts.name || "").replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s+/g, " ").trim();
+  const givenLat = opts.lat !== null && opts.lat !== undefined && Number.isFinite(Number(opts.lat)) ? Number(opts.lat) : null;
+  const givenLng = opts.lng !== null && opts.lng !== undefined && Number.isFinite(Number(opts.lng)) ? Number(opts.lng) : null;
+
+  if (givenLat !== null && givenLng !== null) {
+    let address = String(opts.address || "").trim();
+    let city = String(opts.city || "").trim();
+    let region = (opts.region as "Luzon" | "Visayas" | "Mindanao") || inferPhRegionFromTextOrCoords(`${address} ${city}`, givenLat, givenLng);
+    if (!address || !city) {
+      const rev = await fetchReverseGeocode(givenLat, givenLng);
+      if (rev) {
+        if (!address && rev.formattedAddress) address = rev.formattedAddress;
+        if (!city && rev.city) city = rev.city;
+        if (!opts.region) region = rev.regionHint;
+      }
+    }
+    return { address, city, region, lat: givenLat, lng: givenLng, displayName: cleanName || opts.name };
+  }
+
+  const rawName = String(opts.name || "").trim();
+  const addr = String(opts.address || "").trim();
+  const city = String(opts.city || "").trim();
+  const queries = [...new Set([
+    [rawName, addr, city, "Philippines"].filter(Boolean).join(", "),
+    [cleanName, addr, city, "Philippines"].filter(Boolean).join(", "),
+    [cleanName, city, "Philippines"].filter(Boolean).join(", "),
+    addr || city ? [addr, city, "Philippines"].filter(Boolean).join(", ") : "",
+    cleanName ? `${cleanName}, Philippines` : "",
+    rawName ? `${rawName}, Philippines` : "",
+  ].map(q => q.trim()).filter(q => q && !isGenericRegionQuery(q)))];
+
+  if (!queries.length) return null;
+
+  try {
+    const { Place } = await loadGoogleMapsLibraries();
+    const res = await resolveCoordsByQueries(Place, queries[0], rawName || cleanName, queries.slice(1));
+    if (res && Number.isFinite(res.lat) && Number.isFinite(res.lng)) {
+      const address = String(addr || res.formattedAddress || "").trim();
+      const resolvedCity = String(city || res.city || extractCityFromAddressComponents(null, res.formattedAddress) || "").trim();
+      const region = inferPhRegionFromTextOrCoords(`${rawName} ${address} ${resolvedCity}`, res.lat, res.lng);
+      return {
+        address,
+        city: resolvedCity,
+        region,
+        lat: res.lat,
+        lng: res.lng,
+        displayName: res.displayName || rawName,
+        ...(res.photoUrl ? { photoUrl: res.photoUrl } : {}),
+      };
+    }
+  } catch {}
+
+  const fb = await fetchFallbackGeocode(queries, rawName || cleanName);
+  if (fb) {
+    const address = String(addr || fb.formattedAddress || "").trim();
+    const resolvedCity = String(city || fb.city || "").trim();
+    const region = inferPhRegionFromTextOrCoords(`${rawName} ${address} ${resolvedCity}`, fb.lat, fb.lng);
+    return { address, city: resolvedCity, region, lat: fb.lat, lng: fb.lng, displayName: fb.displayName || rawName };
+  }
+  return null;
+}
+
+export async function resolveSiteAutoPhotoUrl(opts: {
+  name: string;
+  city?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  placesPhotoUrl?: string | null;
+}): Promise<{ photoUrl: string; source: string } | null> {
+  if (opts.placesPhotoUrl && String(opts.placesPhotoUrl).startsWith("http")) {
+    return { photoUrl: String(opts.placesPhotoUrl), source: "google_places" };
+  }
+  try {
+    const res = await fetch("/api/site-photo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        q: String(opts.name || "").trim(),
+        city: String(opts.city || "").trim(),
+        lat: opts.lat,
+        lng: opts.lng,
+      }),
+    });
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    if (data?.photoUrl) {
+      return { photoUrl: String(data.photoUrl), source: String(data.source || "auto") };
+    }
+  } catch {}
+  return null;
+}
+
+export async function createSiteAutoSnapshotFile(
+  siteName: string,
+  city: string,
+  lat: number | null,
+  lng: number | null
+): Promise<File | null> {
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = 640;
+    canvas.height = 420;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    let drewTile = false;
+    if (lat !== null && lng !== null && Number.isFinite(lat) && Number.isFinite(lng)) {
+      const tileUrl = `/api/site-photo?tile=1&z=16&lat=${encodeURIComponent(String(lat))}&lng=${encodeURIComponent(String(lng))}`;
+      drewTile = await new Promise<boolean>(resolve => {
+        const img = new Image();
+        img.onload = () => {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(true);
+        };
+        img.onerror = () => resolve(false);
+        img.src = tileUrl;
+      });
+    }
+
+    if (!drewTile) {
+      const grad = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+      grad.addColorStop(0, "#0b1a36");
+      grad.addColorStop(1, "#1e6cf2");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 1;
+      for (let x = 0; x < canvas.width; x += 40) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += 40) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+      }
+    }
+
+    // Pin marker at center
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2 - 14;
+    ctx.beginPath();
+    ctx.arc(cx, cy + 28, 12, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(30, 108, 242, 0.35)";
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, 20, Math.PI, 0, false);
+    ctx.lineTo(cx, cy + 32);
+    ctx.closePath();
+    ctx.fillStyle = "#ef4444";
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#ffffff";
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+
+    // Bottom info banner
+    const bannerGrad = ctx.createLinearGradient(0, canvas.height - 105, 0, canvas.height);
+    bannerGrad.addColorStop(0, "rgba(6, 15, 34, 0)");
+    bannerGrad.addColorStop(0.45, "rgba(6, 15, 34, 0.82)");
+    bannerGrad.addColorStop(1, "rgba(6, 15, 34, 0.96)");
+    ctx.fillStyle = bannerGrad;
+    ctx.fillRect(0, canvas.height - 105, canvas.width, 105);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 24px Arial, sans-serif";
+    ctx.fillText((siteName || "EESI Work Site").slice(0, 36), 20, canvas.height - 44);
+
+    ctx.fillStyle = "#93c5fd";
+    ctx.font = "15px Arial, sans-serif";
+    const sub = [city || "Philippines", lat !== null && lng !== null ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : ""].filter(Boolean).join(" · ");
+    ctx.fillText(sub.slice(0, 56), 20, canvas.height - 18);
+
+    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(b => resolve(b), "image/jpeg", 0.86));
+    if (!blob) return null;
+    const safeSlug = String(siteName || "site").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 28) || "site";
+    return new File([blob], `${safeSlug}-pin.jpg`, { type: "image/jpeg" });
+  } catch {
+    return null;
+  }
+}
+
+let distanceRunSeq = 0;
+
+export async function refreshVisibleSiteDistances(
+  sitesList: any[] = state.sites,
+  opts: { force?: boolean } = {}
+): Promise<void> {
+  if (!sitesList?.length) return;
+  const runId = ++distanceRunSeq;
+
+  const originCoords = await getCurrentOriginLatLng();
+  if (runId !== distanceRunSeq) return;
+
+  if (!originCoords) {
+    sitesList.forEach(s => {
+      runtime.siteDistances[String(s.id)] = {
+        status: "no_gps",
+        message: "Enable GPS to calculate driving distance",
+      };
+    });
+    hooks.renderSites();
+    return;
+  }
+
+  const originKey = `${originCoords.lat.toFixed(3)},${originCoords.lng.toFixed(3)}`;
+  if (opts.force || (runtime.siteDistanceOriginKey && runtime.siteDistanceOriginKey !== originKey)) {
+    runtime.siteDistances = {};
+  }
+  runtime.siteDistanceOriginKey = originKey;
+
+  const toCompute = sitesList.filter(s => {
+    const prev = runtime.siteDistances[String(s.id)];
+    return opts.force || !prev || (prev.status !== "ready" && prev.status !== "no_route" && prev.status !== "loading");
+  });
+  if (!toCompute.length) return;
+
+  toCompute.forEach(s => {
+    runtime.siteDistances[String(s.id)] = { status: "loading" };
+  });
+  hooks.renderSites();
+
+  try {
+    const { Place, RouteMatrix, UnitSystem, spherical } = await loadGoogleMapsLibraries();
+    if (runId !== distanceRunSeq) return;
+
+    const resolvedList: Array<{ site: any; coords: { lat: number; lng: number } }> = [];
+    const batchSize = 4;
+    for (let i = 0; i < toCompute.length; i += batchSize) {
+      if (runId !== distanceRunSeq) return;
+      const chunk = toCompute.slice(i, i + batchSize);
+      await Promise.all(
+        chunk.map(async site => {
+          const { primary, fallbacks } = buildSiteCandidates(site);
+          const res = await resolveCoordsByQueries(Place, primary, site.name, fallbacks, site);
+          if (res && Number.isFinite(res.lat) && Number.isFinite(res.lng)) {
+            resolvedList.push({ site, coords: { lat: res.lat, lng: res.lng } });
+          } else {
+            runtime.siteDistances[String(site.id)] = {
+              status: "error",
+              message: "Site location not found",
+            };
+          }
+        })
+      );
+    }
+
+    if (runId !== distanceRunSeq) return;
+    if (!resolvedList.length) {
+      hooks.renderSites();
+      return;
+    }
+
+    // Pre-sort by geometric distance and query RouteMatrix in chunks of up to 25 destinations
+    const withStraight = resolvedList.map(item => ({
+      ...item,
+      straightKm: spherical.computeDistanceBetween(originCoords, item.coords) / 1000,
+    }));
+    withStraight.sort((a, b) => a.straightKm - b.straightKm);
+
+    const matrixChunkSize = 25;
+    for (let i = 0; i < withStraight.length; i += matrixChunkSize) {
+      if (runId !== distanceRunSeq) return;
+      const chunk = withStraight.slice(i, i + matrixChunkSize);
+      try {
+        const request: google.maps.routes.ComputeRouteMatrixRequest = {
+          origins: [originCoords],
+          destinations: chunk.map(c => c.coords),
+          travelMode: "DRIVING" as any,
+          units: UnitSystem.METRIC,
+          fields: ["distanceMeters", "durationMillis", "condition"],
+          internalUsageAttributionIds: [MAPS_ATTRIBUTION_ID],
+        } as any;
+        const { matrix } = await RouteMatrix.computeRouteMatrix(request);
+        const items = matrix?.rows?.[0]?.items || [];
+        chunk.forEach((entry, idx) => {
+          const item = items[idx];
+          const sid = String(entry.site.id);
+          if (item && item.condition === "ROUTE_EXISTS" && typeof item.distanceMeters === "number" && Number.isFinite(item.distanceMeters)) {
+            const dMeters = item.distanceMeters;
+            const dMillis = typeof item.durationMillis === "number" && Number.isFinite(item.durationMillis) ? item.durationMillis : undefined;
+            runtime.siteDistances[sid] = {
+              status: "ready",
+              distanceMeters: dMeters,
+              durationMillis: dMillis,
+              distanceText: formatDistanceMeters(dMeters),
+              durationText: formatDurationMs(dMillis),
+              straightKm: entry.straightKm,
+            };
+          } else {
+            runtime.siteDistances[sid] = {
+              status: "no_route",
+              straightKm: entry.straightKm,
+              message: `No driving route (~${entry.straightKm.toFixed(0)} km straight-line)`,
+            };
+          }
+        });
+      } catch {
+        chunk.forEach(entry => {
+          const estMeters = Math.round(entry.straightKm * 1000);
+          runtime.siteDistances[String(entry.site.id)] = {
+            status: "ready",
+            distanceMeters: estMeters,
+            distanceText: `~${formatDistanceMeters(estMeters)} (est.)`,
+            straightKm: entry.straightKm,
+          };
+        });
+      }
+    }
+    if (runId === distanceRunSeq) hooks.renderSites();
+  } catch {
+    if (runId !== distanceRunSeq) return;
+    toCompute.forEach(s => {
+      if (runtime.siteDistances[String(s.id)]?.status === "loading") {
+        runtime.siteDistances[String(s.id)] = { status: "error", message: "Distance unavailable" };
+      }
+    });
+    hooks.renderSites();
+  }
+}
+
 export async function openSiteGoogleMap(
   containerId: string,
   query: string,
@@ -1416,9 +2466,15 @@ export async function openSiteGoogleMap(
   statusElId?: string,
   fallbackQueries: string[] = []
 ): Promise<void> {
+  if (siteMapLazyObserver) {
+    siteMapLazyObserver.disconnect();
+    siteMapLazyObserver = null;
+  }
+  siteMapWasActivated = true;
   const statusEl = statusElId ? $(statusElId) : null;
   const dirBox = $("siteMapDirections");
   if (!$(containerId)) return;
+  initSiteMapControls();
   lastSiteMapArgs = { containerId, query, siteTitle, statusElId, fallbackQueries };
   if (statusEl) statusEl.textContent = "Centering map on " + siteTitle + "…";
   if (dirBox) dirBox.innerHTML = '<p class="muted">Locating site & calculating live route…</p>';
@@ -1427,46 +2483,18 @@ export async function openSiteGoogleMap(
   try {
     const setup = await ensureSiteMapInstance(containerId);
     if (!setup || !siteMapInstance) return;
-    const { InfoWindow, AdvancedMarkerElement, LatLngBounds, Place, Route } = setup;
+    const { InfoWindow, AdvancedMarkerElement, LatLngBounds, Place, Route, spherical } = setup;
 
     if (!siteMapInfoWindow) siteMapInfoWindow = new InfoWindow();
 
-    const cacheKey = query.trim().toLowerCase();
-    let resolved = siteLocationCache.get(cacheKey) || null;
-    let placeErrorMsg = "";
-
+    const matchedSite = state.sites.find(s =>
+      (runtime.selectedSiteId && String(s.id) === String(runtime.selectedSiteId)) ||
+      String(s.name || "").trim() === String(siteTitle || "").trim()
+    );
     const originPromise = getCurrentOriginLatLng();
-
-    if (!resolved) {
-      const candidates = [...new Set([query, ...fallbackQueries].map(q => q.trim()).filter(Boolean))];
-      for (const q of candidates) {
-        try {
-          const { places } = await Place.searchByText({
-            textQuery: q,
-            fields: ["displayName", "location", "formattedAddress"],
-            maxResultCount: 1,
-            internalUsageAttributionIds: [MAPS_ATTRIBUTION_ID],
-          } as any);
-          const match = places?.[0];
-          if (match?.location) {
-            const lat = typeof match.location.lat === "function" ? match.location.lat() : Number((match.location as any).lat);
-            const lng = typeof match.location.lng === "function" ? match.location.lng() : Number((match.location as any).lng);
-            if (Number.isFinite(lat) && Number.isFinite(lng)) {
-              resolved = {
-                lat,
-                lng,
-                displayName: match.displayName || siteTitle,
-                formattedAddress: match.formattedAddress || "",
-              };
-              siteLocationCache.set(cacheKey, resolved);
-              break;
-            }
-          }
-        } catch (err: any) {
-          placeErrorMsg = err?.message || String(err || "");
-        }
-      }
-    }
+    const resolvedRaw = await resolveCoordsByQueries(Place, query, siteTitle, fallbackQueries, matchedSite);
+    const placeErrorMsg = resolvedRaw?.errorMsg || "";
+    const resolved = resolvedRaw && Number.isFinite(resolvedRaw.lat) && Number.isFinite(resolvedRaw.lng) ? resolvedRaw : null;
 
     const originCoords = await originPromise;
 
@@ -1476,7 +2504,7 @@ export async function openSiteGoogleMap(
       if (statusEl) {
         statusEl.textContent = placeErrorMsg
           ? "Unable to locate site on embedded map (" + placeErrorMsg + ")."
-          : 'Site location not found in Places for "' + siteTitle + '".';
+          : 'Could not pinpoint exact coordinates for "' + siteTitle + '" automatically.';
       }
       if (dirBox) {
         const gSearch = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(query);
@@ -1485,24 +2513,41 @@ export async function openSiteGoogleMap(
       return;
     }
 
+    if (matchedSite && (matchedSite.latitude == null || matchedSite.longitude == null)) {
+      matchedSite.latitude = resolved.lat;
+      matchedSite.longitude = resolved.lng;
+    }
+
     const destPos = { lat: resolved.lat, lng: resolved.lng };
     siteLastDestPos = destPos;
 
     // Always center the existing map component on the selected site location immediately
+    try { google.maps.event.trigger(siteMapInstance, "resize"); } catch {}
     siteMapInstance.setCenter(destPos);
     siteMapInstance.panTo(destPos);
     siteMapInstance.setZoom(16);
+    requestAnimationFrame(() => {
+      if (siteMapInstance) {
+        try { google.maps.event.trigger(siteMapInstance, "resize"); } catch {}
+        siteMapInstance.setCenter(destPos);
+        siteMapInstance.setZoom(16);
+      }
+    });
 
     if (!siteMapMarker) {
       siteMapMarker = new AdvancedMarkerElement({
         map: siteMapInstance,
         position: destPos,
         title: resolved.displayName || siteTitle,
+        content: buildSitePinElement(resolved.displayName || siteTitle, true),
+        zIndex: 999,
       });
     } else {
       siteMapMarker.map = siteMapInstance;
       siteMapMarker.position = destPos;
       siteMapMarker.title = resolved.displayName || siteTitle;
+      siteMapMarker.content = buildSitePinElement(resolved.displayName || siteTitle, true);
+      siteMapMarker.zIndex = 999;
     }
 
     const infoContent =
@@ -1617,6 +2662,16 @@ export async function openSiteGoogleMap(
 
       const distLabel = formatDistanceMeters(route.distanceMeters);
       const etaLabel = formatDurationMs(route.durationMillis);
+      if (runtime.selectedSiteId && mode === "DRIVING" && distLabel) {
+        runtime.siteDistances[String(runtime.selectedSiteId)] = {
+          status: "ready",
+          distanceMeters: route.distanceMeters,
+          durationMillis: route.durationMillis,
+          distanceText: distLabel,
+          durationText: etaLabel,
+        };
+        hooks.renderSites();
+      }
       const steps: any[] = route.legs?.[0]?.steps || [];
       const stepsHtml = steps
         .slice(0, 12)
@@ -1646,19 +2701,41 @@ export async function openSiteGoogleMap(
           `</div>`;
       }
     } else {
+      const straightMeters = Math.round(spherical.computeDistanceBetween(originCoords, destPos));
+      const approxLabel = formatDistanceMeters(straightMeters);
+      try {
+        const refLine = new google.maps.Polyline({
+          path: [originCoords, destPos],
+          strokeColor: "#2f8cff",
+          strokeOpacity: 0.7,
+          strokeWeight: 3,
+          map: siteMapInstance,
+        });
+        siteMapPolylines.push(refLine);
+      } catch {}
       const bounds = new LatLngBounds();
       bounds.extend(originCoords);
       bounds.extend(destPos);
       siteLastRouteBounds = bounds;
+      if (runtime.selectedSiteId && !runtime.siteDistances[String(runtime.selectedSiteId)]?.distanceMeters) {
+        runtime.siteDistances[String(runtime.selectedSiteId)] = {
+          status: "ready",
+          distanceMeters: straightMeters,
+          distanceText: `~${approxLabel} (est.)`,
+          straightKm: straightMeters / 1000,
+        };
+        hooks.renderSites();
+      }
       if (statusEl) {
-        statusEl.textContent = "📍 " + (resolved.formattedAddress || resolved.displayName || siteTitle) + " · Centered on site";
+        statusEl.textContent = "📍 " + (resolved.formattedAddress || resolved.displayName || siteTitle) + (approxLabel ? " · ~" + approxLabel + " away" : " · Centered on site");
       }
       if (dirBox) {
         dirBox.innerHTML =
           modeTabsHtml +
-          `<div class="muted" style="font-size:12px;margin-bottom:8px;">Map centered on selected site. Direct road route between your current GPS and this site could not be plotted automatically.</div>` +
+          `<div class="muted" style="font-size:12px;margin-bottom:8px;">Map centered on selected site (~${esc(approxLabel || "—")} straight-line from your GPS). Tap below for turn-by-turn navigation in Google Maps.</div>` +
           `<div class="inline-actions" style="margin-top:0;">` +
           `<button class="gray small-btn" type="button" onclick="centerSiteMapOnSelected()">🎯 Center on Site</button>` +
+          `<button class="gray small-btn" type="button" onclick="fitSiteMapRoute()">🗺 Fit Both Pins</button>` +
           `<a class="btn small-btn" style="text-decoration:none;display:inline-flex;align-items:center;" href="${esc(gmapsExternalUrl)}" target="_blank" rel="noopener">🧭 Open Directions in Google Maps ↗</a>` +
           `</div>`;
       }
@@ -1670,6 +2747,911 @@ export async function openSiteGoogleMap(
       dirBox.innerHTML = `<a class="btn small-btn" style="text-decoration:none;display:inline-flex;align-items:center;" href="${esc(gSearch)}" target="_blank" rel="noopener">🧭 Open Directions in Google Maps ↗</a>`;
     }
   }
+}
+
+export async function focusSiteMapCoordinates(
+  destPos: { lat: number; lng: number },
+  title: string,
+  formattedAddress = ""
+): Promise<void> {
+  const statusEl = $("siteMapStatus");
+  const dirBox = $("siteMapDirections");
+  const ttl = $("siteMapTitle");
+  if (ttl) ttl.textContent = title || "Sites Map";
+  clearSiteMapPolylines();
+
+  const setup = await ensureSiteMapInstance("siteGoogleMap");
+  if (!setup || !siteMapInstance) return;
+  const { InfoWindow, AdvancedMarkerElement, LatLngBounds, Route, spherical } = setup;
+  if (!siteMapInfoWindow) siteMapInfoWindow = new InfoWindow();
+
+  siteLastDestPos = destPos;
+  try { google.maps.event.trigger(siteMapInstance, "resize"); } catch {}
+  siteMapInstance.setCenter(destPos);
+  siteMapInstance.panTo(destPos);
+  siteMapInstance.setZoom(16);
+  requestAnimationFrame(() => {
+    if (siteMapInstance) {
+      try { google.maps.event.trigger(siteMapInstance, "resize"); } catch {}
+      siteMapInstance.setCenter(destPos);
+      siteMapInstance.setZoom(16);
+    }
+  });
+
+  if (!siteMapMarker) {
+    siteMapMarker = new AdvancedMarkerElement({
+      map: siteMapInstance,
+      position: destPos,
+      title,
+      content: buildSitePinElement(title, true),
+      zIndex: 999,
+    });
+  } else {
+    siteMapMarker.map = siteMapInstance;
+    siteMapMarker.position = destPos;
+    siteMapMarker.title = title;
+    siteMapMarker.content = buildSitePinElement(title, true);
+    siteMapMarker.zIndex = 999;
+  }
+
+  siteMapInfoWindow.setContent(
+    `<div style="font-size:13px;line-height:1.4;"><b>${esc(title)}</b>` +
+    (formattedAddress ? `<br><span>${esc(formattedAddress)}</span>` : "") +
+    `</div>`
+  );
+  siteMapInfoWindow.open({ map: siteMapInstance, anchor: siteMapMarker });
+
+  const originCoords = await getCurrentOriginLatLng();
+  const gmapsExternalUrl = originCoords
+    ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(originCoords.lat + "," + originCoords.lng)}&destination=${encodeURIComponent(destPos.lat + "," + destPos.lng)}&travelmode=${runtime.siteMapTravelMode === "WALKING" ? "walking" : "driving"}`
+    : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destPos.lat + "," + destPos.lng)}&travelmode=${runtime.siteMapTravelMode === "WALKING" ? "walking" : "driving"}`;
+
+  if (!originCoords) {
+    if (siteOriginMarker) siteOriginMarker.map = null;
+    if (statusEl) statusEl.textContent = `📍 ${formattedAddress || title} · Turn on GPS for live route`;
+    if (dirBox) {
+      dirBox.innerHTML =
+        `<div class="inline-actions" style="margin-top:0;">` +
+        `<button class="gray small-btn" type="button" onclick="centerSiteMapOnSelected()">🎯 Center on Site</button>` +
+        `<a class="btn small-btn" style="text-decoration:none;display:inline-flex;align-items:center;" href="${esc(gmapsExternalUrl)}" target="_blank" rel="noopener">🧭 Open Directions in Google Maps ↗</a>` +
+        `</div>`;
+    }
+    return;
+  }
+
+  if (!siteOriginMarker) {
+    siteOriginMarker = new AdvancedMarkerElement({
+      map: siteMapInstance,
+      position: originCoords,
+      title: "Your Current Location",
+      content: buildOriginPinElement(),
+    });
+  } else {
+    siteOriginMarker.map = siteMapInstance;
+    siteOriginMarker.position = originCoords;
+  }
+
+  let route: any = null;
+  try {
+    const res = await Route.computeRoutes({
+      origin: originCoords,
+      destination: destPos,
+      travelMode: runtime.siteMapTravelMode || "DRIVING",
+      fields: ["path", "distanceMeters", "durationMillis", "viewport", "legs"],
+      internalUsageAttributionIds: [MAPS_ATTRIBUTION_ID],
+    } as any);
+    route = res.routes?.[0] || null;
+  } catch {
+    route = null;
+  }
+
+  if (route) {
+    try {
+      const polylines = route.createPolylines({
+        map: siteMapInstance,
+        polylineOptions: { strokeColor: "#2f8cff", strokeWeight: 6, strokeOpacity: 0.9 },
+      } as any);
+      if (Array.isArray(polylines)) siteMapPolylines.push(...polylines);
+      else if (polylines) siteMapPolylines.push(polylines as any);
+    } catch {}
+    if (route.viewport) siteLastRouteBounds = route.viewport;
+    const distLabel = formatDistanceMeters(route.distanceMeters);
+    const etaLabel = formatDurationMs(route.durationMillis);
+    if (statusEl) statusEl.textContent = `📍 ${title} · ${distLabel || "Route ready"}${etaLabel ? " · ETA " + etaLabel : ""}`;
+    if (dirBox) {
+      dirBox.innerHTML =
+        `<div class="item" style="margin-top:0;"><b>🚗 ${esc(distLabel || "Route")}</b>${etaLabel ? ` <span class="badge">${esc(etaLabel)}</span>` : ""}` +
+        `<div class="inline-actions" style="margin-top:8px;">` +
+        `<button class="gray small-btn" type="button" onclick="centerSiteMapOnSelected()">🎯 Center on Pin</button>` +
+        `<button class="gray small-btn" type="button" onclick="fitSiteMapRoute()">🗺 Fit Route</button>` +
+        `<a class="btn small-btn" style="text-decoration:none;display:inline-flex;align-items:center;" href="${esc(gmapsExternalUrl)}" target="_blank" rel="noopener">🧭 Open in Google Maps ↗</a>` +
+        `</div></div>`;
+    }
+  } else {
+    const straightMeters = Math.round(spherical.computeDistanceBetween(originCoords, destPos));
+    const approxLabel = formatDistanceMeters(straightMeters);
+    try {
+      const refLine = new google.maps.Polyline({
+        path: [originCoords, destPos],
+        strokeColor: "#2f8cff",
+        strokeOpacity: 0.7,
+        strokeWeight: 3,
+        map: siteMapInstance,
+      });
+      siteMapPolylines.push(refLine);
+    } catch {}
+    const bounds = new LatLngBounds();
+    bounds.extend(originCoords);
+    bounds.extend(destPos);
+    siteLastRouteBounds = bounds;
+    if (statusEl) statusEl.textContent = `📍 ${formattedAddress || title}${approxLabel ? " · ~" + approxLabel + " away" : ""}`;
+    if (dirBox) {
+      dirBox.innerHTML =
+        `<div class="inline-actions" style="margin-top:0;">` +
+        `<button class="gray small-btn" type="button" onclick="centerSiteMapOnSelected()">🎯 Center on Pin</button>` +
+        `<button class="gray small-btn" type="button" onclick="fitSiteMapRoute()">🗺 Fit Both Pins</button>` +
+        `<a class="btn small-btn" style="text-decoration:none;display:inline-flex;align-items:center;" href="${esc(gmapsExternalUrl)}" target="_blank" rel="noopener">🧭 Open Directions in Google Maps ↗</a>` +
+        `</div>`;
+    }
+  }
+}
+
+let siteMapControlsWired = false;
+let placesAutocompleteDenied = false;
+
+export function initSiteMapControls(): void {
+  if (siteMapControlsWired) return;
+  siteMapControlsWired = true;
+
+  document.querySelectorAll<HTMLElement>("[data-site-map-layer]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const layer = btn.dataset.siteMapLayer === "satellite" ? "satellite" : "roadmap";
+      setSiteMapLayer(layer);
+      if (!siteMapInstance) void initSitesMapOverview();
+    });
+  });
+
+  const input = $("siteMapSearchInput") as HTMLInputElement | null;
+  const clearBtn = $("siteMapSearchClearBtn");
+  const resultsBox = $("siteMapSearchResults");
+  if (!input || !resultsBox) return;
+
+  let debounceTimer: any = null;
+  let searchSeq = 0;
+  let sessionToken: google.maps.places.AutocompleteSessionToken | null = null;
+  let activeEntries: Array<{
+    kind: "site" | "google" | "geocode";
+    label: string;
+    sublabel: string;
+    siteId?: string;
+    prediction?: google.maps.places.PlacePrediction;
+    coords?: { lat: number; lng: number };
+    query?: string;
+  }> = [];
+
+  const hideResults = () => {
+    resultsBox.classList.add("hidden");
+  };
+
+  const renderSuggestions = () => {
+    if (!activeEntries.length) {
+      resultsBox.innerHTML = "";
+      resultsBox.classList.add("hidden");
+      return;
+    }
+    resultsBox.innerHTML = activeEntries
+      .map((item, idx) =>
+        `<button type="button" class="site-map-search-item" role="option" data-map-suggest-idx="${idx}">` +
+        `${item.kind === "site" ? "🏢 " : "📍 "}${esc(item.label)}` +
+        (item.sublabel ? `<small>${esc(item.sublabel)}</small>` : "") +
+        `</button>`
+      )
+      .join("");
+    resultsBox.classList.remove("hidden");
+  };
+
+  const selectEntry = async (idx: number) => {
+    const item = activeEntries[idx];
+    if (!item) return;
+    hideResults();
+    input.value = item.label;
+    clearBtn?.classList.remove("hidden");
+
+    if (item.kind === "site" && item.siteId) {
+      sessionToken = null;
+      hooks.openSiteOnMap?.(item.siteId);
+      return;
+    }
+
+    if (item.kind === "google" && item.prediction) {
+      const statusEl = $("siteMapStatus");
+      if (statusEl) statusEl.textContent = `Locating ${item.label}…`;
+      try {
+        const place = item.prediction.toPlace();
+        await place.fetchFields({ fields: ["location", "displayName", "formattedAddress"] });
+        sessionToken = null;
+        if (place.location) {
+          const lat = typeof place.location.lat === "function" ? place.location.lat() : Number((place.location as any).lat);
+          const lng = typeof place.location.lng === "function" ? place.location.lng() : Number((place.location as any).lng);
+          if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            runtime.selectedSiteId = null;
+            hooks.renderSites();
+            await focusSiteMapCoordinates(
+              { lat, lng },
+              place.displayName || item.label,
+              place.formattedAddress || item.sublabel
+            );
+            return;
+          }
+        }
+      } catch {}
+    }
+
+    if (item.coords) {
+      runtime.selectedSiteId = null;
+      hooks.renderSites();
+      await focusSiteMapCoordinates(item.coords, item.label, item.sublabel);
+      return;
+    }
+
+    const q = item.query || item.label;
+    const fb = await fetchFallbackGeocode([q, `${q}, Philippines`], item.label);
+    if (fb) {
+      runtime.selectedSiteId = null;
+      hooks.renderSites();
+      await focusSiteMapCoordinates({ lat: fb.lat, lng: fb.lng }, fb.displayName || item.label, fb.formattedAddress);
+    } else {
+      toast("Could not locate that address on the map.");
+    }
+  };
+
+  const runAutocomplete = async (term: string) => {
+    const q = term.trim();
+    const mySeq = ++searchSeq;
+    if (!q) {
+      activeEntries = [];
+      hideResults();
+      return;
+    }
+
+    const ql = q.toLowerCase();
+    const localMatches = state.sites
+      .filter(s => [s.name, s.address, s.city, s.region].some(v => String(v || "").toLowerCase().includes(ql)))
+      .slice(0, 4)
+      .map(s => ({
+        kind: "site" as const,
+        label: String(s.name || "Work Site"),
+        sublabel: [s.address, s.city, s.region].filter(Boolean).join(" · "),
+        siteId: String(s.id),
+      }));
+
+    activeEntries = [...localMatches];
+    if (localMatches.length) renderSuggestions();
+
+    if (q.length < 2) return;
+
+    if (!placesAutocompleteDenied) {
+      try {
+        const { AutocompleteSuggestion, AutocompleteSessionToken } = await loadGoogleMapsLibraries();
+        if (mySeq !== searchSeq) return;
+        if (!sessionToken) sessionToken = new AutocompleteSessionToken();
+        const { suggestions } = await AutocompleteSuggestion.fetchAutocompleteSuggestions({
+          input: q,
+          sessionToken,
+          includedRegionCodes: ["ph"],
+          internalUsageAttributionIds: [MAPS_ATTRIBUTION_ID],
+        } as any);
+        if (mySeq !== searchSeq) return;
+        const googleEntries = (suggestions || [])
+          .map(s => s.placePrediction)
+          .filter((p): p is google.maps.places.PlacePrediction => Boolean(p))
+          .slice(0, 5)
+          .map(p => ({
+            kind: "google" as const,
+            label: p.mainText?.text || p.text?.text || q,
+            sublabel: p.secondaryText?.text || p.text?.text || "",
+            prediction: p,
+          }));
+        activeEntries = [...localMatches, ...googleEntries];
+        renderSuggestions();
+        return;
+      } catch (err: any) {
+        const msg = err?.message || String(err || "");
+        if (/PERMISSION_DENIED|Permission denied|not activated|API_KEY/i.test(msg)) {
+          placesAutocompleteDenied = true;
+        }
+      }
+    }
+
+    const fb = await fetchFallbackGeocode([q, `${q}, Philippines`], q);
+    if (mySeq !== searchSeq) return;
+    if (fb) {
+      activeEntries = [
+        ...localMatches,
+        {
+          kind: "geocode",
+          label: fb.displayName || q,
+          sublabel: fb.formattedAddress,
+          coords: { lat: fb.lat, lng: fb.lng },
+          query: q,
+        },
+      ];
+    }
+    renderSuggestions();
+  };
+
+  input.addEventListener("input", () => {
+    const val = input.value;
+    clearBtn?.classList.toggle("hidden", !val.length);
+    clearTimeout(debounceTimer);
+    if (!val.trim()) {
+      activeEntries = [];
+      hideResults();
+      sessionToken = null;
+      return;
+    }
+    debounceTimer = setTimeout(() => { void runAutocomplete(val); }, 260);
+  });
+
+  input.addEventListener("focus", () => {
+    if (input.value.trim() && activeEntries.length) resultsBox.classList.remove("hidden");
+  });
+
+  input.addEventListener("keydown", async e => {
+    if (e.key === "Escape") {
+      hideResults();
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (activeEntries.length) {
+        await selectEntry(0);
+      } else if (input.value.trim()) {
+        await runAutocomplete(input.value);
+        if (activeEntries.length) {
+          await selectEntry(0);
+        } else {
+          const q = input.value.trim();
+          const fb = await fetchFallbackGeocode([q, `${q}, Philippines`], q);
+          if (fb) {
+            runtime.selectedSiteId = null;
+            hooks.renderSites();
+            await focusSiteMapCoordinates({ lat: fb.lat, lng: fb.lng }, fb.displayName || q, fb.formattedAddress);
+          } else {
+            toast("No matching address found.");
+          }
+        }
+      }
+    }
+  });
+
+  clearBtn?.addEventListener("click", () => {
+    input.value = "";
+    activeEntries = [];
+    sessionToken = null;
+    clearBtn.classList.add("hidden");
+    hideResults();
+    input.focus();
+  });
+
+  resultsBox.addEventListener("click", e => {
+    const btn = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-map-suggest-idx]");
+    if (!btn) return;
+    const idx = Number(btn.dataset.mapSuggestIdx);
+    if (Number.isInteger(idx)) void selectEntry(idx);
+  });
+
+  document.addEventListener("click", e => {
+    const wrap = $("siteMapSearchWrap");
+    if (wrap && e.target instanceof Node && !wrap.contains(e.target)) {
+      hideResults();
+    }
+  });
+}
+
+let addSiteMapInstance: google.maps.Map | null = null;
+let addSiteMapContainerEl: HTMLElement | null = null;
+let addSiteMarker: google.maps.marker.AdvancedMarkerElement | null = null;
+let addSiteWired = false;
+let addSiteAddressTouched = false;
+let addSiteCoordsTouched = false;
+let addSiteLastCustomPreviewUrl = "";
+
+function setAddSiteThumbPreviewUi(url: string, noteText: string): void {
+  const img = $("addSiteThumbPreview") as HTMLImageElement | null;
+  const note = $("addSiteThumbNote");
+  if (img) {
+    if (url) {
+      img.src = url;
+      img.classList.remove("hidden");
+    } else {
+      img.removeAttribute("src");
+      img.classList.add("hidden");
+    }
+  }
+  if (note && noteText) note.textContent = noteText;
+}
+
+async function refreshAddSiteAutoPhotoPreview(opts: {
+  name: string;
+  city?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  placesPhotoUrl?: string | null;
+}): Promise<void> {
+  const fileInp = $("siteAddThumb") as HTMLInputElement | null;
+  if (fileInp?.files?.[0]) return;
+  const found = await resolveSiteAutoPhotoUrl(opts);
+  if (fileInp?.files?.[0]) return;
+  if (found?.photoUrl) {
+    setVal("siteAutoThumbUrl", found.photoUrl);
+    const label =
+      found.source === "google_places"
+        ? "Auto-picked from Google Places photo."
+        : found.source === "osm_tile"
+          ? "Auto-generated from work site map pin."
+          : "Auto-picked landmark picture for this work site.";
+    setAddSiteThumbPreviewUi(found.photoUrl, label);
+  }
+}
+
+export function resetAddSitePinPicker(): void {
+  addSiteAddressTouched = false;
+  addSiteCoordsTouched = false;
+  if (addSiteLastCustomPreviewUrl) {
+    URL.revokeObjectURL(addSiteLastCustomPreviewUrl);
+    addSiteLastCustomPreviewUrl = "";
+  }
+  setVal("siteAutoThumbUrl", "");
+  setAddSiteThumbPreviewUi("", "A picture is automatically added from Places / landmark photo or map pin when you enter a site name.");
+  const st = $("addSitePinStatus");
+  if (st) st.textContent = "Type a site name or address to auto-fill address & drop pin (tap or drag pin on map to adjust).";
+  $("addSiteSearchResults")?.classList.add("hidden");
+  if (addSiteMarker) addSiteMarker.map = null;
+}
+
+async function ensureAddSitePreviewMap(): Promise<{
+  map: google.maps.Map;
+  AdvancedMarkerElement: typeof google.maps.marker.AdvancedMarkerElement;
+} | null> {
+  const el = $("addSitePinMap");
+  if (!el) return null;
+  const libs = await loadGoogleMapsLibraries();
+  if (!addSiteMapInstance || addSiteMapContainerEl !== el) {
+    addSiteMapContainerEl = el;
+    addSiteMapInstance = new libs.Map(el, {
+      center: { lat: 10.3157, lng: 123.8854 },
+      zoom: 12,
+      mapId: "DEMO_MAP_ID",
+      mapTypeControl: false,
+      streetViewControl: false,
+      fullscreenControl: false,
+      internalUsageAttributionIds: [MAPS_ATTRIBUTION_ID],
+    } as any);
+    addSiteMarker = null;
+
+    addSiteMapInstance.addListener("click", async (ev: google.maps.MapMouseEvent) => {
+      if (!ev.latLng) return;
+      const lat = ev.latLng.lat();
+      const lng = ev.latLng.lng();
+      addSiteCoordsTouched = true;
+      await setAddSitePinCoords({ lat, lng }, { reverseFillAddress: true, label: val("siteName").trim() || "New Work Site" });
+    });
+  } else {
+    try {
+      google.maps.event.trigger(addSiteMapInstance, "resize");
+    } catch {}
+  }
+  return { map: addSiteMapInstance, AdvancedMarkerElement: libs.AdvancedMarkerElement };
+}
+
+async function setAddSitePinCoords(
+  pos: { lat: number; lng: number },
+  opts: { reverseFillAddress?: boolean; label?: string; zoom?: number } = {}
+): Promise<void> {
+  const latStr = pos.lat.toFixed(6);
+  const lngStr = pos.lng.toFixed(6);
+  setVal("siteLat", latStr);
+  setVal("siteLng", lngStr);
+  const st = $("addSitePinStatus");
+  const label = opts.label || val("siteName").trim() || "New Work Site";
+
+  try {
+    const setup = await ensureAddSitePreviewMap();
+    if (setup) {
+      const { map, AdvancedMarkerElement } = setup;
+      map.panTo(pos);
+      map.setCenter(pos);
+      map.setZoom(opts.zoom || 16);
+      const pinEl = buildSitePinElement(label, true);
+      if (!addSiteMarker) {
+        addSiteMarker = new AdvancedMarkerElement({
+          map,
+          position: pos,
+          title: label,
+          content: pinEl,
+          gmpDraggable: true,
+        });
+        addSiteMarker.addListener("dragend", async () => {
+          const p = addSiteMarker?.position as any;
+          const dLat = typeof p?.lat === "function" ? p.lat() : Number(p?.lat);
+          const dLng = typeof p?.lng === "function" ? p.lng() : Number(p?.lng);
+          if (Number.isFinite(dLat) && Number.isFinite(dLng)) {
+            addSiteCoordsTouched = true;
+            await setAddSitePinCoords({ lat: dLat, lng: dLng }, { reverseFillAddress: true, label: val("siteName").trim() || "New Work Site" });
+          }
+        });
+      } else {
+        addSiteMarker.map = map;
+        addSiteMarker.position = pos;
+        addSiteMarker.title = label;
+        addSiteMarker.content = pinEl;
+      }
+    }
+  } catch {}
+
+  if (opts.reverseFillAddress) {
+    if (st) st.textContent = `📍 Pin at ${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)} · Looking up address…`;
+    const rev = await fetchReverseGeocode(pos.lat, pos.lng);
+    if (rev) {
+      if (rev.formattedAddress) {
+        setVal("siteAddress", rev.formattedAddress);
+        addSiteAddressTouched = true;
+      }
+      if (rev.city) setVal("siteCity", rev.city);
+      setVal("siteRegion", rev.regionHint);
+      if (st) st.textContent = `✅ Pinned ${rev.city || "site"} (${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)})`;
+      void refreshAddSiteAutoPhotoPreview({
+        name: val("siteName").trim() || rev.city || "Work Site",
+        city: rev.city,
+        lat: pos.lat,
+        lng: pos.lng,
+      });
+    } else if (st) {
+      st.textContent = `📍 Pinned at ${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}`;
+    }
+  } else if (st) {
+    st.textContent = `✅ Pinned ${label} (${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)})`;
+  }
+}
+
+export function initAddSitePinPicker(): void {
+  void ensureAddSitePreviewMap();
+  if (addSiteWired) return;
+  addSiteWired = true;
+
+  const nameInput = $("siteName") as HTMLInputElement | null;
+  const addrInput = $("siteAddress") as HTMLInputElement | null;
+  const latInput = $("siteLat") as HTMLInputElement | null;
+  const lngInput = $("siteLng") as HTMLInputElement | null;
+  const thumbInput = $("siteAddThumb") as HTMLInputElement | null;
+  const resultsBox = $("addSiteSearchResults");
+  const autoBtn = $("autoLocateSiteBtn");
+  const gpsBtn = $("useMyGpsSiteBtn");
+  const statusEl = $("addSitePinStatus");
+  if (!nameInput || !addrInput || !resultsBox) return;
+
+  let nameTimer: any = null;
+  let addrTimer: any = null;
+  let searchSeq = 0;
+  let sessionToken: google.maps.places.AutocompleteSessionToken | null = null;
+  let suggestionsList: Array<{
+    kind: "google" | "geocode";
+    label: string;
+    sublabel: string;
+    prediction?: google.maps.places.PlacePrediction;
+    coords?: { lat: number; lng: number };
+    city?: string;
+    regionHint?: string;
+    formattedAddress?: string;
+  }> = [];
+
+  const hideDrop = () => resultsBox.classList.add("hidden");
+
+  const renderDrop = () => {
+    if (!suggestionsList.length) {
+      resultsBox.innerHTML = "";
+      hideDrop();
+      return;
+    }
+    resultsBox.innerHTML = suggestionsList
+      .map((item, idx) =>
+        `<button type="button" class="site-map-search-item" role="option" data-add-site-suggest="${idx}">` +
+        `📍 ${esc(item.label)}` +
+        (item.sublabel ? `<small>${esc(item.sublabel)}</small>` : "") +
+        `</button>`
+      )
+      .join("");
+    resultsBox.classList.remove("hidden");
+  };
+
+  const applyResolvedResult = async (res: {
+    lat: number;
+    lng: number;
+    address: string;
+    city: string;
+    region: "Luzon" | "Visayas" | "Mindanao";
+    label: string;
+    placesPhotoUrl?: string;
+  }) => {
+    if (res.address) setVal("siteAddress", res.address);
+    if (res.city) setVal("siteCity", res.city);
+    setVal("siteRegion", res.region);
+    await setAddSitePinCoords({ lat: res.lat, lng: res.lng }, { reverseFillAddress: false, label: res.label });
+    void refreshAddSiteAutoPhotoPreview({
+      name: res.label,
+      city: res.city,
+      lat: res.lat,
+      lng: res.lng,
+      placesPhotoUrl: res.placesPhotoUrl,
+    });
+  };
+
+  const pickSuggestion = async (idx: number) => {
+    const item = suggestionsList[idx];
+    if (!item) return;
+    hideDrop();
+    addSiteAddressTouched = true;
+    addSiteCoordsTouched = true;
+    if (statusEl) statusEl.textContent = `Resolving ${item.label}…`;
+
+    if (item.kind === "google" && item.prediction) {
+      try {
+        const place = item.prediction.toPlace();
+        await place.fetchFields({ fields: ["location", "displayName", "formattedAddress", "addressComponents", "photos"] });
+        sessionToken = null;
+        if (place.location) {
+          const lat = typeof place.location.lat === "function" ? place.location.lat() : Number((place.location as any).lat);
+          const lng = typeof place.location.lng === "function" ? place.location.lng() : Number((place.location as any).lng);
+          if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            const addr = place.formattedAddress || [item.label, item.sublabel].filter(Boolean).join(", ");
+            const city = extractCityFromAddressComponents(place.addressComponents, addr);
+            const region = inferPhRegionFromTextOrCoords(`${place.displayName || ""} ${addr} ${city}`, lat, lng);
+            let placesPhotoUrl = "";
+            try {
+              const p0: any = Array.isArray((place as any).photos) ? (place as any).photos[0] : null;
+              if (p0 && typeof p0.getURI === "function") placesPhotoUrl = String(p0.getURI({ maxWidth: 800, maxHeight: 600 }) || "");
+            } catch {}
+            await applyResolvedResult({
+              lat,
+              lng,
+              address: addr,
+              city,
+              region,
+              label: val("siteName").trim() || place.displayName || item.label,
+              placesPhotoUrl,
+            });
+            return;
+          }
+        }
+      } catch {}
+    }
+
+    if (item.coords) {
+      const addr = item.formattedAddress || item.label;
+      const city = item.city || extractCityFromAddressComponents(null, addr);
+      const region = (item.regionHint as any) || inferPhRegionFromTextOrCoords(`${addr} ${city}`, item.coords.lat, item.coords.lng);
+      await applyResolvedResult({
+        lat: item.coords.lat,
+        lng: item.coords.lng,
+        address: addr,
+        city,
+        region,
+        label: val("siteName").trim() || item.label,
+      });
+    }
+  };
+
+  const runAddressSuggestions = async (term: string) => {
+    const q = term.trim();
+    const mySeq = ++searchSeq;
+    if (q.length < 2) {
+      suggestionsList = [];
+      hideDrop();
+      return;
+    }
+
+    if (!placesAutocompleteDenied) {
+      try {
+        const { AutocompleteSuggestion, AutocompleteSessionToken } = await loadGoogleMapsLibraries();
+        if (mySeq !== searchSeq) return;
+        if (!sessionToken) sessionToken = new AutocompleteSessionToken();
+        const { suggestions } = await AutocompleteSuggestion.fetchAutocompleteSuggestions({
+          input: q,
+          sessionToken,
+          includedRegionCodes: ["ph"],
+          internalUsageAttributionIds: [MAPS_ATTRIBUTION_ID],
+        } as any);
+        if (mySeq !== searchSeq) return;
+        suggestionsList = (suggestions || [])
+          .map(s => s.placePrediction)
+          .filter((p): p is google.maps.places.PlacePrediction => Boolean(p))
+          .slice(0, 5)
+          .map(p => ({
+            kind: "google" as const,
+            label: p.mainText?.text || p.text?.text || q,
+            sublabel: p.secondaryText?.text || p.text?.text || "",
+            prediction: p,
+          }));
+        renderDrop();
+        return;
+      } catch (err: any) {
+        const msg = err?.message || String(err || "");
+        if (/PERMISSION_DENIED|Permission denied|not activated|API_KEY/i.test(msg)) {
+          placesAutocompleteDenied = true;
+        }
+      }
+    }
+
+    const fb = await fetchFallbackGeocode([q, `${q}, Philippines`], q);
+    if (mySeq !== searchSeq) return;
+    suggestionsList = fb
+      ? [{
+          kind: "geocode",
+          label: fb.displayName || q,
+          sublabel: fb.formattedAddress,
+          coords: { lat: fb.lat, lng: fb.lng },
+          city: fb.city,
+          regionHint: fb.regionHint,
+          formattedAddress: fb.formattedAddress,
+        }]
+      : [];
+    renderDrop();
+  };
+
+  let autoResolveSeq = 0;
+  const autoResolveFromNameOrAddress = async (forceOverride = false, fromName = false) => {
+    const sName = val("siteName").trim();
+    const sAddr = val("siteAddress").trim();
+    const sCity = val("siteCity").trim();
+    const sReg = val("siteRegion");
+    const querySeed = fromName ? sName : (forceOverride ? (sAddr || sName) : sName);
+    if (!querySeed || querySeed.length < 3) return;
+    const seq = ++autoResolveSeq;
+    if (statusEl) statusEl.textContent = `🔍 Auto-detecting address & pin for "${querySeed}"…`;
+    const resolved = await resolveSiteAddressAndPin({
+      name: fromName ? sName : (sName || sAddr),
+      address: fromName ? (addSiteAddressTouched ? sAddr : "") : (forceOverride ? sAddr : ""),
+      city: fromName ? "" : (forceOverride ? sCity : ""),
+      region: sReg,
+    });
+    if (seq !== autoResolveSeq) return;
+    if (!resolved || resolved.lat === null || resolved.lng === null) {
+      if (statusEl) statusEl.textContent = "Pin not matched automatically — search an address above or tap the map.";
+      return;
+    }
+    if (!addSiteAddressTouched || forceOverride || !val("siteAddress").trim()) {
+      if (resolved.address) setVal("siteAddress", resolved.address);
+    }
+    if (resolved.city && (!addSiteAddressTouched || forceOverride || !val("siteCity").trim())) {
+      setVal("siteCity", resolved.city);
+    }
+    setVal("siteRegion", resolved.region);
+    if (!addSiteCoordsTouched || forceOverride || !val("siteLat").trim() || !val("siteLng").trim()) {
+      await setAddSitePinCoords({ lat: resolved.lat, lng: resolved.lng }, {
+        reverseFillAddress: false,
+        label: sName || resolved.displayName || "Work Site",
+      });
+    }
+    void refreshAddSiteAutoPhotoPreview({
+      name: sName || resolved.displayName || querySeed,
+      city: resolved.city,
+      lat: resolved.lat,
+      lng: resolved.lng,
+      placesPhotoUrl: resolved.photoUrl,
+    });
+  };
+
+  nameInput.addEventListener("input", () => {
+    clearTimeout(nameTimer);
+    const v = nameInput.value.trim();
+    if (v.length < 3) return;
+    nameTimer = setTimeout(() => {
+      void autoResolveFromNameOrAddress(false, true);
+    }, 450);
+  });
+
+  nameInput.addEventListener("blur", () => {
+    const v = nameInput.value.trim();
+    if (v.length >= 3 && (!val("siteLat").trim() || !val("siteLng").trim() || !val("siteAddress").trim())) {
+      clearTimeout(nameTimer);
+      void autoResolveFromNameOrAddress(false, true);
+    }
+  });
+
+  addrInput.addEventListener("input", () => {
+    addSiteAddressTouched = Boolean(addrInput.value.trim());
+    clearTimeout(addrTimer);
+    if (!addrInput.value.trim()) {
+      suggestionsList = [];
+      hideDrop();
+      sessionToken = null;
+      return;
+    }
+    addrTimer = setTimeout(() => { void runAddressSuggestions(addrInput.value); }, 260);
+  });
+
+  addrInput.addEventListener("keydown", async e => {
+    if (e.key === "Escape") {
+      hideDrop();
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (suggestionsList.length) {
+        await pickSuggestion(0);
+      } else {
+        await autoResolveFromNameOrAddress(true);
+      }
+    }
+  });
+
+  resultsBox.addEventListener("click", e => {
+    const btn = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-add-site-suggest]");
+    if (!btn) return;
+    const idx = Number(btn.dataset.addSiteSuggest);
+    if (Number.isInteger(idx)) void pickSuggestion(idx);
+  });
+
+  document.addEventListener("click", e => {
+    const wrap = $("addSiteSearchWrap");
+    if (wrap && e.target instanceof Node && !wrap.contains(e.target)) hideDrop();
+  });
+
+  autoBtn?.addEventListener("click", () => {
+    hideDrop();
+    void autoResolveFromNameOrAddress(true);
+  });
+
+  gpsBtn?.addEventListener("click", async () => {
+    hideDrop();
+    if (statusEl) statusEl.textContent = "📡 Acquiring your current GPS location…";
+    const coords = await getCurrentOriginLatLng();
+    if (!coords) {
+      toast("Turn on device GPS permission to pin your current location.");
+      if (statusEl) statusEl.textContent = "GPS unavailable — search an address or tap on the map.";
+      return;
+    }
+    addSiteCoordsTouched = true;
+    await setAddSitePinCoords(coords, { reverseFillAddress: true, label: val("siteName").trim() || "New Work Site" });
+  });
+
+  thumbInput?.addEventListener("change", () => {
+    if (addSiteLastCustomPreviewUrl) {
+      URL.revokeObjectURL(addSiteLastCustomPreviewUrl);
+      addSiteLastCustomPreviewUrl = "";
+    }
+    const f = thumbInput.files?.[0];
+    if (f) {
+      addSiteLastCustomPreviewUrl = URL.createObjectURL(f);
+      setAddSiteThumbPreviewUi(addSiteLastCustomPreviewUrl, "Custom uploaded work site picture.");
+    } else {
+      const existingAuto = val("siteAutoThumbUrl").trim();
+      setAddSiteThumbPreviewUi(
+        existingAuto,
+        existingAuto
+          ? "Using auto-fetched work site picture."
+          : "A picture is automatically added from Places / landmark photo or map pin when you enter a site name."
+      );
+    }
+  });
+
+  const syncManualCoords = () => {
+    const la = Number(val("siteLat"));
+    const lo = Number(val("siteLng"));
+    if (Number.isFinite(la) && Number.isFinite(lo) && la >= -90 && la <= 90 && lo >= -180 && lo <= 180) {
+      addSiteCoordsTouched = true;
+      void setAddSitePinCoords({ lat: la, lng: lo }, { reverseFillAddress: false, label: val("siteName").trim() || "New Work Site" });
+      void refreshAddSiteAutoPhotoPreview({
+        name: val("siteName").trim() || "Work Site",
+        city: val("siteCity").trim(),
+        lat: la,
+        lng: lo,
+      });
+    }
+  };
+  latInput?.addEventListener("change", syncManualCoords);
+  lngInput?.addEventListener("change", syncManualCoords);
 }
 
 export function initDataListeners(): void {
@@ -1701,6 +3683,6 @@ export function initDataListeners(): void {
   });
 
   setInterval(() => {
-    if (runtime.currentPage === "live-map" && isAdmin()) loadLiveMap();
+    if (runtime.currentPage === "live-map" && isManager()) loadLiveMap();
   }, LIVE_REFRESH_MS);
 }
