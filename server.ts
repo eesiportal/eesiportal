@@ -726,6 +726,7 @@ async function createApp() {
   const sitePhotoHandler = async (req: express.Request, res: express.Response) => {
     const body = req.method === "POST" ? (req.body || {}) : {};
     const wantTile = String(req.query.tile || body.tile || "") === "1";
+    const wantSat = String(req.query.sat || body.sat || "") === "1";
     const lat = Number(req.method === "POST" ? body.lat : req.query.lat);
     const lng = Number(req.method === "POST" ? body.lng : req.query.lng);
 
@@ -735,24 +736,46 @@ async function createApp() {
         return;
       }
       const zoom = Math.min(18, Math.max(12, Number(req.query.z || body.z || 16) || 16));
-      const { x, y } = latLngToOsmTile(lat, lng, zoom);
-      try {
-        const tileRes = await fetch(`https://tile.openstreetmap.org/${zoom}/${x}/${y}.png`, {
-          headers: { "User-Agent": "EESI-Elevators-Console/1.0 (site-preview)" },
-        });
-        if (!tileRes.ok) {
-          res.status(502).json({ error: "Could not fetch map tile." });
-          return;
+      if (wantSat) {
+        const gKey = process.env.GOOGLE_MAPS_SERVER_KEY || process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || "";
+        if (gKey && gKey !== "MY_GOOGLE_MAPS_API_KEY") {
+          try {
+            const gUrl =
+              `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=${zoom}` +
+              `&size=240x240&scale=2&maptype=hybrid&markers=color:red%7C${lat},${lng}&key=${encodeURIComponent(gKey)}`;
+            const gRes = await fetch(gUrl);
+            if (gRes.ok && /^image\//i.test(gRes.headers.get("content-type") || "")) {
+              const buf = Buffer.from(await gRes.arrayBuffer());
+              res.setHeader("Content-Type", gRes.headers.get("content-type") || "image/png");
+              res.setHeader("Cache-Control", "public, max-age=3600");
+              res.send(buf);
+              return;
+            }
+          } catch {}
         }
-        const buf = Buffer.from(await tileRes.arrayBuffer());
-        res.setHeader("Content-Type", tileRes.headers.get("content-type") || "image/png");
-        res.setHeader("Cache-Control", "public, max-age=86400");
-        res.send(buf);
-        return;
-      } catch {
-        res.status(502).json({ error: "Map tile fetch failed." });
-        return;
       }
+      const { x, y } = latLngToOsmTile(lat, lng, zoom);
+      const tileUrls = wantSat
+        ? [
+            `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${zoom}/${y}/${x}`,
+            `https://tile.openstreetmap.org/${zoom}/${x}/${y}.png`,
+          ]
+        : [`https://tile.openstreetmap.org/${zoom}/${x}/${y}.png`];
+      for (const tUrl of tileUrls) {
+        try {
+          const tileRes = await fetch(tUrl, {
+            headers: { "User-Agent": "EESI-Elevators-Console/1.0 (site-preview)" },
+          });
+          if (!tileRes.ok) continue;
+          const buf = Buffer.from(await tileRes.arrayBuffer());
+          res.setHeader("Content-Type", tileRes.headers.get("content-type") || "image/png");
+          res.setHeader("Cache-Control", "public, max-age=86400");
+          res.send(buf);
+          return;
+        } catch {}
+      }
+      res.status(502).json({ error: "Map tile fetch failed." });
+      return;
     }
 
     const q = String((req.method === "POST" ? body.q : req.query.q) || "").trim();

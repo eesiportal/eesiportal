@@ -150,25 +150,126 @@ export async function restoreLastView(): Promise<void> {
   }
 }
 
-/* ==================== PERSISTENT NOTIFICATION READ STATE ==================== */
+/* ==================== PERSISTENT NOTIFICATION READ & DELETED STATE ==================== */
 function readNoticesKey(): string { return "eesi-read-notices:" + (state.userId || "anon"); }
+function deletedNoticesKey(): string { return "eesi-deleted-notices:" + (state.userId || "anon"); }
 function getReadNoticesMap(): Record<string, number> {
   try { return JSON.parse(localStorage.getItem(readNoticesKey()) || "{}") || {}; } catch { return {}; }
+}
+function getDeletedNoticesMap(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(deletedNoticesKey()) || "{}") || {}; } catch { return {}; }
+}
+function saveReadNoticesMap(map: Record<string, number>): void {
+  const entries = Object.entries(map);
+  if (entries.length > 600) {
+    entries.sort((a, b) => b[1] - a[1]);
+    localStorage.setItem(readNoticesKey(), JSON.stringify(Object.fromEntries(entries.slice(0, 600))));
+  } else {
+    localStorage.setItem(readNoticesKey(), JSON.stringify(map));
+  }
+}
+function saveDeletedNoticesMap(map: Record<string, number>): void {
+  const entries = Object.entries(map);
+  if (entries.length > 600) {
+    entries.sort((a, b) => b[1] - a[1]);
+    localStorage.setItem(deletedNoticesKey(), JSON.stringify(Object.fromEntries(entries.slice(0, 600))));
+  } else {
+    localStorage.setItem(deletedNoticesKey(), JSON.stringify(map));
+  }
 }
 export function isNoticeMarkedRead(key: string): boolean {
   return !!getReadNoticesMap()[String(key)];
 }
+export function isNoticeDeleted(key: string): boolean {
+  return !!getDeletedNoticesMap()[String(key)];
+}
 export function markNoticeRead(key: string): void {
   if (!state.userId || !key) return;
+  const k = String(key);
   const map = getReadNoticesMap();
-  if (map[String(key)]) return;
-  map[String(key)] = Date.now();
-  const entries = Object.entries(map);
-  if (entries.length > 500) {
-    entries.sort((a, b) => b[1] - a[1]);
-    localStorage.setItem(readNoticesKey(), JSON.stringify(Object.fromEntries(entries.slice(0, 500))));
-  } else {
-    localStorage.setItem(readNoticesKey(), JSON.stringify(map));
+  if (!map[k]) {
+    map[k] = Date.now();
+    saveReadNoticesMap(map);
+  }
+  if (!runtime.notificationDismissalsTableMissing && navigator.onLine) {
+    void Promise.resolve(
+      runtime.client
+        .from("notification_dismissals")
+        .upsert(
+          [{ user_id: state.userId, notice_key: k, dismissed: isNoticeDeleted(k), is_read: true }],
+          { onConflict: "user_id,notice_key" }
+        )
+    )
+      .then(({ error }) => {
+        if (error && isMissingTableError(error)) runtime.notificationDismissalsTableMissing = true;
+      })
+      .catch(() => {});
+  }
+  hooks.renderNotices();
+  hooks.renderHome();
+}
+export async function markNoticesReadBulk(keys: string[]): Promise<void> {
+  if (!state.userId) return;
+  const cleanKeys = [...new Set((keys || []).map(k => String(k || "").trim()).filter(Boolean))];
+  if (cleanKeys.length) {
+    const map = getReadNoticesMap();
+    const now = Date.now();
+    cleanKeys.forEach(k => { map[k] = now; });
+    saveReadNoticesMap(map);
+    if (!runtime.notificationDismissalsTableMissing && navigator.onLine) {
+      try {
+        for (let i = 0; i < cleanKeys.length; i += 200) {
+          const rows = cleanKeys.slice(i, i + 200).map(notice_key => ({
+            user_id: state.userId,
+            notice_key,
+            dismissed: isNoticeDeleted(notice_key),
+            is_read: true,
+          }));
+          const { error } = await runtime.client
+            .from("notification_dismissals")
+            .upsert(rows, { onConflict: "user_id,notice_key" });
+          if (error && isMissingTableError(error)) {
+            runtime.notificationDismissalsTableMissing = true;
+            break;
+          }
+        }
+      } catch {}
+    }
+  }
+  hooks.renderNotices();
+  hooks.renderHome();
+}
+export async function markNoticeDeleted(keys: string | string[]): Promise<void> {
+  if (!state.userId) return;
+  const list = [...new Set((Array.isArray(keys) ? keys : [keys]).map(k => String(k || "").trim()).filter(Boolean))];
+  if (!list.length) return;
+  const delMap = getDeletedNoticesMap();
+  const readMap = getReadNoticesMap();
+  const now = Date.now();
+  list.forEach(k => {
+    delMap[k] = now;
+    readMap[k] = now;
+  });
+  saveDeletedNoticesMap(delMap);
+  saveReadNoticesMap(readMap);
+  if (!runtime.notificationDismissalsTableMissing && navigator.onLine) {
+    try {
+      for (let i = 0; i < list.length; i += 200) {
+        const rows = list.slice(i, i + 200).map(notice_key => ({
+          user_id: state.userId,
+          notice_key,
+          dismissed: true,
+          is_read: true,
+        }));
+        const { error } = await runtime.client
+          .from("notification_dismissals")
+          .upsert(rows, { onConflict: "user_id,notice_key" });
+        if (error && isMissingTableError(error)) {
+          runtime.notificationDismissalsTableMissing = true;
+          break;
+        }
+      }
+    } catch {}
   }
   hooks.renderNotices();
   hooks.renderHome();
@@ -179,6 +280,7 @@ let leaveLoaded = false;
 let reportsLoaded = false;
 let appNotificationsLoaded = false;
 let approvalNotificationsLoaded = false;
+let dismissalsLoaded = false;
 let schedulesLoaded = false;
 let announcementsLoaded = false;
 let dtrTimeLogsLoaded = false;
@@ -187,6 +289,7 @@ let storiesLoaded = false;
 export function resetDataLoadFlags(): void {
   appNotificationsLoaded = false;
   approvalNotificationsLoaded = false;
+  dismissalsLoaded = false;
   announcementsLoaded = false;
   reportsLoaded = false;
   schedulesLoaded = false;
@@ -196,11 +299,48 @@ export function resetDataLoadFlags(): void {
   runtime.dtrTimeLogsTableMissing = false;
   runtime.dtrApprovedByColMissing = false;
   runtime.storiesTableMissing = false;
+  runtime.notificationDismissalsTableMissing = false;
   runtime.sitesExtraColsMissing = false;
   runtime.siteDistances = {};
   runtime.siteDistanceOriginKey = "";
   runtime.siteMetaNotices = {};
   runtime.amcbSeedAttempted = false;
+}
+
+export async function loadNotificationDismissals(): Promise<void> {
+  if (!state.userId || runtime.notificationDismissalsTableMissing) return;
+  try {
+    const { data, error } = await runtime.client
+      .from("notification_dismissals")
+      .select("notice_key,dismissed,is_read")
+      .eq("user_id", state.userId);
+    if (error) {
+      if (isMissingTableError(error)) runtime.notificationDismissalsTableMissing = true;
+      return;
+    }
+    dismissalsLoaded = true;
+    const delMap = getDeletedNoticesMap();
+    const readMap = getReadNoticesMap();
+    const now = Date.now();
+    let changedDel = false;
+    let changedRead = false;
+    (data || []).forEach((row: any) => {
+      const k = String(row.notice_key || "");
+      if (!k) return;
+      if (row.dismissed && !delMap[k]) {
+        delMap[k] = now;
+        changedDel = true;
+      }
+      if ((row.is_read || row.dismissed) && !readMap[k]) {
+        readMap[k] = now;
+        changedRead = true;
+      }
+    });
+    if (changedDel) saveDeletedNoticesMap(delMap);
+    if (changedRead) saveReadNoticesMap(readMap);
+    hooks.renderNotices();
+    hooks.renderHome();
+  } catch {}
 }
 
 export async function loadProfiles(): Promise<void> {
@@ -375,6 +515,9 @@ export async function loadPmsRecords(): Promise<void> {
 }
 
 export async function loadAppNotifications(): Promise<void> {
+  if (!dismissalsLoaded && !runtime.notificationDismissalsTableMissing) {
+    await loadNotificationDismissals();
+  }
   const { data, error } = await runtime.client
     .from("app_notifications")
     .select("id,report_id,title,body,created_at,is_read")
@@ -884,6 +1027,7 @@ const RELOADERS: Record<string, () => Promise<any> | any> = {
   pms_checklist_records: () => loadPmsRecords(),
   leave_requests: () => loadLeaveRequests(),
   approval_notifications: () => loadApprovalNotifications(),
+  notification_dismissals: () => loadNotificationDismissals(),
   user_blocks: () => loadBlockedUsers(),
   stories: () => loadStories(),
 };
@@ -2069,7 +2213,7 @@ async function fetchFallbackGeocode(
   return await tryDirectClientGeocode(usable, siteTitle);
 }
 
-async function fetchReverseGeocode(
+export async function fetchReverseGeocode(
   lat: number,
   lng: number
 ): Promise<{ lat: number; lng: number; formattedAddress: string; city: string; regionHint: "Luzon" | "Visayas" | "Mindanao" } | null> {

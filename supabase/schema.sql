@@ -341,6 +341,15 @@ CREATE TABLE IF NOT EXISTS public.approval_notifications (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS public.notification_dismissals (
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  notice_key TEXT NOT NULL,
+  dismissed BOOLEAN NOT NULL DEFAULT TRUE,
+  is_read BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, notice_key)
+);
+
 CREATE TABLE IF NOT EXISTS public.push_subscriptions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -718,6 +727,7 @@ ALTER TABLE public.message_reactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_blocks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.app_notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.approval_notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notification_dismissals ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.push_subscriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.employee_locations ENABLE ROW LEVEL SECURITY;
 
@@ -884,6 +894,11 @@ CREATE POLICY app_notif_manage ON public.app_notifications FOR ALL USING (public
 DROP POLICY IF EXISTS appr_notif_manage ON public.approval_notifications;
 CREATE POLICY appr_notif_manage ON public.approval_notifications FOR ALL USING (public.is_manager() OR auth.uid() = recipient_user_id) WITH CHECK (public.is_approved_user());
 
+DROP POLICY IF EXISTS notif_dismiss_manage ON public.notification_dismissals;
+CREATE POLICY notif_dismiss_manage ON public.notification_dismissals FOR ALL
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
 DROP POLICY IF EXISTS push_sub_manage ON public.push_subscriptions;
 CREATE POLICY push_sub_manage ON public.push_subscriptions FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
@@ -944,6 +959,7 @@ DECLARE
     'message_reactions',
     'app_notifications',
     'approval_notifications',
+    'notification_dismissals',
     'employee_locations',
     'stories'
   ];
@@ -972,6 +988,7 @@ CREATE INDEX IF NOT EXISTS idx_employee_locations_updated ON public.employee_loc
 CREATE INDEX IF NOT EXISTS idx_app_notifications_created ON public.app_notifications (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_reports_date_created ON public.service_delivery_reports (report_date DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pms_date_created ON public.pms_checklist_records (checklist_date DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notif_dismissals_user ON public.notification_dismissals (user_id, created_at DESC);
 
 /* 10. SEED AYALA MALLS CENTRAL BLOC (AMCB) & 34 UNITS */
 DO $$

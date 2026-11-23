@@ -462,13 +462,87 @@ section.page:not(#page-chat)>.ct>.deco-band{margin-top:auto}
 .pin-shake{animation:pinShake .4s}
 @keyframes pinShake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
 
-.timemark-stage{position:relative;width:100%;max-width:560px;background:#000;border-radius:14px;overflow:hidden;border:1px solid var(--border-hot)}
-#timemarkVideo{width:100%;max-height:66vh;display:block;object-fit:cover;background:#000}
-.timemark-hud{position:absolute;left:12px;bottom:12px;right:12px;max-width:340px;background:rgba(6,14,31,.82);border-left:4px solid #f5a623;border-radius:10px;padding:10px 12px;color:#fff;pointer-events:none;backdrop-filter:blur(6px)}
-#timemarkClock{font-size:26px;font-weight:800;line-height:1.1}
-#timemarkModePill{font-size:11px;font-weight:800;margin-top:4px;letter-spacing:.04em}
-#timemarkDate,#timemarkSiteLabel,#timemarkGps{font-size:11px;color:#cfe0ff;margin-top:2px;line-height:1.3}
-.timemark-dist-warn{display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;padding:10px 12px;border-radius:10px;border:1.5px solid #ef4444;background:rgba(239,68,68,.16);color:#fecaca;font-size:13px;font-weight:700;line-height:1.35}
+.timemark-cam-shell{width:min(520px,100%);height:min(96dvh,880px);display:flex;flex-direction:column;background:#0f172a;color:#f8fafc;border-radius:20px;overflow:hidden;box-shadow:0 26px 72px rgba(0,0,0,.78);position:relative;border:1px solid rgba(148,163,184,.22)}
+.timemark-cam-shell,.timemark-cam-shell *{color-scheme:light}
+.timemark-topbar{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:9px 10px;background:#ffffff;border-bottom:1px solid #e2e8f0;z-index:5;flex-wrap:nowrap}
+.tm-icon-btn{background:#f1f5f9!important;color:#0f172a!important;border:1px solid #e2e8f0!important;border-radius:10px!important;min-width:34px!important;min-height:34px!important;padding:5px 8px!important;font-size:14px!important;font-weight:700!important;box-shadow:none!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;gap:4px;cursor:pointer}
+.tm-icon-btn.active{background:#0f172a!important;color:#fff!important;border-color:#0f172a!important}
+.tm-res-seg{display:inline-flex;align-items:center;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:999px;padding:2px;gap:2px}
+.tm-res-btn{background:transparent!important;color:#475569!important;border:0!important;box-shadow:none!important;border-radius:999px!important;padding:4px 8px!important;min-height:26px!important;min-width:0!important;font-size:11px!important;font-weight:800!important;letter-spacing:.02em;cursor:pointer}
+.tm-res-btn.active{background:linear-gradient(135deg,#1e6cf2,#0ea5e9)!important;color:#ffffff!important;box-shadow:0 2px 8px rgba(30,108,242,.35)!important}
+.tm-verify-pill{background:#f8fafc!important;color:#0f172a!important;border:1px solid #cbd5e1!important;border-radius:999px!important;padding:4px 10px!important;min-height:30px!important;font-size:11.5px!important;font-weight:700!important;box-shadow:none!important;display:inline-flex!important;align-items:center!important;gap:4px;white-space:nowrap}
+.timemark-stage{position:relative;flex:1;min-height:280px;width:100%;background:#050811;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.timemark-stage.ratio-3-4 #timemarkVideoWrap{aspect-ratio:3/4;max-height:100%;width:100%}
+.timemark-stage.ratio-1-1 #timemarkVideoWrap{aspect-ratio:1/1;max-height:100%;width:min(100%,480px)}
+.timemark-stage.ratio-full #timemarkVideoWrap{width:100%;height:100%}
+#timemarkVideoWrap{position:relative;width:100%;height:100%;overflow:hidden;background:#000;touch-action:manipulation;cursor:crosshair}
+#timemarkVideo{width:100%;height:100%;display:block;object-fit:cover;background:#000;transform-origin:center center;transition:transform .2s ease}
+#timemarkVideo.is-mirrored{transform:scaleX(-1)}
+.tm-stage-vignette{position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(0,0,0,.18) 0%,rgba(0,0,0,0) 24%,rgba(0,0,0,0) 58%,rgba(0,0,0,.52) 100%);z-index:2}
+.tm-grid-overlay{position:absolute;inset:0;pointer-events:none;z-index:3;opacity:.55}
+.tm-grid-overlay::before,.tm-grid-overlay::after{content:"";position:absolute;inset:0;pointer-events:none}
+.tm-grid-overlay::before{background:linear-gradient(to right,transparent 33.2%,rgba(255,255,255,.35) 33.3%,rgba(255,255,255,.35) 33.6%,transparent 33.7%,transparent 66.5%,rgba(255,255,255,.35) 66.6%,rgba(255,255,255,.35) 66.9%,transparent 67%)}
+.tm-grid-overlay::after{background:linear-gradient(to bottom,transparent 33.2%,rgba(255,255,255,.35) 33.3%,rgba(255,255,255,.35) 33.6%,transparent 33.7%,transparent 66.5%,rgba(255,255,255,.35) 66.6%,rgba(255,255,255,.35) 66.9%,transparent 67%)}
+.tm-res-readout{position:absolute;top:10px;right:10px;z-index:5;background:rgba(9,16,32,.72);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:#f8fafc;border:1px solid rgba(255,255,255,.26);border-radius:999px;padding:4px 10px;font-size:10.5px;font-weight:800;letter-spacing:.04em;display:inline-flex;align-items:center;gap:5px;pointer-events:none;box-shadow:0 3px 10px rgba(0,0,0,.4)}
+.tm-res-readout::before{content:"";width:7px;height:7px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e}
+.tm-focus-ring{position:absolute;width:62px;height:62px;border:2px solid #fbbf24;border-radius:14px;box-shadow:0 0 0 1px rgba(0,0,0,.45),0 0 16px rgba(251,191,36,.45);transform:translate(-50%,-50%) scale(1.25);opacity:0;pointer-events:none;z-index:6;transition:transform .22s ease,opacity .22s ease}
+.tm-focus-ring.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+.tm-shutter-flash{position:absolute;inset:0;background:#ffffff;opacity:0;pointer-events:none;z-index:10;transition:opacity .12s ease}
+.tm-shutter-flash.flash{opacity:.85}
+.tm-minimap-card{position:absolute;top:10px;left:10px;width:96px;height:96px;border-radius:11px;overflow:hidden;border:2px solid rgba(255,255,255,.92);box-shadow:0 6px 18px rgba(0,0,0,.5);background:#1e293b;z-index:4;pointer-events:none}
+.tm-minimap-card img{width:100%;height:100%;object-fit:cover;display:block}
+.tm-minimap-pin{position:absolute;left:50%;top:50%;transform:translate(-50%,-70%);font-size:20px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.7))}
+.tm-minimap-brand{position:absolute;left:5px;bottom:3px;font-size:9px;font-weight:800;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.95);letter-spacing:.02em}
+.tm-right-rail{position:absolute;right:10px;bottom:14px;display:flex;flex-direction:column;gap:8px;align-items:center;z-index:5}
+.tm-rail-btn{width:40px!important;height:40px!important;min-width:40px!important;min-height:40px!important;padding:0!important;border-radius:50%!important;background:rgba(15,23,42,.72)!important;color:#fff!important;border:1px solid rgba(255,255,255,.38)!important;font-size:12px!important;font-weight:800!important;box-shadow:0 3px 10px rgba(0,0,0,.4)!important;display:grid!important;place-items:center!important;backdrop-filter:blur(8px)}
+.tm-stamp{position:absolute;left:10px;bottom:12px;max-width:calc(100% - 68px);z-index:4;color:#fff;text-shadow:0 1px 5px rgba(0,0,0,.95);pointer-events:auto}
+.tm-stamp-bar{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.95);color:#0f172a;border-radius:9px;padding:3px 8px 3px 4px;box-shadow:0 5px 16px rgba(0,0,0,.42);text-shadow:none;max-width:100%}
+.tm-stamp-badge{background:#fbbf24;color:#111827;font-weight:900;font-size:11px;padding:4px 8px;border-radius:6px;letter-spacing:.03em;white-space:nowrap;cursor:pointer}
+.tm-stamp-badge.is-out{background:#f59e0b;color:#111827}
+.tm-stamp-clock{font-size:21px;font-weight:900;color:#0f172a;letter-spacing:-.02em;line-height:1;white-space:nowrap}
+.tm-stamp-logo{width:46px;height:25px;flex:none;display:inline-flex;align-items:center}
+.tm-stamp-logo svg{width:100%;height:100%;display:block}
+.tm-stamp-lines{margin-top:6px;font-size:12px;line-height:1.35;font-weight:600;color:#fff}
+.tm-stamp-code{display:inline-flex;align-items:center;gap:4px;margin-top:4px;font-size:11px;font-weight:700;color:#e0f2fe}
+.tm-stamp-styled-note{display:inline-block;margin-bottom:5px;padding:3px 9px;border-radius:6px;font-size:12px;font-weight:800;text-shadow:none}
+.tm-stamp-card-dark{background:rgba(9,16,32,.86);border-left:4px solid #3b82f6;border-radius:10px;padding:9px 11px;backdrop-filter:blur(6px)}
+.tm-stamp-card-report{background:rgba(255,255,255,.95);color:#0f172a;border-radius:9px;overflow:hidden;box-shadow:0 5px 18px rgba(0,0,0,.42);text-shadow:none;min-width:225px}
+.tm-stamp-card-report .tm-rep-head{background:#f59e0b;color:#111827;font-weight:800;font-size:12px;padding:4px 10px;display:flex;justify-content:space-between;align-items:center}
+.tm-stamp-card-report .tm-rep-body{padding:7px 10px;font-size:11.5px;color:#1e293b;line-height:1.35}
+.tm-countdown{position:absolute;inset:0;display:grid;place-items:center;font-size:76px;font-weight:900;color:#fff;text-shadow:0 4px 24px rgba(0,0,0,.9);z-index:9;pointer-events:none;background:rgba(0,0,0,.22)}
+.tm-quick-sitebar{display:flex;align-items:center;gap:6px;padding:7px 12px;background:#eff6ff;border-top:1px solid #dbeafe;color:#1e3a8a;font-size:12px;font-weight:700}
+.tm-quick-sitebar select{flex:1;min-width:0;padding:6px 8px!important;font-size:12.5px!important;border-radius:8px!important;border:1px solid #bfdbfe!important;background:#fff!important;color:#0f172a!important}
+.tm-bottom-bar{background:#ffffff;padding:10px 18px 14px;border-top:1px solid #e2e8f0}
+.tm-shutter-row{display:flex;align-items:center;justify-content:space-around;gap:14px}
+.tm-side-ctrl{display:flex;flex-direction:column;align-items:center;gap:4px;background:none!important;border:0!important;box-shadow:none!important;color:#0f172a!important;padding:4px 8px!important;font-size:11.5px!important;font-weight:700!important;min-width:64px}
+.tm-preview-box{width:40px;height:40px;border-radius:9px;border:1.5px solid #cbd5e1;background:#f1f5f9;overflow:hidden;display:grid;place-items:center;font-size:18px}
+.tm-preview-box img{width:100%;height:100%;object-fit:cover}
+.tm-shutter-btn{width:68px!important;height:68px!important;min-width:68px!important;min-height:68px!important;padding:0!important;border-radius:50%!important;border:4px solid #0f172a!important;background:#ffffff!important;box-shadow:0 4px 16px rgba(15,23,42,.26)!important;position:relative;display:grid!important;place-items:center!important}
+.tm-shutter-btn::after{content:"";width:54px;height:54px;border-radius:50%;background:#ffffff;border:2px solid #cbd5e1;transition:transform .12s ease}
+.tm-shutter-btn:active::after{transform:scale(.9);background:#e2e8f0}
+.tm-shutter-btn:disabled{opacity:.65;cursor:wait}
+.tm-drawer{position:absolute;inset:0;background:rgba(15,23,42,.52);z-index:12;display:flex;flex-direction:column;justify-content:flex-end}
+.tm-drawer-sheet{background:#ffffff;color:#0f172a;border-radius:18px 18px 0 0;max-height:78%;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 -10px 32px rgba(0,0,0,.35)}
+.tm-drawer-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #e2e8f0;font-weight:800;font-size:15px}
+.tm-drawer-body{overflow-y:auto;padding:12px 14px 16px;flex:1}
+.tm-tpl-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.tm-tpl-card{border:2px solid #e2e8f0;border-radius:12px;padding:10px;background:#f8fafc;color:#0f172a;cursor:pointer;display:flex;flex-direction:column;gap:6px;text-align:left}
+.tm-tpl-card.active{border-color:#2563eb;background:#eff6ff;box-shadow:0 0 0 2px rgba(37,99,235,.15)}
+.tm-tpl-mini{border-radius:8px;padding:8px;background:linear-gradient(135deg,#475569,#1e293b);color:#fff;font-size:11px;min-height:66px;display:flex;flex-direction:column;justify-content:space-between}
+.tm-tpl-actions{display:flex;gap:6px;margin-top:4px}
+.tm-tpl-actions button{flex:1;min-height:28px!important;padding:4px 8px!important;font-size:11.5px!important;border-radius:7px!important}
+.tm-edit-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 4px;border-bottom:1px solid #f1f5f9;font-size:13.5px;font-weight:600;color:#0f172a}
+.tm-edit-row-left{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+.tm-switch{position:relative;width:44px;height:25px;flex:none;appearance:none;-webkit-appearance:none;background:#cbd5e1;border-radius:999px;cursor:pointer;border:0;outline:0;transition:background .15s}
+.tm-switch::after{content:"";position:absolute;top:3px;left:3px;width:19px;height:19px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform .15s}
+.tm-switch:checked{background:#22c55e}
+.tm-switch:checked::after{transform:translateX(19px)}
+.tm-menu-drawer{position:absolute;inset:0;background:rgba(15,23,42,.45);z-index:13;display:flex;justify-content:flex-start}
+.tm-menu-panel{width:min(295px,85%);height:100%;background:#ffffff;color:#0f172a;padding:14px;overflow-y:auto;box-shadow:8px 0 30px rgba(0,0,0,.28)}
+.tm-swatch-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.tm-swatch{width:26px!important;height:26px!important;min-width:26px!important;min-height:26px!important;border-radius:50%!important;padding:0!important;border:2px solid #fff!important;box-shadow:0 0 0 1px #94a3b8!important}
+.tm-swatch.active{box-shadow:0 0 0 2.5px #2563eb!important;transform:scale(1.08)}
+.timemark-dist-warn{display:flex;align-items:flex-start;gap:8px;margin:0;padding:9px 12px;border-bottom:1.5px solid #ef4444;background:#fef2f2;color:#991b1b;font-size:12.5px;font-weight:700;line-height:1.35}
 .timemark-dist-warn.hidden{display:none!important}
 .timemark-gps-far{color:#fca5a5!important;font-weight:800}
 
@@ -1378,7 +1452,13 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
     </section>
 
     <section class="page hidden" id="page-notices"><div class="ct">
-      <h1 class="title">🔔 Notifications</h1>
+      <div class="site-header" style="flex-wrap:wrap;gap:8px;">
+        <h1 class="title">🔔 Notifications</h1>
+        <div class="inline-actions" style="margin-top:0;">
+          <button id="markAllNoticesReadBtn" class="btn small-btn" type="button" onclick="markAllNoticesRead()">✓ Mark all read</button>
+          <button id="deleteAllNoticesBtn" class="red small-btn" type="button" onclick="deleteAllNotices()">🗑 Delete all</button>
+        </div>
+      </div>
       <div id="noticeList"></div>
     </div></section>
 
@@ -1626,7 +1706,7 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
     </div>
     <div id="addSitePinMap" class="add-site-pin-map"></div>
     <p id="addSitePinStatus" class="muted" style="margin:0 0 10px;font-size:12px;">Type a site name or address to auto-fill address &amp; drop pin (tap or drag pin on map to adjust).</p>
-    <div class="field"><label for="siteRegion">Area</label><select id="siteRegion"><option>Visayas</option><option>Luzon</option><option>Mindanao</option></select></div>
+    <div class="field"><label for="siteRegion">Region / Area</label><select id="siteRegion"><option>Visayas</option><option>Luzon</option><option>Mindanao</option><option>NCR</option></select></div>
     <div class="field"><label for="siteCity">City / Province</label><input id="siteCity" placeholder="Auto-filled from map pin"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
       <div class="field"><label for="siteLat">Latitude (auto-filled)</label><input id="siteLat" type="number" step="any" placeholder="e.g. 10.3292"></div>
@@ -1763,29 +1843,178 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
   </div>
 </div>
 
-<div id="timemarkCamOverlay" class="dialog hidden" style="z-index:348;padding:12px;" role="dialog" aria-modal="true" aria-label="Timemark Camera">
-  <div class="card" style="width:min(580px,100%);padding:12px;">
-    <div class="site-header" style="margin-bottom:8px;">
-      <h2 style="margin:0;font-size:16px;">📷 Timemark Time Log Camera</h2>
-      <button class="gray small-btn" type="button" onclick="closeTimemarkCamera()">✕ Close</button>
-    </div>
-    <div id="timemarkDistanceWarning" class="timemark-dist-warn hidden" role="alert">
-      <span style="font-size:18px;line-height:1;">⚠️</span>
-      <div id="timemarkDistanceWarningText" style="flex:1;"></div>
-    </div>
-    <div class="timemark-stage">
-      <video id="timemarkVideo" autoplay playsinline muted></video>
-      <div class="timemark-hud">
-        <div id="timemarkClock">--:--:--</div>
-        <div id="timemarkModePill">🟢 TIME IN</div>
-        <div id="timemarkDate"></div>
-        <div id="timemarkSiteLabel"></div>
-        <div id="timemarkGps"></div>
+<div id="timemarkCamOverlay" class="dialog hidden" style="z-index:348;padding:8px;" role="dialog" aria-modal="true" aria-label="Timemark Camera">
+  <div class="timemark-cam-shell">
+    <div class="timemark-topbar">
+      <div style="display:flex;align-items:center;gap:5px;">
+        <button id="timemarkMenuBtn" class="tm-icon-btn" type="button" onclick="toggleTimemarkSideMenu()" aria-label="Camera settings">☰</button>
+        <button id="timemarkFlashBtn" class="tm-icon-btn" type="button" onclick="toggleTimemarkFlash()" aria-label="Toggle flash">⚡</button>
+      </div>
+      <div class="tm-res-seg" role="group" aria-label="Camera resolution">
+        <button type="button" class="tm-res-btn" data-tm-res="720p" onclick="setTimemarkResolution('720p')">720P</button>
+        <button type="button" class="tm-res-btn" data-tm-res="1080p" onclick="setTimemarkResolution('1080p')">1080P</button>
+        <button type="button" class="tm-res-btn active" data-tm-res="4k" onclick="setTimemarkResolution('4k')">4K</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:5px;">
+        <button id="timemarkVerifyPill" class="tm-icon-btn" type="button" onclick="showTimemarkVerifyInfo()" aria-label="Verify photo code">🛡️</button>
+        <button id="timemarkFlipBtn" class="tm-icon-btn" type="button" onclick="flipTimemarkCamera()" aria-label="Flip camera">🔄</button>
+        <button class="tm-icon-btn" type="button" onclick="closeTimemarkCamera()" aria-label="Close camera">✕</button>
       </div>
     </div>
-    <div class="inline-actions" style="margin-top:12px;">
-      <button class="btn" type="button" style="flex:2;" onclick="captureTimemarkPhoto()">📸 Capture &amp; Submit</button>
-      <button class="gray" type="button" style="flex:1;" onclick="flipTimemarkCamera()">🔄 Flip</button>
+
+    <div id="timemarkDistanceWarning" class="timemark-dist-warn hidden" role="alert">
+      <span style="font-size:17px;line-height:1;">⚠️</span>
+      <div id="timemarkDistanceWarningText" style="flex:1;"></div>
+    </div>
+
+    <div id="timemarkStage" class="timemark-stage ratio-3-4">
+      <div id="timemarkVideoWrap" onclick="focusTimemarkAt(event)">
+        <video id="timemarkVideo" autoplay playsinline muted></video>
+        <div class="tm-stage-vignette"></div>
+        <div id="timemarkGridOverlay" class="tm-grid-overlay"></div>
+        <div id="timemarkFocusRing" class="tm-focus-ring"></div>
+        <div id="timemarkShutterFlash" class="tm-shutter-flash"></div>
+        <div id="timemarkResReadout" class="tm-res-readout">4K UHD</div>
+        <div id="timemarkMiniMapCard" class="tm-minimap-card hidden">
+          <img id="timemarkMiniMapImg" alt="Live GPS location map">
+          <div class="tm-minimap-pin">📍</div>
+          <div class="tm-minimap-brand">Google</div>
+        </div>
+        <div id="timemarkStamp" class="tm-stamp" onclick="event.stopPropagation()"></div>
+        <div class="tm-right-rail" onclick="event.stopPropagation()">
+          <button id="timemarkZoomBtn" class="tm-rail-btn" type="button" onclick="cycleTimemarkZoom()">1.0x</button>
+          <button id="timemarkGridBtn" class="tm-rail-btn" type="button" onclick="toggleTimemarkGrid()" aria-label="Toggle grid">⊞</button>
+          <button class="tm-rail-btn" type="button" onclick="openTimemarkEditDrawer()" aria-label="Edit template">📝</button>
+          <button class="tm-rail-btn" type="button" onclick="toggleTimemarkSitePicker()" aria-label="Select work site">📍</button>
+        </div>
+        <div id="timemarkCountdown" class="tm-countdown hidden"></div>
+      </div>
+    </div>
+
+    <div id="timemarkSiteBar" class="tm-quick-sitebar">
+      <span>📍 Site:</span>
+      <select id="timemarkSiteSelect"></select>
+      <button id="timemarkModeQuickBtn" class="tm-icon-btn" type="button" style="min-height:30px!important;font-size:11px!important;padding:4px 8px!important;" onclick="toggleTimemarkModeInsideCam()">🟢 TIME IN</button>
+    </div>
+
+    <div class="tm-bottom-bar">
+      <div class="tm-shutter-row">
+        <button class="tm-side-ctrl" type="button" onclick="openLastTimemarkPreview()">
+          <div id="timemarkPreviewThumb" class="tm-preview-box">🖼️</div>
+          <span>Preview</span>
+        </button>
+        <button id="timemarkCaptureBtn" class="tm-shutter-btn" type="button" onclick="triggerTimemarkCapture()" aria-label="Capture &amp; Submit Photo"></button>
+        <button class="tm-side-ctrl" type="button" onclick="openTimemarkTemplatesDrawer()">
+          <div class="tm-preview-box" style="background:#eff6ff;border-color:#93c5fd;color:#1d4ed8;">🧩</div>
+          <span>Templates</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Side Camera Settings Menu -->
+    <div id="timemarkSideMenu" class="tm-menu-drawer hidden" onclick="if(event.target===this)toggleTimemarkSideMenu(false)">
+      <div class="tm-menu-panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <b style="font-size:16px;">Camera Settings</b>
+          <button class="tm-icon-btn" type="button" onclick="toggleTimemarkSideMenu(false)">✕</button>
+        </div>
+        <div style="margin-bottom:12px;">
+          <div style="font-size:12px;font-weight:700;color:#64748b;margin-bottom:6px;">Picture Resolution (720P / 1080P / 4K)</div>
+          <div style="display:flex;gap:6px;">
+            <button type="button" class="tm-icon-btn" data-tm-res="720p" onclick="setTimemarkResolution('720p')" style="flex:1;font-size:12px!important;">720p HD</button>
+            <button type="button" class="tm-icon-btn" data-tm-res="1080p" onclick="setTimemarkResolution('1080p')" style="flex:1;font-size:12px!important;">1080p FHD</button>
+            <button type="button" class="tm-icon-btn" data-tm-res="4k" onclick="setTimemarkResolution('4k')" style="flex:1;font-size:12px!important;">4K UHD</button>
+          </div>
+        </div>
+        <div style="margin-bottom:12px;">
+          <div style="font-size:12px;font-weight:700;color:#64748b;margin-bottom:6px;">Ratio</div>
+          <div style="display:flex;gap:6px;">
+            <button type="button" class="tm-icon-btn" data-tm-ratio="3:4" onclick="setTimemarkRatio('3:4')" style="flex:1;">3:4</button>
+            <button type="button" class="tm-icon-btn" data-tm-ratio="1:1" onclick="setTimemarkRatio('1:1')" style="flex:1;">1:1</button>
+            <button type="button" class="tm-icon-btn" data-tm-ratio="full" onclick="setTimemarkRatio('full')" style="flex:1;">Full</button>
+          </div>
+        </div>
+        <div style="margin-bottom:12px;">
+          <div style="font-size:12px;font-weight:700;color:#64748b;margin-bottom:6px;">Timer</div>
+          <div style="display:flex;gap:6px;">
+            <button type="button" class="tm-icon-btn" data-tm-timer="0" onclick="setTimemarkTimer(0)" style="flex:1;">Off</button>
+            <button type="button" class="tm-icon-btn" data-tm-timer="3" onclick="setTimemarkTimer(3)" style="flex:1;">3s</button>
+            <button type="button" class="tm-icon-btn" data-tm-timer="5" onclick="setTimemarkTimer(5)" style="flex:1;">5s</button>
+          </div>
+        </div>
+        <div class="tm-edit-row">
+          <span>Pro Gridlines</span>
+          <input id="tmMenuGridToggle" type="checkbox" class="tm-switch" checked onchange="setTimemarkGridEnabled(this.checked)">
+        </div>
+        <div class="tm-edit-row">
+          <span>EESI Timemark Logo</span>
+          <input id="tmMenuLogoToggle" type="checkbox" class="tm-switch" checked onchange="setTimemarkLogoEnabled(this.checked)">
+        </div>
+        <div class="tm-edit-row">
+          <span>Auto save original</span>
+          <input id="tmMenuSaveOrigToggle" type="checkbox" class="tm-switch" onchange="setTimemarkAutoSaveOriginal(this.checked)">
+        </div>
+        <div class="tm-edit-row">
+          <span>Auto-switch Time In / Out</span>
+          <input id="tmMenuAutoFlipToggle" type="checkbox" class="tm-switch" checked onchange="setTimemarkAutoFlip(this.checked)">
+        </div>
+      </div>
+    </div>
+
+    <!-- Templates Drawer -->
+    <div id="timemarkTemplatesDrawer" class="tm-drawer hidden" onclick="if(event.target===this)closeTimemarkTemplatesDrawer()">
+      <div class="tm-drawer-sheet">
+        <div class="tm-drawer-head">
+          <span>Templates</span>
+          <button class="tm-icon-btn" type="button" onclick="closeTimemarkTemplatesDrawer()">✕</button>
+        </div>
+        <div class="tm-drawer-body">
+          <input id="tmTemplateSearch" type="search" placeholder="Search templates (Clock in, Work Report, Inspection…)" oninput="renderTimemarkTemplatesGrid()" style="width:100%;padding:9px 12px;border-radius:10px;border:1px solid #cbd5e1;background:#f8fafc;color:#0f172a;font-size:13px;">
+          <div id="timemarkTemplatesGrid" class="tm-tpl-grid"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Edit Template Drawer -->
+    <div id="timemarkEditDrawer" class="tm-drawer hidden" onclick="if(event.target===this)closeTimemarkEditDrawer()">
+      <div class="tm-drawer-sheet" style="max-height:88%;">
+        <div class="tm-drawer-head">
+          <span>Edit template</span>
+          <button class="tm-icon-btn" type="button" onclick="closeTimemarkEditDrawer()">✕</button>
+        </div>
+        <div id="timemarkEditPreviewWrap" style="padding:10px 14px;background:#1e293b;color:#fff;"></div>
+        <div id="timemarkEditFields" class="tm-drawer-body" style="padding-top:4px;"></div>
+        <div style="padding:10px 14px;border-top:1px solid #e2e8f0;background:#fff;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+          <div class="tm-swatch-row" id="timemarkAccentSwatches"></div>
+          <button type="button" onclick="closeTimemarkEditDrawer()" style="background:#2563eb;color:#fff;border:0;border-radius:10px;padding:10px 24px;font-weight:800;font-size:14px;">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Styled Note Editor Modal -->
+    <div id="timemarkStyledNoteModal" class="tm-drawer hidden" onclick="if(event.target===this)closeTimemarkStyledNoteModal()">
+      <div class="tm-drawer-sheet" style="max-height:70%;">
+        <div class="tm-drawer-head">
+          <span>Styled Note</span>
+          <button class="tm-icon-btn" type="button" onclick="closeTimemarkStyledNoteModal()">✕</button>
+        </div>
+        <div class="tm-drawer-body" style="display:flex;flex-direction:column;gap:12px;">
+          <div id="tmStyledNoteLiveBox" style="padding:18px;border-radius:12px;background:#334155;text-align:center;">
+            <span id="tmStyledNoteLivePreview" class="tm-stamp-styled-note" style="background:#ffffff;color:#0f172a;">On Duty</span>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <div style="display:flex;gap:6px;">
+              <button type="button" class="tm-icon-btn" onclick="setTimemarkStyledNoteBoxed(true)">Aa Box</button>
+              <button type="button" class="tm-icon-btn" onclick="setTimemarkStyledNoteBoxed(false)">Aa Text</button>
+            </div>
+            <div class="tm-swatch-row" id="tmStyledNoteSwatches"></div>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <input id="tmStyledNoteInput" type="text" placeholder="Enter styled note (e.g. PMS Central Bloc, Duty)…" style="flex:1;padding:10px 12px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;color:#0f172a;font-size:14px;" oninput="updateStyledNotePreviewText()">
+            <button type="button" onclick="saveTimemarkStyledNote()" style="background:#2563eb;color:#fff;border:0;border-radius:10px;padding:10px 18px;font-weight:800;">Done</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>

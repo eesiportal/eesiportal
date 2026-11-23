@@ -70,10 +70,12 @@ import {
 } from "./eesiTypes";
 import {
   createSiteAutoSnapshotFile,
+  fetchReverseGeocode,
   getCachedUserGpsCoords,
   haversineMeters,
   initAddSitePinPicker,
   initSitesMapOverview,
+  isNoticeDeleted,
   isNoticeMarkedRead,
   loadAnnouncements,
   loadAppNotifications,
@@ -93,7 +95,9 @@ import {
   loadSites,
   loadTimeLogs,
   loadUnits,
+  markNoticeDeleted,
   markNoticeRead,
+  markNoticesReadBulk,
   onlineIds,
   openSiteGoogleMap,
   refreshVisibleSiteDistances,
@@ -477,7 +481,7 @@ export function getNoticeItems(): any[] {
   });
   state.approvalNotifications.forEach(n => items.push({
     key: "appr:" + n.id, date: n.created_at, icon: "🔔", title: n.title, body: n.body,
-    label: "Notification", approvalId: n.id, isRead: !!n.is_read,
+    label: "Notification", approvalId: n.id, isRead: !!n.is_read || isNoticeMarkedRead("appr:" + n.id),
   }));
   state.appNotifications.forEach(n => {
     if (isHiddenSystemNotice(n)) return;
@@ -493,7 +497,7 @@ export function getNoticeItems(): any[] {
       appId: n.id,
       reportId: n.report_id,
       isDtrNotice,
-      isRead: !!n.is_read,
+      isRead: !!n.is_read || isNoticeMarkedRead("app:" + n.id),
     });
   });
   const appReportIds = new Set(state.appNotifications.map(n => String(n.report_id)));
@@ -509,7 +513,7 @@ export function getNoticeItems(): any[] {
       icon: r.report_type === "delivery" ? "📦" : "📄",
       title: typeLbl + ": " + (r.title || ""),
       body: [profileName(r.created_by), site ? site.name : "", parsedUnit.unitName, bodyText.slice(0, 120)].filter(Boolean).join(" · "),
-      label: typeLbl, reportNoticeId: r.id,
+      label: typeLbl, reportNoticeId: r.id, reportId: r.id,
       isRead: String(r.created_by) === String(state.userId) || isNoticeMarkedRead(key),
     });
   });
@@ -521,8 +525,13 @@ export function getNoticeItems(): any[] {
       isRead: isNoticeMarkedRead("pend:" + p.id),
     }));
   }
-  items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  return items;
+  const activeItems = items.filter(it => {
+    if (isNoticeDeleted(it.key)) return false;
+    if (it.reportId && isNoticeDeleted("rep:" + it.reportId)) return false;
+    return true;
+  });
+  activeItems.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  return activeItems;
 }
 
 let tickerAnimListenerAttached = false;
@@ -711,10 +720,108 @@ export function renderHome(): void {
   if (box.innerHTML !== nextHtml) box.innerHTML = nextHtml;
 }
 
+export async function deleteSingleNotice(opts: {
+  key: string;
+  appId?: string;
+  approvalId?: string;
+  reportId?: string;
+}): Promise<void> {
+  if (!state.userId || !opts.key) return;
+  const keysToDismiss = [opts.key];
+  if (opts.reportId) keysToDismiss.push("rep:" + opts.reportId);
+
+  if (opts.appId) {
+    state.appNotifications = (state.appNotifications || []).filter(n => String(n.id) !== String(opts.appId));
+    if (navigator.onLine) {
+      const { error } = await runtime.client.from("app_notifications").delete().eq("id", opts.appId);
+      if (error) console.warn("Could not delete app_notification:", error.message);
+    }
+  }
+  if (opts.approvalId) {
+    state.approvalNotifications = (state.approvalNotifications || []).filter(n => String(n.id) !== String(opts.approvalId));
+    if (navigator.onLine) {
+      const { error } = await runtime.client.from("approval_notifications").delete().eq("id", opts.approvalId);
+      if (error) console.warn("Could not delete approval_notification:", error.message);
+    }
+  }
+  await markNoticeDeleted(keysToDismiss);
+  renderNotices();
+  renderHome();
+  toast("Notification deleted");
+}
+
+export async function markAllNoticesRead(): Promise<void> {
+  const items = getNoticeItems();
+  const unread = items.filter(i => !i.isRead);
+  if (!unread.length) {
+    toast("All notifications are already read");
+    return;
+  }
+  const appIds = unread.map(i => i.appId).filter(Boolean).map(String);
+  const apprIds = unread.map(i => i.approvalId).filter(Boolean).map(String);
+
+  state.appNotifications = (state.appNotifications || []).map(n =>
+    appIds.includes(String(n.id)) ? { ...n, is_read: true } : n
+  );
+  state.approvalNotifications = (state.approvalNotifications || []).map(n =>
+    apprIds.includes(String(n.id)) ? { ...n, is_read: true } : n
+  );
+
+  if (navigator.onLine) {
+    if (appIds.length) {
+      await runtime.client.from("app_notifications").update({ is_read: true }).in("id", appIds);
+    }
+    if (apprIds.length) {
+      await runtime.client.from("approval_notifications").update({ is_read: true }).in("id", apprIds);
+    }
+  }
+  await markNoticesReadBulk(items.map(i => String(i.key)));
+  renderNotices();
+  renderHome();
+  toast("All notifications marked as read");
+}
+
+export async function deleteAllNotices(): Promise<void> {
+  const items = getNoticeItems();
+  if (!items.length) {
+    toast("No notifications to delete");
+    return;
+  }
+  if (!(await confirmDialog(`Delete all ${items.length} notification(s)? This removes them from your notifications list.`, "Delete All Notifications"))) {
+    return;
+  }
+  const appIds = items.map(i => i.appId).filter(Boolean).map(String);
+  const apprIds = items.map(i => i.approvalId).filter(Boolean).map(String);
+  const keysToDismiss = items.flatMap(i => (i.reportId ? [String(i.key), "rep:" + String(i.reportId)] : [String(i.key)]));
+
+  if (appIds.length) {
+    state.appNotifications = (state.appNotifications || []).filter(n => !appIds.includes(String(n.id)));
+    if (navigator.onLine) {
+      await runtime.client.from("app_notifications").delete().in("id", appIds);
+    }
+  }
+  if (apprIds.length) {
+    state.approvalNotifications = (state.approvalNotifications || []).filter(n => !apprIds.includes(String(n.id)));
+    if (navigator.onLine) {
+      await runtime.client.from("approval_notifications").delete().in("id", apprIds);
+    }
+  }
+  await markNoticeDeleted(keysToDismiss);
+  renderNotices();
+  renderHome();
+  toast("All notifications deleted");
+}
+
 export function renderNotices(): void {
   const box = $("noticeList");
   if (!box) return;
   const items = getNoticeItems();
+  const unreadCount = items.filter(i => !i.isRead).length;
+  const markAllBtn = $("markAllNoticesReadBtn") as HTMLButtonElement | null;
+  const delAllBtn = $("deleteAllNoticesBtn") as HTMLButtonElement | null;
+  if (markAllBtn) markAllBtn.disabled = unreadCount === 0;
+  if (delAllBtn) delAllBtn.disabled = items.length === 0;
+
   box.innerHTML = items.map(item => {
     let attr = ' data-act="noop"';
     if (item.approvalId) attr = ' data-approval-notice="' + esc(item.approvalId) + '"';
@@ -724,15 +831,15 @@ export function renderNotices(): void {
     else if (item.act) attr = ' data-act="' + esc(item.act) + '"';
     const unreadClass = !item.isRead ? " unread-notice" : "";
     const statusBadge = !item.isRead
-      ? '<button class="btn small-btn" type="button" data-mark-notice-read="' + esc(item.key) + '" data-db-app="' + esc(item.appId || "") + '" data-db-appr="' + esc(item.approvalId || "") + '">✓ Done / Mark read</button>'
+      ? '<button class="btn small-btn" type="button" data-mark-notice-read="' + esc(item.key) + '" data-db-app="' + esc(item.appId || "") + '" data-db-appr="' + esc(item.approvalId || "") + '">✓ Read</button>'
       : '<span class="badge">✓ Read</span>';
+    const delBtn = '<button class="red small-btn" type="button" data-del-notice="' + esc(item.key) + '" data-db-app="' + esc(item.appId || "") + '" data-db-appr="' + esc(item.approvalId || "") + '" data-report-id="' + esc(item.reportId || "") + '" aria-label="Delete notification">🗑</button>';
     return '<div class="item clickable' + unreadClass + '"' + attr + ' data-notice-key="' + esc(item.key) + '">' +
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;"><div><b>' + item.icon + " " + esc(item.title) +
-      '</b><div class="muted">' + esc(item.label) + " · " + esc(fmtDate(item.date)) + "</div></div><div>" + statusBadge + '</div></div><div style="margin-top:4px">' + esc(item.body) + "</div></div>";
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;"><div style="flex:1;min-width:0;"><b>' + item.icon + " " + esc(item.title) +
+      '</b><div class="muted">' + esc(item.label) + " · " + esc(fmtDate(item.date)) + '</div></div><div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">' + statusBadge + delBtn + '</div></div><div style="margin-top:4px">' + esc(item.body) + "</div></div>";
   }).join("") || '<p class="muted">No notifications yet.</p>';
   const bell = $("bell");
   if (bell) {
-    const unreadCount = items.filter(i => !i.isRead).length;
     bell.textContent = unreadCount ? String(unreadCount) : "";
   }
 }
@@ -1652,10 +1759,100 @@ function formatSiteDistanceBadge(siteId: string): string {
   return '<span class="site-dist-badge muted-dist">⚠️ ' + esc(d.message || "Distance unavailable") + "</span>";
 }
 
+export function openAddSiteModal(): void {
+  runtime.editingSiteId = null;
+  const ttl = $("addSiteTitle");
+  const btn = $("submitAddSiteBtn") as HTMLButtonElement | null;
+  if (ttl) ttl.textContent = "Add work site";
+  if (btn) btn.textContent = "Add site";
+  setVal("siteName", "");
+  setVal("siteAddress", "");
+  setVal("siteRegion", "Visayas");
+  setVal("siteCity", "");
+  setVal("siteLat", "");
+  setVal("siteLng", "");
+  setVal("siteStatus", "Operational");
+  setVal("siteAutoThumbUrl", "");
+  const thumbInput = $("siteAddThumb") as HTMLInputElement | null;
+  if (thumbInput) thumbInput.value = "";
+  const preview = $("addSiteThumbPreview") as HTMLImageElement | null;
+  if (preview) { preview.src = ""; preview.classList.add("hidden"); }
+  const noteEl = $("addSiteThumbNote");
+  if (noteEl) noteEl.textContent = "A picture is automatically added from Places / landmark photo or map pin when you enter a site name.";
+  $("addSiteOverlay")?.classList.remove("hidden");
+  resetAddSitePinPicker();
+  initAddSitePinPicker();
+}
+
+export function openEditSiteOverlay(siteId: string): void {
+  if (!isManager()) { toast("Managers only"); return; }
+  const s = state.sites.find(x => String(x.id) === String(siteId));
+  if (!s) return;
+  runtime.editingSiteId = String(s.id);
+  const ttl = $("addSiteTitle");
+  const btn = $("submitAddSiteBtn") as HTMLButtonElement | null;
+  if (ttl) ttl.textContent = "Edit work site";
+  if (btn) btn.textContent = "Save changes";
+
+  setVal("siteName", s.name || "");
+  setVal("siteAddress", s.address || "");
+  const regSel = $("siteRegion") as HTMLSelectElement | null;
+  const siteReg = String(s.region || "Visayas").trim() || "Visayas";
+  if (regSel && ![...regSel.options].some(o => o.value.toLowerCase() === siteReg.toLowerCase())) {
+    const opt = document.createElement("option");
+    opt.value = siteReg;
+    opt.textContent = siteReg;
+    regSel.appendChild(opt);
+  }
+  if (regSel) {
+    const matchedOpt = [...regSel.options].find(o => o.value.toLowerCase() === siteReg.toLowerCase());
+    regSel.value = matchedOpt ? matchedOpt.value : siteReg;
+  }
+  setVal("siteCity", s.city || "");
+  setVal("siteLat", s.latitude !== null && s.latitude !== undefined && Number.isFinite(Number(s.latitude)) ? String(s.latitude) : "");
+  setVal("siteLng", s.longitude !== null && s.longitude !== undefined && Number.isFinite(Number(s.longitude)) ? String(s.longitude) : "");
+  setVal("siteStatus", getSiteEffectiveStatus(s, state.units) || "Operational");
+  const existingThumb = getSiteThumbnailUrl(s) || "";
+  setVal("siteAutoThumbUrl", existingThumb);
+  const thumbInput = $("siteAddThumb") as HTMLInputElement | null;
+  if (thumbInput) thumbInput.value = "";
+  const preview = $("addSiteThumbPreview") as HTMLImageElement | null;
+  if (preview) {
+    if (existingThumb) {
+      preview.src = existingThumb;
+      preview.classList.remove("hidden");
+    } else {
+      preview.src = "";
+      preview.classList.add("hidden");
+    }
+  }
+  const noteEl = $("addSiteThumbNote");
+  if (noteEl) noteEl.textContent = "Edit details, drag the map pin, or upload a new site photo.";
+
+  $("addSiteOverlay")?.classList.remove("hidden");
+  resetAddSitePinPicker();
+  initAddSitePinPicker();
+  const pinEl = $("addSitePinStatus");
+  if (pinEl && s.latitude !== null && s.latitude !== undefined && s.longitude !== null && s.longitude !== undefined) {
+    pinEl.textContent = `📍 Current pin: ${Number(s.latitude).toFixed(5)}, ${Number(s.longitude).toFixed(5)} (drag pin or Auto-Fill to update)`;
+  }
+}
+
 export function renderSites(): void {
-  document.querySelectorAll<HTMLElement>("[data-sites-region]").forEach(btn => {
-    btn.classList.toggle("active", (btn.dataset.sitesRegion || "ALL") === runtime.sitesRegionFilter);
-  });
+  const regionRow = $("sitesRegionTabs");
+  if (regionRow) {
+    const baseRegions = ["ALL", "Luzon", "Visayas", "Mindanao", "NCR"];
+    const extraRegions = [...new Set(
+      state.sites.map(s => String(s.region || "").trim()).filter(r => r && !baseRegions.some(b => b.toLowerCase() === r.toLowerCase()))
+    )].sort((a, b) => a.localeCompare(b));
+    const allRegions = [...baseRegions, ...extraRegions];
+    regionRow.innerHTML = allRegions.map(r => {
+      const label = r === "ALL" ? "All Regions" : r;
+      const isAct = runtime.sitesRegionFilter.toLowerCase() === r.toLowerCase();
+      return `<button class="chip${isAct ? " active" : ""}" type="button" data-sites-region="${esc(r)}">${esc(label)}</button>`;
+    }).join("");
+  }
+
   document.querySelectorAll<HTMLElement>("[data-sites-status]").forEach(btn => {
     btn.classList.toggle("active", (btn.dataset.sitesStatus || "ALL") === runtime.sitesStatusFilter);
   });
@@ -1670,53 +1867,85 @@ export function renderSites(): void {
 
   const box = $("siteList");
   if (!box) return;
-  box.innerHTML = filtered.map(s => {
-    const sid = String(s.id);
-    const isSel = runtime.selectedSiteId && String(runtime.selectedSiteId) === sid;
-    const thumbUrl = getSiteThumbnailUrl(s);
-    const effStatus = getSiteEffectiveStatus(s, state.units);
-    const thumbHtml = thumbUrl
-      ? '<img class="site-thumb" src="' + esc(thumbUrl) + '" alt="' + esc(s.name) + '" data-act="preview-site-thumb" data-id="' + esc(sid) + '">'
-      : '<div class="site-thumb-empty">📷<span>No photo</span></div>';
+  if (!filtered.length) {
+    box.innerHTML = '<p class="muted">' + (state.sites.length ? "No sites match the selected region/status filters." : "No sites yet.") + "</p>";
+    return;
+  }
 
-    const statusOptionsHtml = SITE_STATUS_OPTIONS.map(opt =>
-      '<option value="' + esc(opt) + '"' + (opt === effStatus ? " selected" : "") + ">" + esc(opt) + "</option>"
-    ).join("");
+  const regionOrder = ["Luzon", "Visayas", "Mindanao", "NCR"];
+  const grouped = new Map<string, any[]>();
+  filtered.forEach(s => {
+    const reg = String(s.region || "").trim() || "Unassigned Region";
+    const canonical = regionOrder.find(r => r.toLowerCase() === reg.toLowerCase()) || reg;
+    if (!grouped.has(canonical)) grouped.set(canonical, []);
+    grouped.get(canonical)!.push(s);
+  });
+  const sortedRegions = [...grouped.keys()].sort((a, b) => {
+    const ia = regionOrder.indexOf(a);
+    const ib = regionOrder.indexOf(b);
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return 1;
+    return a.localeCompare(b);
+  });
 
-    return '<div class="item' + (isSel ? " site-selected" : "") + '">' +
-      '<div class="site-card-row">' +
-        thumbHtml +
-        '<div class="site-card-body">' +
-          '<b>' + esc(s.name) + '</b>' +
-          '<div class="muted">' + esc([s.address, s.city, s.region].filter(Boolean).join(" · ")) + '</div>' +
-          '<div class="site-meta-badges">' +
-            '<span class="badge">' + esc(effStatus) + '</span>' +
-            formatSiteDistanceBadge(sid) +
+  box.innerHTML = sortedRegions.map(reg => {
+    const list = (grouped.get(reg) || []).sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+    const cardsHtml = list.map(s => {
+      const sid = String(s.id);
+      const isSel = runtime.selectedSiteId && String(runtime.selectedSiteId) === sid;
+      const thumbUrl = getSiteThumbnailUrl(s);
+      const effStatus = getSiteEffectiveStatus(s, state.units);
+      const thumbHtml = thumbUrl
+        ? '<img class="site-thumb" src="' + esc(thumbUrl) + '" alt="' + esc(s.name) + '" data-act="preview-site-thumb" data-id="' + esc(sid) + '">'
+        : '<div class="site-thumb-empty">📷<span>No photo</span></div>';
+
+      const statusOptionsHtml = SITE_STATUS_OPTIONS.map(opt =>
+        '<option value="' + esc(opt) + '"' + (opt === effStatus ? " selected" : "") + ">" + esc(opt) + "</option>"
+      ).join("");
+
+      return '<div class="item' + (isSel ? " site-selected" : "") + '">' +
+        '<div class="site-card-row">' +
+          thumbHtml +
+          '<div class="site-card-body">' +
+            '<b>' + esc(s.name) + '</b>' +
+            '<div class="muted">' + esc([s.address, s.city, s.region].filter(Boolean).join(" · ")) + '</div>' +
+            '<div class="site-meta-badges">' +
+              '<span class="badge">' + esc(effStatus) + '</span>' +
+              formatSiteDistanceBadge(sid) +
+            '</div>' +
           '</div>' +
         '</div>' +
-      '</div>' +
-      '<div class="inline-actions">' +
-        '<button class="btn small-btn" type="button" data-act="map" data-id="' + esc(sid) + '">📍 View on Map</button>' +
-        (isManager()
-          ? '<button class="gray small-btn" type="button" data-act="upload-site-thumb" data-id="' + esc(sid) + '">' + (thumbUrl ? "📷 Change Photo" : "📷 Upload Photo") + '</button>' +
-            '<select class="site-status-select" data-site-status-select="' + esc(sid) + '" aria-label="Status for ' + esc(s.name) + '">' + statusOptionsHtml + '</select>' +
-            '<button class="red small-btn" type="button" data-act="del-site" data-id="' + esc(sid) + '">Delete</button>'
-          : "") +
-      '</div>' +
-    '</div>';
-  }).join("") || '<p class="muted">' + (state.sites.length ? "No sites match the selected region/status filters." : "No sites yet.") + "</p>";
+        '<div class="inline-actions">' +
+          '<button class="btn small-btn" type="button" data-act="map" data-id="' + esc(sid) + '">📍 View on Map</button>' +
+          (isManager()
+            ? '<button class="gray small-btn" type="button" data-act="edit-site" data-id="' + esc(sid) + '">✏️ Edit</button>' +
+              '<button class="gray small-btn" type="button" data-act="upload-site-thumb" data-id="' + esc(sid) + '">' + (thumbUrl ? "📷 Photo" : "📷 Upload Photo") + '</button>' +
+              '<select class="site-status-select" data-site-status-select="' + esc(sid) + '" aria-label="Status for ' + esc(s.name) + '">' + statusOptionsHtml + '</select>' +
+              '<button class="red small-btn" type="button" data-act="del-site" data-id="' + esc(sid) + '">Delete</button>'
+            : "") +
+        '</div>' +
+      '</div>';
+    }).join("");
+
+    return `<div style="margin-bottom:14px;">` +
+      `<div style="font-weight:800;font-size:13.5px;margin:8px 0;display:flex;align-items:center;gap:6px;">📍 ${esc(reg)} <span class="badge">${list.length}</span></div>` +
+      cardsHtml +
+      `</div>`;
+  }).join("");
 }
 
 export async function addSite(): Promise<void> {
   const name = val("siteName").trim();
   if (!name) { toast("Enter a site name"); return; }
 
+  const editingId = runtime.editingSiteId ? String(runtime.editingSiteId) : null;
   const submitBtn = $("submitAddSiteBtn") as HTMLButtonElement | null;
   const pinStatusEl = $("addSitePinStatus");
   if (submitBtn?.disabled) return;
   if (submitBtn) {
     submitBtn.disabled = true;
-    submitBtn.textContent = "Locating & Saving…";
+    submitBtn.textContent = editingId ? "Saving changes…" : "Locating & Saving…";
   }
 
   try {
@@ -1775,7 +2004,7 @@ export async function addSite(): Promise<void> {
     let autoSnapshotUrlFallback = "";
     if (!rawThumb) {
       const preResolvedUrl = val("siteAutoThumbUrl").trim();
-      if (preResolvedUrl.startsWith("http")) {
+      if (preResolvedUrl.startsWith("http") || preResolvedUrl.startsWith("/")) {
         autoExternalThumbUrl = preResolvedUrl;
       } else {
         const photoFound = await resolveSiteAutoPhotoUrl({
@@ -1795,56 +2024,105 @@ export async function addSite(): Promise<void> {
       }
     }
 
-    let inserted: any = null;
+    let savedSite: any = null;
     let usedFallback = false;
 
-    if (!runtime.sitesExtraColsMissing) {
-      const payload: Record<string, any> = { name, address, region, city, status };
-      if (latitude !== null && longitude !== null) {
-        payload.latitude = latitude;
-        payload.longitude = longitude;
-      }
-      if (autoExternalThumbUrl) {
-        payload.thumbnail_url = autoExternalThumbUrl;
-      }
-      const res = await runtime.client
-        .from("sites")
-        .insert(payload)
-        .select()
-        .single();
-      if (!res.error) {
-        inserted = res.data;
-      } else if (/status|thumbnail_url|latitude|longitude|42703|PGRST204/i.test(res.error.message || "")) {
-        runtime.sitesExtraColsMissing = true;
-        usedFallback = true;
+    if (editingId) {
+      if (!runtime.sitesExtraColsMissing) {
+        const payload: Record<string, any> = { name, address, region, city, status };
+        if (latitude !== null && longitude !== null) {
+          payload.latitude = latitude;
+          payload.longitude = longitude;
+        } else {
+          payload.latitude = null;
+          payload.longitude = null;
+        }
+        if (autoExternalThumbUrl) {
+          payload.thumbnail_url = autoExternalThumbUrl;
+        }
+        const res = await runtime.client
+          .from("sites")
+          .update(payload)
+          .eq("id", editingId)
+          .select()
+          .single();
+        if (!res.error) {
+          savedSite = res.data;
+        } else if (/status|thumbnail_url|latitude|longitude|42703|PGRST204/i.test(res.error.message || "")) {
+          runtime.sitesExtraColsMissing = true;
+          usedFallback = true;
+        } else {
+          toast("Could not update site: " + res.error.message);
+          return;
+        }
       } else {
-        toast("Could not add: " + res.error.message);
-        return;
+        usedFallback = true;
       }
-    } else {
-      usedFallback = true;
-    }
-
-    if (usedFallback) {
-      const res = await runtime.client
-        .from("sites")
-        .insert({ name, address, region, city })
-        .select()
-        .single();
-      if (res.error) { toast("Could not add: " + res.error.message); return; }
-      inserted = res.data;
-      if (inserted?.id && ((status && status !== "Operational") || (latitude !== null && longitude !== null) || autoExternalThumbUrl)) {
-        await persistSiteMetaFallback(String(inserted.id), {
+      if (usedFallback) {
+        const res = await runtime.client
+          .from("sites")
+          .update({ name, address, region, city })
+          .eq("id", editingId)
+          .select()
+          .single();
+        if (res.error) { toast("Could not update site: " + res.error.message); return; }
+        savedSite = res.data;
+        await persistSiteMetaFallback(editingId, {
           status: status || "Operational",
           latitude,
           longitude,
           ...(autoExternalThumbUrl ? { thumbnail_url: autoExternalThumbUrl } : {}),
         });
       }
+    } else {
+      if (!runtime.sitesExtraColsMissing) {
+        const payload: Record<string, any> = { name, address, region, city, status };
+        if (latitude !== null && longitude !== null) {
+          payload.latitude = latitude;
+          payload.longitude = longitude;
+        }
+        if (autoExternalThumbUrl) {
+          payload.thumbnail_url = autoExternalThumbUrl;
+        }
+        const res = await runtime.client
+          .from("sites")
+          .insert(payload)
+          .select()
+          .single();
+        if (!res.error) {
+          savedSite = res.data;
+        } else if (/status|thumbnail_url|latitude|longitude|42703|PGRST204/i.test(res.error.message || "")) {
+          runtime.sitesExtraColsMissing = true;
+          usedFallback = true;
+        } else {
+          toast("Could not add: " + res.error.message);
+          return;
+        }
+      } else {
+        usedFallback = true;
+      }
+
+      if (usedFallback) {
+        const res = await runtime.client
+          .from("sites")
+          .insert({ name, address, region, city })
+          .select()
+          .single();
+        if (res.error) { toast("Could not add: " + res.error.message); return; }
+        savedSite = res.data;
+        if (savedSite?.id && ((status && status !== "Operational") || (latitude !== null && longitude !== null) || autoExternalThumbUrl)) {
+          await persistSiteMetaFallback(String(savedSite.id), {
+            status: status || "Operational",
+            latitude,
+            longitude,
+            ...(autoExternalThumbUrl ? { thumbnail_url: autoExternalThumbUrl } : {}),
+          });
+        }
+      }
     }
 
-    if (inserted?.id) {
-      const sid = String(inserted.id);
+    if (savedSite?.id) {
+      const sid = String(savedSite.id);
       if (rawThumb && isManager()) {
         await uploadSiteThumbnailFile(sid, rawThumb, { silent: true });
       } else if (!autoExternalThumbUrl) {
@@ -1862,6 +2140,7 @@ export async function addSite(): Promise<void> {
       }
     }
 
+    runtime.editingSiteId = null;
     $("addSiteOverlay")?.classList.add("hidden");
     setVal("siteName", "");
     setVal("siteAddress", "");
@@ -1874,15 +2153,15 @@ export async function addSite(): Promise<void> {
     resetAddSitePinPicker();
     suppressNotifications();
     await loadSites();
-    toast(latitude !== null && longitude !== null ? "Site added with picture & map pin" : "Site added with picture");
-    if (inserted?.id) {
-      openSiteOnMap(String(inserted.id));
+    toast(editingId ? "Work site updated" : (latitude !== null && longitude !== null ? "Site added with picture & map pin" : "Site added with picture"));
+    if (!editingId && savedSite?.id) {
+      openSiteOnMap(String(savedSite.id));
     }
     void refreshVisibleSiteDistances(getFilteredSites());
   } finally {
     if (submitBtn) {
       submitBtn.disabled = false;
-      submitBtn.textContent = "Add site";
+      submitBtn.textContent = runtime.editingSiteId ? "Save changes" : "Add site";
     }
   }
 }
@@ -3470,7 +3749,8 @@ export function clearDtrForm(): void {
   if (otEl) otEl.checked = true;
 }
 
-export function setTimeLogMode(mode: "time_in" | "time_out"): void {
+export function setTimeLogMode(mode: "time_in" | "time_out", isManual = true): void {
+  if (isManual) runtime.timeLogModeManual = true;
   runtime.timeLogMode = mode === "time_out" ? "time_out" : "time_in";
   document.querySelectorAll<HTMLElement>("#timeLogModeToggle [data-time-mode]").forEach(btn =>
     btn.classList.toggle("active", btn.dataset.timeMode === runtime.timeLogMode)
@@ -3479,9 +3759,39 @@ export function setTimeLogMode(mode: "time_in" | "time_out"): void {
   if (badge) {
     badge.textContent = runtime.timeLogMode === "time_in" ? "🟢 Time In Selected" : "🔴 Time Out Selected";
   }
+  const qBtn = $("timemarkModeQuickBtn");
+  if (qBtn) {
+    qBtn.textContent = runtime.timeLogMode === "time_in" ? "🟢 TIME IN" : "🔴 TIME OUT";
+  }
+  if (!$("timemarkCamOverlay")?.classList.contains("hidden")) {
+    updateTimemarkHud();
+    void evaluateTimemarkSiteProximity();
+  }
+}
+
+export function syncDefaultTimeLogModeFromHistory(force = false): void {
+  if (runtime.timeLogModeManual && !force) return;
+  const today = localDateKey(new Date());
+  const myTodayLogs = (state.dtrTimeLogs || [])
+    .filter((l: any) => String(l.user_id) === String(state.userId) && String(l.work_date || "").startsWith(today))
+    .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+
+  let nextMode: "time_in" | "time_out" = "time_in";
+  if (myTodayLogs.length) {
+    nextMode = myTodayLogs[0].mode === "time_in" ? "time_out" : "time_in";
+  } else {
+    try {
+      const saved = state.userId ? localStorage.getItem("eesi-next-timelog-mode:" + state.userId) : null;
+      if (saved === "time_in" || saved === "time_out") nextMode = saved;
+    } catch {}
+  }
+  if (runtime.timeLogMode !== nextMode || force) {
+    setTimeLogMode(nextMode, false);
+  }
 }
 
 export function renderTimeLog(): void {
+  syncDefaultTimeLogModeFromHistory(false);
   const box = $("timeLogMessages");
   if (!box) return;
   const logs = [...(state.dtrTimeLogs || [])].sort(
@@ -3801,7 +4111,10 @@ export async function submitTimeLogPhoto(file: File): Promise<void> {
       throw new Error(lastErrorMessage || "Photo analysis failed");
     }
 
-    const uploadFile = await prepareImageFile(file, 1400, 0.84);
+    const isTimemarkHq = /^timemark-/i.test(file.name || "");
+    const uploadFile = isTimemarkHq && file.size <= 10 * 1024 * 1024
+      ? file
+      : await prepareImageFile(file, 3840, 0.94);
     const safeName = (uploadFile.name || `${mode}.jpg`).replace(/[^a-zA-Z0-9._-]/g, "_");
     const storagePath = `${state.userId}/time-logs/${Date.now()}-${mode}-${safeName}`;
     const { error: upErr } = await runtime.client.storage
@@ -3833,11 +4146,20 @@ export async function submitTimeLogPhoto(file: File): Promise<void> {
         `${modeIcon} ${modeLabel} — ${senderName}`,
         `Uploaded ${modeLabel} photo at ${detectedLoc} (no clear timestamp detected by AI).`
       );
+      const nextMode: "time_in" | "time_out" = mode === "time_in" ? "time_out" : "time_in";
+      const nextLabel = nextMode === "time_out" ? "Time Out" : "Time In";
+      if (tmCfg.autoFlipMode) {
+        runtime.timeLogModeManual = false;
+        setTimeLogMode(nextMode, false);
+        try { if (state.userId) localStorage.setItem("eesi-next-timelog-mode:" + state.userId, nextMode); } catch {}
+      }
       suppressNotifications();
       await loadAppNotifications();
       await loadTimeLogs();
-      if (statusEl) statusEl.textContent = "Uploaded to feed, but no clear timestamp was detected in the photo.";
-      toast("No timestamp detected on photo");
+      if (statusEl) {
+        statusEl.textContent = `Uploaded to feed (no clear timestamp detected).${tmCfg.autoFlipMode ? ` Next upload ready: ${nextLabel}.` : ""}`;
+      }
+      toast(`Uploaded!${tmCfg.autoFlipMode ? ` Next upload switched to ${nextLabel}` : ""}`);
       return;
     }
 
@@ -3864,13 +4186,21 @@ export async function submitTimeLogPhoto(file: File): Promise<void> {
       `AI Reading: ${time12 || time24} (${fmtDay(workDate)}) · Site: ${detectedLoc}${selectedUnit ? " (" + selectedUnit + ")" : ""} · Filled ${modeLabel} slot.`
     );
 
+    const nextMode: "time_in" | "time_out" = mode === "time_in" ? "time_out" : "time_in";
+    const nextLabel = nextMode === "time_out" ? "Time Out" : "Time In";
+    if (tmCfg.autoFlipMode) {
+      runtime.timeLogModeManual = false;
+      setTimeLogMode(nextMode, false);
+      try { if (state.userId) localStorage.setItem("eesi-next-timelog-mode:" + state.userId, nextMode); } catch {}
+    }
+
     suppressNotifications();
     await loadAppNotifications();
     await loadTimeLogs();
     if (statusEl) {
-      statusEl.textContent = `✅ Done reading! Already filled ${modeLabel} slot (${time12 || time24}) for ${senderName} · ${slotText}`;
+      statusEl.textContent = `✅ Done reading! Filled ${modeLabel} (${time12 || time24}) · ${slotText}${tmCfg.autoFlipMode ? ` · Next upload: ${nextLabel}` : ""}`;
     }
-    toast(`✅ Done reading! ${modeLabel} (${time12 || time24}) filled into DTR`);
+    toast(`✅ ${modeLabel} (${time12 || time24}) saved!${tmCfg.autoFlipMode ? ` Next: ${nextLabel}` : ""}`);
   } catch (err: any) {
     const msg = err?.message || "Could not analyze photo";
     if (statusEl) statusEl.textContent = "Failed: " + msg;
@@ -4097,34 +4427,183 @@ let timemarkStream: MediaStream | null = null;
 let timemarkFacing: "environment" | "user" = "environment";
 let timemarkTimer: any = null;
 let timemarkCoordsText = "GPS locating…";
-let timemarkCurrentCoords: { lat: number; lng: number; acc: number } | null = null;
+let timemarkCurrentCoords: { lat: number; lng: number; acc: number; alt?: number | null; heading?: number | null } | null = null;
 let timemarkProximityAlert: { rawMeters: number; effectiveMeters: number; distanceLabel: string; siteName: string } | null = null;
 let timemarkProxCheckSeq = 0;
+let timemarkZoomLevel = 1.0;
+let timemarkFlashOn = false;
+let timemarkCountdownTimer: any = null;
+let timemarkFocusTimer: any = null;
+let timemarkStreamSeq = 0;
+let timemarkCapturing = false;
+let timemarkLastPreviewUrl = "";
+let timemarkPhotoCode = "";
+let timemarkAddressText = "";
+let timemarkRevGeocodeKey = "";
+let timemarkMiniMapLoadedUrl = "";
+
+type TimemarkTemplateId = "clock_in" | "time_loc" | "work_report" | "inspection" | "service" | "photo_code";
+type TimemarkResolution = "720p" | "1080p" | "4k";
+
+interface TimemarkConfig {
+  templateId: TimemarkTemplateId;
+  resolution: TimemarkResolution;
+  showGrid: boolean;
+  showLogo: boolean;
+  showTitle: boolean;
+  customTitle: string;
+  showStyledNote: boolean;
+  styledNoteText: string;
+  styledNoteBoxed: boolean;
+  styledNoteColor: string;
+  showTime: boolean;
+  showAddress: boolean;
+  showCoordinate: boolean;
+  showMap: boolean;
+  showWeather: boolean;
+  showAltitude: boolean;
+  showCompass: boolean;
+  showNotes: boolean;
+  notesText: string;
+  showPhotoCode: boolean;
+  accentColor: string;
+  ratio: "3:4" | "1:1" | "full";
+  timerSeconds: 0 | 3 | 5;
+  autoSaveOriginal: boolean;
+  autoFlipMode: boolean;
+}
+
+const DEFAULT_TIMEMARK_CFG: TimemarkConfig = {
+  templateId: "clock_in",
+  resolution: "4k",
+  showGrid: true,
+  showLogo: true,
+  showTitle: true,
+  customTitle: "",
+  showStyledNote: false,
+  styledNoteText: "On Duty",
+  styledNoteBoxed: true,
+  styledNoteColor: "#ffffff",
+  showTime: true,
+  showAddress: true,
+  showCoordinate: false,
+  showMap: true,
+  showWeather: false,
+  showAltitude: false,
+  showCompass: false,
+  showNotes: false,
+  notesText: "",
+  showPhotoCode: true,
+  accentColor: "#fbbf24",
+  ratio: "3:4",
+  timerSeconds: 0,
+  autoSaveOriginal: false,
+  autoFlipMode: true,
+};
+
+let tmCfg: TimemarkConfig = { ...DEFAULT_TIMEMARK_CFG };
+let tmCfgLoadedForUser = "";
+
+function getTimemarkResolutionSpec(res: TimemarkResolution = tmCfg.resolution) {
+  if (res === "720p") {
+    return { idealW: 1280, idealH: 720, portraitBase: 720, landscapeBase: 1280, quality: 0.91, label: "720P HD" };
+  }
+  if (res === "1080p") {
+    return { idealW: 1920, idealH: 1080, portraitBase: 1080, landscapeBase: 1920, quality: 0.94, label: "1080P FHD" };
+  }
+  return { idealW: 3840, idealH: 2160, portraitBase: 2160, landscapeBase: 3840, quality: 0.96, label: "4K UHD" };
+}
+
+function generateTimemarkPhotoCode(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let out = "";
+  for (let i = 0; i < 14; i++) {
+    out += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return out;
+}
+
+function loadTimemarkConfig(): void {
+  const uid = String(state.userId || "anon");
+  if (tmCfgLoadedForUser === uid) return;
+  tmCfgLoadedForUser = uid;
+  try {
+    const raw = localStorage.getItem("eesi-timemark-cfg:" + uid);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        tmCfg = { ...DEFAULT_TIMEMARK_CFG, ...parsed };
+        return;
+      }
+    }
+  } catch {}
+  tmCfg = { ...DEFAULT_TIMEMARK_CFG };
+}
+
+function saveTimemarkConfig(): void {
+  const uid = String(state.userId || "anon");
+  try {
+    localStorage.setItem("eesi-timemark-cfg:" + uid, JSON.stringify(tmCfg));
+  } catch {}
+}
 
 function formatProximityDist(meters: number): string {
   return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(2)} km`;
+}
+
+function formatCompassHeading(heading: number | null | undefined): string {
+  if (heading === null || heading === undefined || !Number.isFinite(heading)) return "N 0°";
+  const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  const idx = Math.round(((heading % 360) + 360) % 360 / 45) % 8;
+  return `${Math.round(((heading % 360) + 360) % 360)}° ${dirs[idx]}`;
+}
+
+async function resolveTimemarkAddressForCoords(lat: number, lng: number): Promise<void> {
+  const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+  if (timemarkRevGeocodeKey === key && timemarkAddressText) return;
+  timemarkRevGeocodeKey = key;
+  const rev = await fetchReverseGeocode(lat, lng);
+  if (rev?.formattedAddress) {
+    timemarkAddressText = rev.formattedAddress;
+    updateTimemarkHud();
+  }
+}
+
+function updateTimemarkMiniMap(lat: number, lng: number): void {
+  const card = $("timemarkMiniMapCard");
+  const img = $("timemarkMiniMapImg") as HTMLImageElement | null;
+  if (!card || !img) return;
+  if (!tmCfg.showMap || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+    card.classList.add("hidden");
+    return;
+  }
+  card.classList.remove("hidden");
+  const url = `/api/site-photo?tile=1&sat=1&lat=${encodeURIComponent(lat.toFixed(5))}&lng=${encodeURIComponent(lng.toFixed(5))}&z=17`;
+  if (timemarkMiniMapLoadedUrl !== url) {
+    timemarkMiniMapLoadedUrl = url;
+    img.src = url;
+  }
 }
 
 async function evaluateTimemarkSiteProximity(): Promise<void> {
   const seq = ++timemarkProxCheckSeq;
   const warnEl = $("timemarkDistanceWarning");
   const warnTxtEl = $("timemarkDistanceWarningText");
-  const gpsEl = $("timemarkGps");
 
   if (runtime.timeLogMode !== "time_in") {
     timemarkProximityAlert = null;
     warnEl?.classList.add("hidden");
-    gpsEl?.classList.remove("timemark-gps-far");
+    updateTimemarkHud();
     return;
   }
 
   const sched = findScheduledWorkForUser(localDateKey(new Date()));
-  const siteName = val("timeLogSite").trim() || sched?.siteName || "";
+  const siteName = val("timemarkSiteSelect").trim() || val("timeLogSite").trim() || sched?.siteName || "";
   const userCoords = timemarkCurrentCoords || getCachedUserGpsCoords();
   if (!siteName || !userCoords) {
     timemarkProximityAlert = null;
     warnEl?.classList.add("hidden");
-    gpsEl?.classList.remove("timemark-gps-far");
+    updateTimemarkHud();
     return;
   }
 
@@ -4133,7 +4612,7 @@ async function evaluateTimemarkSiteProximity(): Promise<void> {
   if (!siteCoords) {
     timemarkProximityAlert = null;
     warnEl?.classList.add("hidden");
-    gpsEl?.classList.remove("timemark-gps-far");
+    updateTimemarkHud();
     return;
   }
 
@@ -4151,51 +4630,634 @@ async function evaluateTimemarkSiteProximity(): Promise<void> {
     };
     if (warnTxtEl) {
       warnTxtEl.textContent =
-        `Far from work site: You are ~${distanceLabel} away from ${siteCoords.name} (outside the ${TIMEMARK_FAR_SITE_THRESHOLD_METERS} m Time-In radius). Move closer or verify the selected work site.`;
+        `Far from work site: You are ~${distanceLabel} away from ${siteCoords.name} (outside ${TIMEMARK_FAR_SITE_THRESHOLD_METERS} m Time-In radius). Move closer or verify the selected work site.`;
     }
     warnEl?.classList.remove("hidden");
-    gpsEl?.classList.add("timemark-gps-far");
-    if (gpsEl) gpsEl.textContent = `${timemarkCoordsText} · ⚠️ ~${distanceLabel} from site`;
   } else {
     timemarkProximityAlert = null;
     warnEl?.classList.add("hidden");
-    gpsEl?.classList.remove("timemark-gps-far");
-    if (gpsEl) gpsEl.textContent = `${timemarkCoordsText} · ✓ Near ${siteCoords.name} (${formatProximityDist(rawMeters)})`;
   }
+  updateTimemarkHud();
+}
+
+function getTimemarkStampData() {
+  const now = new Date();
+  const isOut = runtime.timeLogMode === "time_out";
+  const sched = findScheduledWorkForUser(localDateKey(now));
+  const selectedSite = val("timemarkSiteSelect").trim() || val("timeLogSite").trim() || sched?.siteName || "";
+  const unit = val("timeLogUnit").trim() || sched?.unitName || "";
+  const siteObj = selectedSite ? state.sites.find(s => String(s.name || "").trim().toLowerCase() === selectedSite.toLowerCase()) : null;
+  const siteFull = [selectedSite, siteObj?.address, siteObj?.city].filter(Boolean).join(", ");
+  const addressDisplay = timemarkAddressText || siteFull || "EESI Field Site";
+  const timeShort = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const dateDisplay = now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "2-digit", year: "numeric" });
+  const titleText = tmCfg.customTitle.trim() || (isOut ? "TIME OUT" : "TIME IN");
+  const coordDisplay = timemarkCurrentCoords
+    ? `${timemarkCurrentCoords.lat.toFixed(5)}°, ${timemarkCurrentCoords.lng.toFixed(5)}°`
+    : timemarkCoordsText;
+  const weatherElText = ($("weather")?.textContent || "").trim() || "29°C · Clear";
+  const altText = timemarkCurrentCoords?.alt !== null && timemarkCurrentCoords?.alt !== undefined && Number.isFinite(timemarkCurrentCoords.alt)
+    ? `${Math.round(timemarkCurrentCoords.alt)} m`
+    : "14 m";
+  const compassText = formatCompassHeading(timemarkCurrentCoords?.heading);
+  const whoStr = state.profile?.full_name || state.email || "EESI Technician";
+  return {
+    now,
+    isOut,
+    selectedSite,
+    unit,
+    addressDisplay,
+    timeShort,
+    dateDisplay,
+    titleText,
+    coordDisplay,
+    weatherElText,
+    altText,
+    compassText,
+    whoStr,
+  };
+}
+
+function buildTimemarkStampHtml(compact = false): string {
+  const d = getTimemarkStampData();
+  if (!timemarkPhotoCode) timemarkPhotoCode = generateTimemarkPhotoCode();
+
+  const logoSvg = tmCfg.showLogo
+    ? `<span class="tm-stamp-logo"><svg viewBox="0 0 356 196" aria-hidden="true"><use href="#eesiLogo"/></svg></span>`
+    : "";
+
+  const styledNoteHtml = tmCfg.showStyledNote && tmCfg.styledNoteText.trim()
+    ? `<div class="tm-stamp-styled-note" style="${
+        tmCfg.styledNoteBoxed
+          ? `background:${esc(tmCfg.styledNoteColor)};color:${tmCfg.styledNoteColor.toLowerCase() === "#ffffff" ? "#0f172a" : "#ffffff"};`
+          : `background:transparent;color:${esc(tmCfg.styledNoteColor)};text-shadow:0 1px 4px rgba(0,0,0,.95);padding:0;`
+      }">${esc(tmCfg.styledNoteText)}</div>`
+    : "";
+
+  const extraLines: string[] = [];
+  if (tmCfg.showCoordinate) extraLines.push(`🧭 ${d.coordDisplay}`);
+  if (tmCfg.showWeather) extraLines.push(`🌤️ ${d.weatherElText}`);
+  if (tmCfg.showAltitude) extraLines.push(`⛰️ Alt: ${d.altText}`);
+  if (tmCfg.showCompass) extraLines.push(`🧭 ${d.compassText}`);
+  if (tmCfg.showNotes && tmCfg.notesText.trim()) extraLines.push(`📝 ${tmCfg.notesText.trim()}`);
+  if (runtime.timeLogMode === "time_in" && timemarkProximityAlert && !compact) {
+    extraLines.push(`<span style="color:#fecaca;font-weight:800;">⚠️ ~${esc(timemarkProximityAlert.distanceLabel)} from ${esc(timemarkProximityAlert.siteName)}</span>`);
+  }
+
+  const codeLine = tmCfg.showPhotoCode
+    ? `<div class="tm-stamp-code"><span style="display:inline-grid;place-items:center;width:15px;height:15px;border-radius:50%;background:#38bdf8;color:#0f172a;font-size:10px;font-weight:900;">✓</span> Photo Code: ${esc(timemarkPhotoCode)}</div>`
+    : "";
+
+  if (tmCfg.templateId === "work_report" || tmCfg.templateId === "service") {
+    const hdrBg = tmCfg.templateId === "service" ? "#1e6cf2" : tmCfg.accentColor;
+    const hdrCol = tmCfg.templateId === "service" ? "#ffffff" : "#111827";
+    const hdrLabel = tmCfg.templateId === "service" ? "EESI Service Report" : "Work Report";
+    return `<div class="tm-stamp-card-report">` +
+      `<div class="tm-rep-head" style="background:${esc(hdrBg)};color:${hdrCol};"><span>${esc(hdrLabel)} · ${esc(d.titleText)}</span>${logoSvg}</div>` +
+      `<div class="tm-rep-body">` +
+      styledNoteHtml +
+      (tmCfg.showTime ? `<div><b>${esc(d.timeShort)}</b> · ${esc(d.dateDisplay)}</div>` : "") +
+      `<div><b>Tech:</b> ${esc(d.whoStr)}${d.unit ? ` · ${esc(d.unit)}` : ""}</div>` +
+      (tmCfg.showAddress ? `<div><b>Site:</b> ${esc(d.selectedSite ? `${d.selectedSite} — ` : "")}${esc(d.addressDisplay)}</div>` : "") +
+      (extraLines.length ? `<div>${extraLines.join(" · ")}</div>` : "") +
+      (tmCfg.showPhotoCode ? `<div style="margin-top:3px;color:#0369a1;font-weight:700;">🛡️ Photo Code: ${esc(timemarkPhotoCode)}</div>` : "") +
+      `</div></div>`;
+  }
+
+  if (tmCfg.templateId === "inspection") {
+    return `<div class="tm-stamp-card-dark" style="border-left-color:${esc(tmCfg.accentColor)};">` +
+      styledNoteHtml +
+      `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;">` +
+        `<span style="background:${esc(tmCfg.accentColor)};color:#111827;font-weight:900;font-size:11px;padding:2px 7px;border-radius:5px;" onclick="toggleTimemarkModeInsideCam()">${esc(d.titleText)}</span>` +
+        logoSvg +
+      `</div>` +
+      (tmCfg.showTime ? `<div style="font-size:18px;font-weight:900;">${esc(d.timeShort)} <span style="font-size:11px;font-weight:600;opacity:.85;">${esc(d.dateDisplay)}</span></div>` : "") +
+      (tmCfg.showAddress ? `<div style="font-size:11.5px;margin-top:3px;">${esc(d.selectedSite ? `${d.selectedSite} · ` : "")}${esc(d.addressDisplay)}</div>` : "") +
+      `<div style="font-size:11px;opacity:.9;margin-top:3px;">🧭 ${esc(d.compassText)} · ⛰️ ${esc(d.altText)}</div>` +
+      (extraLines.length ? `<div style="font-size:11px;margin-top:2px;">${extraLines.join(" · ")}</div>` : "") +
+      codeLine +
+      `</div>`;
+  }
+
+  if (tmCfg.templateId === "time_loc") {
+    return `${styledNoteHtml}` +
+      `<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">` +
+      (tmCfg.showTime ? `<span style="font-size:28px;font-weight:900;letter-spacing:-.02em;">${esc(d.timeShort)}</span>` : "") +
+      `<span style="font-size:12px;font-weight:700;">${esc(d.dateDisplay)}</span>` +
+      (tmCfg.showLogo ? logoSvg : "") +
+      `</div>` +
+      `<div class="tm-stamp-lines">` +
+      (tmCfg.showTitle ? `<span style="background:${esc(tmCfg.accentColor)};color:#111827;padding:1px 6px;border-radius:4px;font-weight:800;margin-right:5px;" onclick="toggleTimemarkModeInsideCam()">${esc(d.titleText)}</span>` : "") +
+      (tmCfg.showAddress ? esc((d.selectedSite ? `${d.selectedSite} · ` : "") + d.addressDisplay) : "") +
+      (extraLines.length ? `<div>${extraLines.join(" · ")}</div>` : "") +
+      `</div>` + codeLine;
+  }
+
+  // Default "clock_in" & "photo_code" matching the exact video stamp
+  const showHeaderBar = tmCfg.showTitle || tmCfg.showTime || tmCfg.showLogo;
+  const headerBar = showHeaderBar
+    ? `<div class="tm-stamp-bar">` +
+      (tmCfg.showTitle
+        ? `<span class="tm-stamp-badge${d.isOut ? " is-out" : ""}" style="background:${esc(tmCfg.accentColor)};" onclick="toggleTimemarkModeInsideCam()" title="Tap to switch Time In / Time Out">${esc(d.titleText)}</span>`
+        : "") +
+      (tmCfg.showTime ? `<span class="tm-stamp-clock">${esc(d.timeShort)}</span>` : "") +
+      logoSvg +
+      `</div>`
+    : "";
+
+  const addressFull = d.selectedSite && !d.addressDisplay.toLowerCase().includes(d.selectedSite.toLowerCase())
+    ? `${d.selectedSite} · ${d.addressDisplay}`
+    : d.addressDisplay;
+
+  return `${styledNoteHtml}${headerBar}` +
+    `<div class="tm-stamp-lines">` +
+      (tmCfg.showTime || tmCfg.templateId === "clock_in" ? `<div>${esc(d.dateDisplay)}</div>` : "") +
+      (tmCfg.showAddress ? `<div>${esc(addressFull)}${d.unit ? ` · ${esc(d.unit)}` : ""}</div>` : "") +
+      (extraLines.length ? `<div>${extraLines.join(" · ")}</div>` : "") +
+    `</div>` +
+    codeLine;
+}
+
+function syncTimemarkSiteSelectOptions(): void {
+  const sel = $("timemarkSiteSelect") as HTMLSelectElement | null;
+  if (!sel) return;
+  const current = val("timemarkSiteSelect") || val("timeLogSite") || findScheduledWorkForUser(localDateKey(new Date()))?.siteName || "";
+  const names = [...new Set(state.sites.map(s => String(s.name || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  sel.innerHTML = '<option value="">Auto / Detect Site…</option>' +
+    names.map(n => `<option value="${esc(n)}"${n === current ? " selected" : ""}>${esc(n)}</option>`).join("");
+  if (current && names.includes(current)) sel.value = current;
+}
+
+function updateTimemarkResReadout(): void {
+  const el = $("timemarkResReadout");
+  if (!el) return;
+  const spec = getTimemarkResolutionSpec();
+  const vid = $("timemarkVideo") as HTMLVideoElement | null;
+  const vw = vid?.videoWidth || 0;
+  const vh = vid?.videoHeight || 0;
+  el.textContent = vw > 0 && vh > 0 ? `${spec.label} · ${vw}×${vh}` : spec.label;
 }
 
 function updateTimemarkHud(): void {
-  const now = new Date();
-  const clockEl = $("timemarkClock");
-  const dateEl = $("timemarkDate");
-  const modeEl = $("timemarkModePill");
-  const siteEl = $("timemarkSiteLabel");
-  const gpsEl = $("timemarkGps");
-  const sched = findScheduledWorkForUser(localDateKey(now));
-  const site = val("timeLogSite").trim() || sched?.siteName || "EESI Field Site";
-  const unit = val("timeLogUnit").trim() || sched?.unitName || "";
+  const stampEl = $("timemarkStamp");
+  if (stampEl) {
+    const nextHtml = buildTimemarkStampHtml(false);
+    if (stampEl.dataset.lastHtml !== nextHtml) {
+      stampEl.innerHTML = nextHtml;
+      stampEl.dataset.lastHtml = nextHtml;
+    }
+  }
 
-  if (clockEl) {
-    clockEl.textContent = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const stage = $("timemarkStage");
+  if (stage) {
+    stage.classList.remove("ratio-3-4", "ratio-1-1", "ratio-full");
+    stage.classList.add(tmCfg.ratio === "1:1" ? "ratio-1-1" : tmCfg.ratio === "full" ? "ratio-full" : "ratio-3-4");
   }
-  if (dateEl) {
-    dateEl.textContent = now.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "2-digit" });
+
+  const gridEl = $("timemarkGridOverlay");
+  if (gridEl) gridEl.classList.toggle("hidden", !tmCfg.showGrid);
+
+  updateTimemarkResReadout();
+
+  const qBtn = $("timemarkModeQuickBtn");
+  if (qBtn) {
+    qBtn.textContent = runtime.timeLogMode === "time_out" ? "🔴 TIME OUT" : "🟢 TIME IN";
   }
-  if (modeEl) {
-    const isOut = runtime.timeLogMode === "time_out";
-    modeEl.textContent = isOut ? "🔴 TIME OUT" : "🟢 TIME IN";
+
+  if (timemarkCurrentCoords) {
+    updateTimemarkMiniMap(timemarkCurrentCoords.lat, timemarkCurrentCoords.lng);
+  } else {
+    $("timemarkMiniMapCard")?.classList.add("hidden");
   }
-  if (siteEl) {
-    siteEl.textContent = [site, unit].filter(Boolean).join(" · ");
-  }
-  if (gpsEl) {
-    gpsEl.textContent = timemarkProximityAlert && runtime.timeLogMode === "time_in"
-      ? `${timemarkCoordsText} · ⚠️ ~${timemarkProximityAlert.distanceLabel} from site`
-      : timemarkCoordsText;
+
+  const editPrev = $("timemarkEditPreviewWrap");
+  if (editPrev && !$("timemarkEditDrawer")?.classList.contains("hidden")) {
+    const nextPrev = `<div style="position:relative;pointer-events:none;">${buildTimemarkStampHtml(true)}</div>`;
+    if (editPrev.dataset.lastHtml !== nextPrev) {
+      editPrev.innerHTML = nextPrev;
+      editPrev.dataset.lastHtml = nextPrev;
+    }
   }
 }
 
+function syncTimemarkControlUi(): void {
+  const vid = $("timemarkVideo") as HTMLVideoElement | null;
+  if (vid) {
+    vid.classList.toggle("is-mirrored", timemarkFacing === "user");
+    vid.style.transform = timemarkFacing === "user"
+      ? `scaleX(-1) scale(${timemarkZoomLevel})`
+      : `scale(${timemarkZoomLevel})`;
+  }
+  const zBtn = $("timemarkZoomBtn");
+  if (zBtn) zBtn.textContent = `${timemarkZoomLevel.toFixed(1)}x`;
+  $("timemarkFlashBtn")?.classList.toggle("active", timemarkFlashOn);
+  $("timemarkGridBtn")?.classList.toggle("active", tmCfg.showGrid);
+  $("timemarkGridOverlay")?.classList.toggle("hidden", !tmCfg.showGrid);
+
+  document.querySelectorAll<HTMLElement>("[data-tm-res]").forEach(b =>
+    b.classList.toggle("active", b.dataset.tmRes === (tmCfg.resolution || "4k"))
+  );
+  document.querySelectorAll<HTMLElement>("[data-tm-ratio]").forEach(b =>
+    b.classList.toggle("active", b.dataset.tmRatio === tmCfg.ratio)
+  );
+  document.querySelectorAll<HTMLElement>("[data-tm-timer]").forEach(b =>
+    b.classList.toggle("active", Number(b.dataset.tmTimer) === tmCfg.timerSeconds)
+  );
+  const gridT = $("tmMenuGridToggle") as HTMLInputElement | null;
+  const logoT = $("tmMenuLogoToggle") as HTMLInputElement | null;
+  const saveOrigT = $("tmMenuSaveOrigToggle") as HTMLInputElement | null;
+  const autoFlipT = $("tmMenuAutoFlipToggle") as HTMLInputElement | null;
+  if (gridT) gridT.checked = tmCfg.showGrid;
+  if (logoT) logoT.checked = tmCfg.showLogo;
+  if (saveOrigT) saveOrigT.checked = tmCfg.autoSaveOriginal;
+  if (autoFlipT) autoFlipT.checked = tmCfg.autoFlipMode;
+
+  const capBtn = $("timemarkCaptureBtn") as HTMLButtonElement | null;
+  if (capBtn) capBtn.disabled = timemarkCapturing;
+
+  const prevThumb = $("timemarkPreviewThumb");
+  if (prevThumb) {
+    prevThumb.innerHTML = timemarkLastPreviewUrl
+      ? `<img src="${esc(timemarkLastPreviewUrl)}" alt="Last captured photo">`
+      : "🖼️";
+  }
+  updateTimemarkResReadout();
+}
+
+export function toggleTimemarkSideMenu(force?: boolean): void {
+  const el = $("timemarkSideMenu");
+  if (!el) return;
+  const nextOpen = typeof force === "boolean" ? force : el.classList.contains("hidden");
+  el.classList.toggle("hidden", !nextOpen);
+  if (nextOpen) syncTimemarkControlUi();
+}
+
+export function setTimemarkResolution(res: TimemarkResolution): void {
+  if (tmCfg.resolution === res && timemarkStream) {
+    syncTimemarkControlUi();
+    return;
+  }
+  tmCfg.resolution = res;
+  saveTimemarkConfig();
+  syncTimemarkControlUi();
+  updateTimemarkHud();
+  toast(`Camera quality: ${getTimemarkResolutionSpec(res).label}`);
+  if (!$("timemarkCamOverlay")?.classList.contains("hidden")) {
+    void startTimemarkCameraStream();
+  }
+}
+
+export function setTimemarkGridEnabled(on: boolean): void {
+  tmCfg.showGrid = !!on;
+  saveTimemarkConfig();
+  syncTimemarkControlUi();
+}
+
+export function toggleTimemarkGrid(): void {
+  setTimemarkGridEnabled(!tmCfg.showGrid);
+}
+
+export async function focusTimemarkAt(ev: MouseEvent): Promise<void> {
+  const wrap = $("timemarkVideoWrap");
+  const ring = $("timemarkFocusRing");
+  if (!wrap || !ring) return;
+  const rect = wrap.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const x = Math.max(24, Math.min(rect.width - 24, ev.clientX - rect.left));
+  const y = Math.max(24, Math.min(rect.height - 24, ev.clientY - rect.top));
+  ring.style.left = `${x}px`;
+  ring.style.top = `${y}px`;
+  ring.classList.remove("show");
+  void ring.offsetWidth;
+  ring.classList.add("show");
+  clearTimeout(timemarkFocusTimer);
+  timemarkFocusTimer = setTimeout(() => ring.classList.remove("show"), 900);
+
+  const track = timemarkStream?.getVideoTracks?.()[0];
+  if (track && typeof track.applyConstraints === "function") {
+    try {
+      const caps = (track.getCapabilities?.() as any) || {};
+      const nx = Math.max(0, Math.min(1, x / rect.width));
+      const ny = Math.max(0, Math.min(1, y / rect.height));
+      if (caps.focusMode && Array.isArray(caps.focusMode)) {
+        const mode = caps.focusMode.includes("single-shot") ? "single-shot" : (caps.focusMode.includes("continuous") ? "continuous" : null);
+        if (mode) {
+          await track.applyConstraints({ advanced: [{ focusMode: mode, ...(caps.pointsOfInterest ? { pointsOfInterest: [{ x: nx, y: ny }] } : {}) } as any] });
+        }
+      }
+    } catch {}
+  }
+}
+
+export function setTimemarkRatio(ratio: "3:4" | "1:1" | "full"): void {
+  tmCfg.ratio = ratio;
+  saveTimemarkConfig();
+  syncTimemarkControlUi();
+  updateTimemarkHud();
+}
+
+export function setTimemarkTimer(sec: 0 | 3 | 5): void {
+  tmCfg.timerSeconds = sec;
+  saveTimemarkConfig();
+  syncTimemarkControlUi();
+  toast(sec ? `Timer set to ${sec}s` : "Timer off");
+}
+
+export function setTimemarkLogoEnabled(on: boolean): void {
+  tmCfg.showLogo = !!on;
+  saveTimemarkConfig();
+  updateTimemarkHud();
+}
+
+export function setTimemarkAutoSaveOriginal(on: boolean): void {
+  tmCfg.autoSaveOriginal = !!on;
+  saveTimemarkConfig();
+}
+
+export function setTimemarkAutoFlip(on: boolean): void {
+  tmCfg.autoFlipMode = !!on;
+  saveTimemarkConfig();
+}
+
+export async function toggleTimemarkFlash(): Promise<void> {
+  timemarkFlashOn = !timemarkFlashOn;
+  syncTimemarkControlUi();
+  const track = timemarkStream?.getVideoTracks?.()[0];
+  if (track && typeof track.applyConstraints === "function") {
+    try {
+      const caps = (track.getCapabilities?.() as any) || {};
+      if (caps.torch) {
+        await track.applyConstraints({ advanced: [{ torch: timemarkFlashOn } as any] });
+        return;
+      }
+    } catch {}
+  }
+  toast(timemarkFlashOn ? "Flash ready" : "Flash off");
+}
+
+export async function cycleTimemarkZoom(): Promise<void> {
+  const steps = [1.0, 1.5, 2.0];
+  const idx = steps.findIndex(z => Math.abs(z - timemarkZoomLevel) < 0.05);
+  timemarkZoomLevel = steps[(idx + 1) % steps.length];
+  syncTimemarkControlUi();
+  const track = timemarkStream?.getVideoTracks?.()[0];
+  if (track && typeof track.applyConstraints === "function") {
+    try {
+      const caps = (track.getCapabilities?.() as any) || {};
+      if (caps.zoom) {
+        const target = Math.min(caps.zoom.max || 2, Math.max(caps.zoom.min || 1, timemarkZoomLevel));
+        await track.applyConstraints({ advanced: [{ zoom: target } as any] });
+      }
+    } catch {}
+  }
+}
+
+export function toggleTimemarkModeInsideCam(): void {
+  const next: "time_in" | "time_out" = runtime.timeLogMode === "time_in" ? "time_out" : "time_in";
+  setTimeLogMode(next, true);
+  toast(next === "time_in" ? "Switched to 🟢 TIME IN" : "Switched to 🔴 TIME OUT");
+}
+
+export function toggleTimemarkSitePicker(): void {
+  const bar = $("timemarkSiteBar");
+  const sel = $("timemarkSiteSelect") as HTMLSelectElement | null;
+  if (bar) bar.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  sel?.focus();
+}
+
+export function showTimemarkVerifyInfo(): void {
+  if (!timemarkPhotoCode) timemarkPhotoCode = generateTimemarkPhotoCode();
+  toast(`🛡️ Verified Photo Code: ${timemarkPhotoCode}`);
+}
+
+export function openLastTimemarkPreview(): void {
+  if (!timemarkLastPreviewUrl) {
+    toast("Capture a photo first to preview it");
+    return;
+  }
+  openPhotoPreview(timemarkLastPreviewUrl, "Timemark Photo Preview");
+}
+
+const TIMEMARK_TEMPLATE_LIST: Array<{ id: TimemarkTemplateId; title: string; subtitle: string; badge: string }> = [
+  { id: "clock_in", title: "Clock in", subtitle: "Time In/Out · EESI Logo · Address · Map", badge: "TIME IN / OUT" },
+  { id: "time_loc", title: "Time&Location", subtitle: "Large Clock · Date · Location", badge: "CLEAN STAMP" },
+  { id: "work_report", title: "Work Report", subtitle: "Amber Header · Site · Technician · Code", badge: "REPORT" },
+  { id: "inspection", title: "Inspection", subtitle: "Compass · Altitude · Coordinates · Stamp", badge: "INSPECT" },
+  { id: "service", title: "Service", subtitle: "EESI Blue Header · Unit · Address", badge: "SERVICE" },
+  { id: "photo_code", title: "Photo Code", subtitle: "Verified Authenticity Stamp · Address", badge: "VERIFIED" },
+];
+
+export function renderTimemarkTemplatesGrid(): void {
+  const grid = $("timemarkTemplatesGrid");
+  if (!grid) return;
+  const q = val("tmTemplateSearch").trim().toLowerCase();
+  const filtered = TIMEMARK_TEMPLATE_LIST.filter(t =>
+    !q || t.title.toLowerCase().includes(q) || t.subtitle.toLowerCase().includes(q)
+  );
+  grid.innerHTML = filtered.map(t => {
+    const active = tmCfg.templateId === t.id;
+    return `<div class="tm-tpl-card${active ? " active" : ""}" onclick="selectTimemarkTemplate('${t.id}')">` +
+      `<div class="tm-tpl-mini">` +
+        `<div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">` +
+          `<span style="background:#fbbf24;color:#111827;font-weight:900;font-size:9.5px;padding:2px 5px;border-radius:4px;">${esc(t.badge)}</span>` +
+          `<span style="font-size:13px;font-weight:900;">06:35 PM</span>` +
+        `</div>` +
+        `<div style="opacity:.88;font-size:10px;line-height:1.25;">${esc(t.subtitle)}</div>` +
+      `</div>` +
+      `<div style="font-weight:800;font-size:13px;">${esc(t.title)}</div>` +
+      (active
+        ? `<div class="tm-tpl-actions"><button type="button" style="background:#2563eb;color:#fff;border:0;font-weight:800;" onclick="event.stopPropagation();openTimemarkEditDrawer()">Edit</button></div>`
+        : `<div class="tm-tpl-actions"><button type="button" style="background:#e2e8f0;color:#0f172a;border:0;font-weight:700;" onclick="event.stopPropagation();selectTimemarkTemplate('${t.id}')">Use</button></div>`) +
+      `</div>`;
+  }).join("") || '<p class="muted">No matching templates.</p>';
+}
+
+export function openTimemarkTemplatesDrawer(): void {
+  renderTimemarkTemplatesGrid();
+  $("timemarkTemplatesDrawer")?.classList.remove("hidden");
+}
+
+export function closeTimemarkTemplatesDrawer(): void {
+  $("timemarkTemplatesDrawer")?.classList.add("hidden");
+}
+
+export function selectTimemarkTemplate(id: TimemarkTemplateId): void {
+  tmCfg.templateId = id;
+  if (id === "inspection") {
+    tmCfg.showCompass = true;
+    tmCfg.showAltitude = true;
+    tmCfg.showCoordinate = true;
+  } else if (id === "photo_code") {
+    tmCfg.showPhotoCode = true;
+  }
+  saveTimemarkConfig();
+  renderTimemarkTemplatesGrid();
+  updateTimemarkHud();
+}
+
+export function renderTimemarkEditFields(): void {
+  const wrap = $("timemarkEditFields");
+  if (!wrap) return;
+  const rows: Array<{ key: keyof TimemarkConfig; label: string; extra?: string }> = [
+    { key: "showLogo", label: "Logo (EESI Elevators)" },
+    {
+      key: "showTitle",
+      label: "Title",
+      extra: `<input id="tmCustomTitleInput" type="text" value="${esc(tmCfg.customTitle)}" placeholder="${runtime.timeLogMode === "time_out" ? "TIME OUT" : "TIME IN"}" oninput="setTimemarkCustomTitle(this.value)" style="width:130px;padding:4px 8px;border-radius:8px;border:1px solid #cbd5e1;background:#f8fafc;color:#0f172a;font-size:12px;">`
+    },
+    {
+      key: "showStyledNote",
+      label: `Styled Note${tmCfg.styledNoteText ? ": " + tmCfg.styledNoteText : ""}`,
+      extra: `<button type="button" class="tm-icon-btn" style="min-height:28px!important;font-size:11px!important;" onclick="openTimemarkStyledNoteModal()">Aa</button>`
+    },
+    { key: "showTime", label: `Time (${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})` },
+    { key: "showAddress", label: "Address & Work Site" },
+    { key: "showCoordinate", label: "Coordinate (Lat / Lng)" },
+    { key: "showMap", label: "Map: Mini-Map Pin" },
+    { key: "showWeather", label: "Weather" },
+    { key: "showAltitude", label: "Altitude" },
+    { key: "showCompass", label: "Compass Heading" },
+    {
+      key: "showNotes",
+      label: "Notes",
+      extra: `<input id="tmNotesTextInput" type="text" value="${esc(tmCfg.notesText)}" placeholder="Add stamp note…" oninput="setTimemarkNotesText(this.value)" style="width:140px;padding:4px 8px;border-radius:8px;border:1px solid #cbd5e1;background:#f8fafc;color:#0f172a;font-size:12px;">`
+    },
+    { key: "showPhotoCode", label: "Photo Code: verify authenticity" },
+  ];
+
+  wrap.innerHTML = rows.map(r => {
+    const checked = Boolean(tmCfg[r.key]);
+    return `<div class="tm-edit-row">` +
+      `<div class="tm-edit-row-left"><span>${esc(r.label)}</span>${r.extra || ""}</div>` +
+      `<input type="checkbox" class="tm-switch" ${checked ? "checked" : ""} onchange="toggleTimemarkConfigField('${r.key}', this.checked)">` +
+      `</div>`;
+  }).join("");
+
+  const swatches = ["#fbbf24", "#22c55e", "#2563eb", "#ef4444", "#8b5cf6", "#0f172a"];
+  const swWrap = $("timemarkAccentSwatches");
+  if (swWrap) {
+    swWrap.innerHTML = swatches.map(col =>
+      `<button type="button" class="tm-swatch${tmCfg.accentColor === col ? " active" : ""}" style="background:${col};" onclick="setTimemarkAccentColor('${col}')" aria-label="Color ${col}"></button>`
+    ).join("");
+  }
+}
+
+export function openTimemarkEditDrawer(): void {
+  closeTimemarkTemplatesDrawer();
+  renderTimemarkEditFields();
+  $("timemarkEditDrawer")?.classList.remove("hidden");
+  updateTimemarkHud();
+}
+
+export function closeTimemarkEditDrawer(): void {
+  $("timemarkEditDrawer")?.classList.add("hidden");
+  updateTimemarkHud();
+}
+
+export function toggleTimemarkConfigField(key: keyof TimemarkConfig, checked: boolean): void {
+  (tmCfg as any)[key] = !!checked;
+  saveTimemarkConfig();
+  if (key === "showStyledNote" && checked && !tmCfg.styledNoteText.trim()) {
+    openTimemarkStyledNoteModal();
+  }
+  updateTimemarkHud();
+  renderTimemarkEditFields();
+}
+
+export function setTimemarkAccentColor(color: string): void {
+  tmCfg.accentColor = color;
+  saveTimemarkConfig();
+  renderTimemarkEditFields();
+  updateTimemarkHud();
+}
+
+export function setTimemarkCustomTitle(next: string): void {
+  tmCfg.customTitle = String(next || "").trim();
+  saveTimemarkConfig();
+  updateTimemarkHud();
+}
+
+export function setTimemarkNotesText(next: string): void {
+  tmCfg.notesText = String(next || "").trim();
+  if (tmCfg.notesText && !tmCfg.showNotes) {
+    tmCfg.showNotes = true;
+    renderTimemarkEditFields();
+    const inp = $("tmNotesTextInput") as HTMLInputElement | null;
+    if (inp) {
+      inp.focus();
+      const len = inp.value.length;
+      inp.setSelectionRange(len, len);
+    }
+  }
+  saveTimemarkConfig();
+  updateTimemarkHud();
+}
+
+export function promptTimemarkTitle(): void {
+  ($("tmCustomTitleInput") as HTMLInputElement | null)?.focus();
+}
+
+export function editTimemarkNotesText(): void {
+  ($("tmNotesTextInput") as HTMLInputElement | null)?.focus();
+}
+
+export function updateStyledNotePreviewText(): void {
+  const prev = $("tmStyledNoteLivePreview");
+  if (!prev) return;
+  const txt = val("tmStyledNoteInput").trim() || "On Duty";
+  prev.textContent = txt;
+  if (tmCfg.styledNoteBoxed) {
+    prev.style.background = tmCfg.styledNoteColor;
+    prev.style.color = tmCfg.styledNoteColor.toLowerCase() === "#ffffff" ? "#0f172a" : "#ffffff";
+    prev.style.padding = "4px 10px";
+  } else {
+    prev.style.background = "transparent";
+    prev.style.color = tmCfg.styledNoteColor;
+    prev.style.padding = "0";
+  }
+}
+
+export function openTimemarkStyledNoteModal(): void {
+  setVal("tmStyledNoteInput", tmCfg.styledNoteText || "");
+  const swWrap = $("tmStyledNoteSwatches");
+  const cols = ["#ffffff", "#0f172a", "#ef4444", "#f59e0b", "#22c55e", "#2563eb"];
+  if (swWrap) {
+    swWrap.innerHTML = cols.map(c =>
+      `<button type="button" class="tm-swatch${tmCfg.styledNoteColor === c ? " active" : ""}" style="background:${c};" onclick="setTimemarkStyledNoteColor('${c}')"></button>`
+    ).join("");
+  }
+  updateStyledNotePreviewText();
+  $("timemarkStyledNoteModal")?.classList.remove("hidden");
+  setTimeout(() => ($("tmStyledNoteInput") as HTMLInputElement | null)?.focus(), 40);
+}
+
+export function closeTimemarkStyledNoteModal(): void {
+  $("timemarkStyledNoteModal")?.classList.add("hidden");
+}
+
+export function setTimemarkStyledNoteBoxed(boxed: boolean): void {
+  tmCfg.styledNoteBoxed = boxed;
+  saveTimemarkConfig();
+  updateStyledNotePreviewText();
+}
+
+export function setTimemarkStyledNoteColor(color: string): void {
+  tmCfg.styledNoteColor = color;
+  saveTimemarkConfig();
+  openTimemarkStyledNoteModal();
+}
+
+export function saveTimemarkStyledNote(): void {
+  tmCfg.styledNoteText = val("tmStyledNoteInput").trim();
+  tmCfg.showStyledNote = !!tmCfg.styledNoteText;
+  saveTimemarkConfig();
+  closeTimemarkStyledNoteModal();
+  renderTimemarkEditFields();
+  updateTimemarkHud();
+}
+
 async function startTimemarkCameraStream(): Promise<void> {
+  const seq = ++timemarkStreamSeq;
   if (timemarkStream) {
     timemarkStream.getTracks().forEach(t => t.stop());
     timemarkStream = null;
@@ -4206,38 +5268,70 @@ async function startTimemarkCameraStream(): Promise<void> {
     $("timeLogCam")?.click();
     return;
   }
-  try {
-    timemarkStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: timemarkFacing }, width: { ideal: 1280 }, height: { ideal: 960 } },
-      audio: false,
-    });
-    const vid = $("timemarkVideo") as HTMLVideoElement | null;
-    if (vid) {
-      vid.srcObject = timemarkStream;
-      await vid.play().catch(() => {});
-    }
-  } catch {
+
+  const spec = getTimemarkResolutionSpec();
+  const candidates: MediaStreamConstraints[] = [
+    { video: { facingMode: { ideal: timemarkFacing }, width: { ideal: spec.idealW }, height: { ideal: spec.idealH } }, audio: false },
+    { video: { facingMode: { ideal: timemarkFacing }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
+    { video: { facingMode: { ideal: timemarkFacing }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+    { video: { facingMode: timemarkFacing }, audio: false },
+    { video: true, audio: false },
+  ];
+
+  let acquired: MediaStream | null = null;
+  for (const constraints of candidates) {
+    try {
+      acquired = await navigator.mediaDevices.getUserMedia(constraints);
+      break;
+    } catch {}
+  }
+
+  if (seq !== timemarkStreamSeq || $("timemarkCamOverlay")?.classList.contains("hidden")) {
+    acquired?.getTracks().forEach(t => t.stop());
+    return;
+  }
+
+  if (!acquired) {
     closeTimemarkCamera();
     toast("Camera permission needed — using standard camera picker.");
     $("timeLogCam")?.click();
+    return;
   }
+
+  timemarkStream = acquired;
+  const vid = $("timemarkVideo") as HTMLVideoElement | null;
+  if (vid) {
+    vid.onloadedmetadata = () => {
+      if (seq === timemarkStreamSeq) updateTimemarkResReadout();
+    };
+    vid.srcObject = timemarkStream;
+    await vid.play().catch(() => {});
+  }
+  syncTimemarkControlUi();
 }
 
 export function openTimemarkCamera(): void {
+  loadTimemarkConfig();
   const overlay = $("timemarkCamOverlay");
   if (!overlay) {
     $("timeLogCam")?.click();
     return;
   }
   overlay.classList.remove("hidden");
+  timemarkCapturing = false;
+  timemarkPhotoCode = generateTimemarkPhotoCode();
   timemarkProximityAlert = null;
+  timemarkZoomLevel = 1.0;
+  timemarkFlashOn = false;
   $("timemarkDistanceWarning")?.classList.add("hidden");
-  $("timemarkGps")?.classList.remove("timemark-gps-far");
+  syncTimemarkSiteSelectOptions();
+  syncTimemarkControlUi();
 
   const cached = getCachedUserGpsCoords();
   if (cached) {
     timemarkCurrentCoords = cached;
     timemarkCoordsText = `${cached.lat.toFixed(5)}, ${cached.lng.toFixed(5)}`;
+    void resolveTimemarkAddressForCoords(cached.lat, cached.lng);
     void evaluateTimemarkSiteProximity();
   } else {
     timemarkCurrentCoords = null;
@@ -4251,8 +5345,11 @@ export function openTimemarkCamera(): void {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
           acc: Math.round(pos.coords.accuracy || 0),
+          alt: pos.coords.altitude,
+          heading: pos.coords.heading,
         };
         timemarkCoordsText = `${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`;
+        void resolveTimemarkAddressForCoords(pos.coords.latitude, pos.coords.longitude);
         updateTimemarkHud();
         void evaluateTimemarkSiteProximity();
       },
@@ -4272,24 +5369,116 @@ export function openTimemarkCamera(): void {
 }
 
 export function closeTimemarkCamera(): void {
+  timemarkStreamSeq++;
+  timemarkCapturing = false;
   clearInterval(timemarkTimer);
   timemarkTimer = null;
+  clearInterval(timemarkCountdownTimer);
+  timemarkCountdownTimer = null;
+  clearTimeout(timemarkFocusTimer);
+  timemarkFocusTimer = null;
+  $("timemarkCountdown")?.classList.add("hidden");
+  $("timemarkFocusRing")?.classList.remove("show");
+  $("timemarkShutterFlash")?.classList.remove("flash");
   if (timemarkStream) {
     timemarkStream.getTracks().forEach(t => t.stop());
     timemarkStream = null;
   }
   const vid = $("timemarkVideo") as HTMLVideoElement | null;
-  if (vid) vid.srcObject = null;
+  if (vid) {
+    vid.onloadedmetadata = null;
+    vid.srcObject = null;
+  }
+  $("timemarkSideMenu")?.classList.add("hidden");
+  $("timemarkTemplatesDrawer")?.classList.add("hidden");
+  $("timemarkEditDrawer")?.classList.add("hidden");
+  $("timemarkStyledNoteModal")?.classList.add("hidden");
   $("timemarkDistanceWarning")?.classList.add("hidden");
   $("timemarkCamOverlay")?.classList.add("hidden");
 }
 
 export function flipTimemarkCamera(): void {
   timemarkFacing = timemarkFacing === "environment" ? "user" : "environment";
+  syncTimemarkControlUi();
   void startTimemarkCameraStream();
 }
 
+export function triggerTimemarkCapture(): void {
+  if (timemarkCapturing) return;
+  const sec = Number(tmCfg.timerSeconds || 0);
+  if (!sec) {
+    void captureTimemarkPhoto();
+    return;
+  }
+  const cdEl = $("timemarkCountdown");
+  let rem = sec;
+  if (cdEl) {
+    cdEl.textContent = String(rem);
+    cdEl.classList.remove("hidden");
+  }
+  clearInterval(timemarkCountdownTimer);
+  timemarkCountdownTimer = setInterval(() => {
+    rem--;
+    if (rem <= 0) {
+      clearInterval(timemarkCountdownTimer);
+      timemarkCountdownTimer = null;
+      cdEl?.classList.add("hidden");
+      void captureTimemarkPhoto();
+    } else if (cdEl) {
+      cdEl.textContent = String(rem);
+    }
+  }, 1000);
+}
+
+function drawRoundedRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
+  const rad = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rad, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rad);
+  ctx.arcTo(x + w, y + h, x, y + h, rad);
+  ctx.arcTo(x, y + h, x, y, rad);
+  ctx.arcTo(x, y, x + w, y, rad);
+  ctx.closePath();
+}
+
+function drawEesiLogoVector(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
+  const sx = w / 356;
+  const sy = h / 196;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(sx, sy);
+
+  ctx.beginPath();
+  ctx.moveTo(10, 58);
+  ctx.lineTo(178, 14);
+  ctx.lineTo(346, 58);
+  ctx.closePath();
+  ctx.fillStyle = "#1e6cf2";
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "#111111";
+  ctx.stroke();
+
+  ctx.fillStyle = "#ffe500";
+  ctx.fillRect(3, 58, 350, 134);
+  ctx.strokeRect(3, 58, 350, 134);
+
+  ctx.fillStyle = "#1e6cf2";
+  [11, 96.75, 182.5, 268.25].forEach(rx => ctx.fillRect(rx, 66, 76.75, 118));
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "900 96px Arial Black, Helvetica Neue, Arial, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  const letters = ["E", "E", "S", "I"];
+  const xs = [49.4, 135.1, 220.9, 306.6];
+  letters.forEach((ch, idx) => ctx.fillText(ch, xs[idx], 159));
+
+  ctx.restore();
+}
+
 export async function captureTimemarkPhoto(): Promise<void> {
+  if (timemarkCapturing) return;
   const vid = $("timemarkVideo") as HTMLVideoElement | null;
   if (!vid || !vid.videoWidth || !vid.videoHeight) {
     toast("Camera is still starting…");
@@ -4304,63 +5493,409 @@ export async function captureTimemarkPhoto(): Promise<void> {
     if (!ok) return;
   }
 
-  const w = vid.videoWidth;
-  const h = vid.videoHeight;
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
+  timemarkCapturing = true;
+  syncTimemarkControlUi();
 
-  ctx.drawImage(vid, 0, 0, w, h);
+  const flashEl = $("timemarkShutterFlash");
+  if (flashEl) {
+    flashEl.classList.add("flash");
+    setTimeout(() => flashEl.classList.remove("flash"), 140);
+  }
 
-  const now = new Date();
-  const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  const dateStr = now.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "2-digit", year: "numeric" });
-  const sched = findScheduledWorkForUser(localDateKey(now));
-  const siteStr = val("timeLogSite").trim() || sched?.siteName || "EESI Field Site";
-  const unitStr = val("timeLogUnit").trim() || sched?.unitName || "";
-  const modeBadge = runtime.timeLogMode === "time_out" ? "TIME OUT" : "TIME IN";
-  const whoStr = state.profile?.full_name || state.email || "EESI Technician";
+  try {
+    const vw = vid.videoWidth;
+    const vh = vid.videoHeight;
 
-  // Draw Timemark HUD card on bottom-left
-  const pad = Math.max(16, Math.round(w * 0.025));
-  const boxW = Math.min(w - pad * 2, Math.round(w * 0.72));
-  const boxH = Math.round(Math.max(128, h * 0.22));
-  const bx = pad;
-  const by = h - boxH - pad;
+    // Apply aspect ratio crop and zoom
+    let targetAspect = vw / vh;
+    if (tmCfg.ratio === "3:4") targetAspect = 3 / 4;
+    else if (tmCfg.ratio === "1:1") targetAspect = 1;
 
-  ctx.fillStyle = "rgba(6, 14, 31, 0.78)";
-  ctx.fillRect(bx, by, boxW, boxH);
-  ctx.fillStyle = runtime.timeLogMode === "time_out"
-    ? "#ef4444"
-    : (timemarkProximityAlert ? "#f97316" : "#f5a623");
-  ctx.fillRect(bx, by, Math.max(6, Math.round(boxW * 0.015)), boxH);
+    let cropW = vw;
+    let cropH = vh;
+    if (vw / vh > targetAspect) {
+      cropW = Math.round(vh * targetAspect);
+    } else {
+      cropH = Math.round(vw / targetAspect);
+    }
+    const zoomedW = Math.max(1, Math.round(cropW / Math.max(1, timemarkZoomLevel)));
+    const zoomedH = Math.max(1, Math.round(cropH / Math.max(1, timemarkZoomLevel)));
+    const sx = Math.round((vw - zoomedW) / 2);
+    const sy = Math.round((vh - zoomedH) / 2);
 
-  const tx = bx + Math.max(18, Math.round(boxW * 0.04));
-  const baseFont = Math.max(16, Math.round(h * 0.026));
-  ctx.fillStyle = "#ffffff";
-  ctx.font = `800 ${Math.round(baseFont * 1.65)}px Inter, Arial, sans-serif`;
-  ctx.fillText(timeStr, tx, by + Math.round(boxH * 0.34));
+    const spec = getTimemarkResolutionSpec();
+    const croppedRatio = zoomedW / zoomedH;
+    const outW = croppedRatio >= 1
+      ? (Math.abs(croppedRatio - 1) < 0.05 ? spec.portraitBase : spec.landscapeBase)
+      : spec.portraitBase;
+    const outH = Math.round(outW / croppedRatio);
+    const ui = outW / 960;
 
-  ctx.fillStyle = runtime.timeLogMode === "time_out" ? "#fca5a5" : (timemarkProximityAlert ? "#fdba74" : "#86efac");
-  ctx.font = `800 ${Math.round(baseFont * 0.85)}px Inter, Arial, sans-serif`;
-  const hudTitle = timemarkProximityAlert && runtime.timeLogMode === "time_in"
-    ? `EESI ELEVATORS · ${modeBadge} (~${timemarkProximityAlert.distanceLabel} FROM SITE)`
-    : `EESI ELEVATORS · ${modeBadge}`;
-  ctx.fillText(hudTitle, tx, by + Math.round(boxH * 0.54));
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
 
-  ctx.fillStyle = "#e8f0ff";
-  ctx.font = `600 ${Math.round(baseFont * 0.8)}px Inter, Arial, sans-serif`;
-  ctx.fillText(`${dateStr} · ${whoStr}`, tx, by + Math.round(boxH * 0.72));
-  ctx.fillText(`${[siteStr, unitStr].filter(Boolean).join(" / ")} · ${timemarkCoordsText}`, tx, by + Math.round(boxH * 0.89));
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
 
-  canvas.toBlob(blob => {
-    if (!blob) { toast("Could not capture image."); return; }
-    const file = new File([blob], `timemark-${runtime.timeLogMode}-${Date.now()}.jpg`, { type: "image/jpeg" });
+    ctx.save();
+    if (timemarkFacing === "user") {
+      ctx.translate(outW, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(vid, sx, sy, zoomedW, zoomedH, 0, 0, outW, outH);
+    ctx.restore();
+
+    // Optional auto-save clean unwatermarked original in selected 720p/1080p/4K resolution
+    if (tmCfg.autoSaveOriginal) {
+      canvas.toBlob(origBlob => {
+        if (!origBlob) return;
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(origBlob);
+        a.download = `eesi-original-${tmCfg.resolution}-${Date.now()}.jpg`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      }, "image/jpeg", spec.quality);
+    }
+
+    // Subtle bottom contrast gradient vignette matching live viewfinder
+    const vigGrad = ctx.createLinearGradient(0, outH * 0.56, 0, outH);
+    vigGrad.addColorStop(0, "rgba(0,0,0,0)");
+    vigGrad.addColorStop(1, "rgba(0,0,0,0.52)");
+    ctx.fillStyle = vigGrad;
+    ctx.fillRect(0, outH * 0.56, outW, outH * 0.44);
+
+    const d = getTimemarkStampData();
+    if (!timemarkPhotoCode) timemarkPhotoCode = generateTimemarkPhotoCode();
+
+    // Draw Top-Left Floating Satellite Mini-Map Inset (if Map enabled)
+    const mapImg = $("timemarkMiniMapImg") as HTMLImageElement | null;
+    if (tmCfg.showMap && timemarkCurrentCoords && mapImg && mapImg.complete && mapImg.naturalWidth > 0) {
+      const mapSize = Math.round(outW * 0.21);
+      const mx = Math.round(outW * 0.03);
+      const my = Math.round(outW * 0.03);
+      ctx.save();
+      drawRoundedRectPath(ctx, mx, my, mapSize, mapSize, Math.round(16 * ui));
+      ctx.clip();
+      ctx.drawImage(mapImg, mx, my, mapSize, mapSize);
+      ctx.restore();
+
+      ctx.strokeStyle = "rgba(255,255,255,0.94)";
+      ctx.lineWidth = Math.max(2, Math.round(4 * ui));
+      drawRoundedRectPath(ctx, mx, my, mapSize, mapSize, Math.round(16 * ui));
+      ctx.stroke();
+
+      const cx = mx + mapSize / 2;
+      const cy = my + mapSize / 2;
+      ctx.fillStyle = "#ef4444";
+      ctx.beginPath();
+      ctx.arc(cx, cy - 8 * ui, 9 * ui, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = Math.max(1.5, 2.5 * ui);
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = `800 ${Math.round(18 * ui)}px Inter, Arial, sans-serif`;
+      ctx.fillText("Google", mx + 8 * ui, my + mapSize - 8 * ui);
+    }
+
+    // Top-right crisp resolution & verified shield tag
+    ctx.save();
+    const tagTxt = `${spec.label} · EESI VERIFIED`;
+    ctx.font = `800 ${Math.round(16 * ui)}px Inter, Arial, sans-serif`;
+    const tagW = ctx.measureText(tagTxt).width + 24 * ui;
+    const tagH = 30 * ui;
+    const tagX = outW - tagW - Math.round(outW * 0.03);
+    const tagY = Math.round(outW * 0.03);
+    ctx.fillStyle = "rgba(9,16,32,0.72)";
+    drawRoundedRectPath(ctx, tagX, tagY, tagW, tagH, tagH / 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.32)";
+    ctx.lineWidth = Math.max(1, 1.5 * ui);
+    ctx.stroke();
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillText(tagTxt, tagX + 12 * ui, tagY + 20 * ui);
+    ctx.restore();
+
+    const pad = Math.round(outW * 0.032);
+    const maxTextW = Math.round(outW * 0.84);
+    const addressFull = d.selectedSite && !d.addressDisplay.toLowerCase().includes(d.selectedSite.toLowerCase())
+      ? `${d.selectedSite} · ${d.addressDisplay}`
+      : d.addressDisplay;
+
+    const wrapLines = (text: string, font: string, maxW: number): string[] => {
+      ctx.font = font;
+      const words = String(text || "").split(/\s+/);
+      const lines: string[] = [];
+      let cur = "";
+      for (const word of words) {
+        const candidate = cur ? `${cur} ${word}` : word;
+        if (ctx.measureText(candidate).width > maxW && cur) {
+          lines.push(cur);
+          cur = word;
+        } else {
+          cur = candidate;
+        }
+      }
+      if (cur) lines.push(cur);
+      return lines;
+    };
+
+    const detailFont = `600 ${Math.round(22 * ui)}px Inter, Arial, sans-serif`;
+    const detailLines: string[] = [];
+    if (tmCfg.showTime || tmCfg.templateId === "clock_in") detailLines.push(d.dateDisplay);
+    if (tmCfg.showAddress) detailLines.push(...wrapLines(`${addressFull}${d.unit ? ` · ${d.unit}` : ""}`, detailFont, maxTextW));
+    if (tmCfg.showCoordinate) detailLines.push(`Coord: ${d.coordDisplay}`);
+    if (tmCfg.showWeather) detailLines.push(`Weather: ${d.weatherElText}`);
+    if (tmCfg.showAltitude) detailLines.push(`Altitude: ${d.altText}`);
+    if (tmCfg.showCompass) detailLines.push(`Compass: ${d.compassText}`);
+    if (tmCfg.showNotes && tmCfg.notesText.trim()) detailLines.push(...wrapLines(`Note: ${tmCfg.notesText.trim()}`, detailFont, maxTextW));
+    if (runtime.timeLogMode === "time_in" && timemarkProximityAlert) {
+      detailLines.push(`⚠️ ~${timemarkProximityAlert.distanceLabel} FROM ${timemarkProximityAlert.siteName.toUpperCase()}`);
+    }
+    if (tmCfg.showPhotoCode) detailLines.push(`✓ Photo Code: ${timemarkPhotoCode}`);
+
+    const lineHeight = Math.round(29 * ui);
+    const styledNoteH = tmCfg.showStyledNote && tmCfg.styledNoteText.trim() ? Math.round(38 * ui) : 0;
+
+    if (tmCfg.templateId === "work_report" || tmCfg.templateId === "service") {
+      const hdrBg = tmCfg.templateId === "service" ? "#1e6cf2" : tmCfg.accentColor;
+      const hdrCol = tmCfg.templateId === "service" ? "#ffffff" : "#111827";
+      const hdrLabel = tmCfg.templateId === "service" ? "EESI Service Report" : "Work Report";
+      const cardLines = [
+        ...(tmCfg.showTime ? [`${d.timeShort} · ${d.dateDisplay}`] : []),
+        ...wrapLines(`Tech: ${d.whoStr}${d.unit ? ` · ${d.unit}` : ""}`, detailFont, maxTextW - 32 * ui),
+        ...(tmCfg.showAddress ? wrapLines(`Site: ${addressFull}`, detailFont, maxTextW - 32 * ui) : []),
+        ...(tmCfg.showCoordinate ? [`Coord: ${d.coordDisplay}`] : []),
+        ...(tmCfg.showNotes && tmCfg.notesText.trim() ? wrapLines(`Note: ${tmCfg.notesText.trim()}`, detailFont, maxTextW - 32 * ui) : []),
+        ...(tmCfg.showPhotoCode ? [`🛡️ Photo Code: ${timemarkPhotoCode}`] : []),
+      ];
+      const hdrH = Math.round(50 * ui);
+      const bodyPadY = Math.round(14 * ui);
+      const cardH = hdrH + styledNoteH + cardLines.length * lineHeight + bodyPadY * 2;
+      const cardW = Math.min(maxTextW, Math.round(520 * ui));
+      let curY = outH - cardH - pad;
+
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.45)";
+      ctx.shadowBlur = 16 * ui;
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      drawRoundedRectPath(ctx, pad, curY, cardW, cardH, Math.round(14 * ui));
+      ctx.fill();
+      ctx.restore();
+
+      ctx.save();
+      drawRoundedRectPath(ctx, pad, curY, cardW, cardH, Math.round(14 * ui));
+      ctx.clip();
+      ctx.fillStyle = hdrBg;
+      ctx.fillRect(pad, curY, cardW, hdrH);
+      ctx.fillStyle = hdrCol;
+      ctx.font = `800 ${Math.round(21 * ui)}px Inter, Arial, sans-serif`;
+      ctx.fillText(`${hdrLabel} · ${d.titleText}`, pad + 16 * ui, curY + 32 * ui);
+      if (tmCfg.showLogo) {
+        drawEesiLogoVector(ctx, pad + cardW - 76 * ui, curY + 8 * ui, 62 * ui, 34 * ui);
+      }
+      curY += hdrH + bodyPadY;
+
+      if (styledNoteH) {
+        ctx.font = `800 ${Math.round(20 * ui)}px Inter, Arial, sans-serif`;
+        ctx.fillStyle = tmCfg.styledNoteColor.toLowerCase() === "#ffffff" ? "#1e293b" : tmCfg.styledNoteColor;
+        ctx.fillText(tmCfg.styledNoteText, pad + 16 * ui, curY + 22 * ui);
+        curY += styledNoteH;
+      }
+
+      cardLines.forEach((line, i) => {
+        const isCode = line.startsWith("🛡️");
+        ctx.fillStyle = isCode ? "#0369a1" : "#1e293b";
+        ctx.font = isCode ? `800 ${Math.round(20 * ui)}px Inter, Arial, sans-serif` : `600 ${Math.round(21 * ui)}px Inter, Arial, sans-serif`;
+        ctx.fillText(line, pad + 16 * ui, curY + 22 * ui + i * lineHeight);
+      });
+      ctx.restore();
+    } else if (tmCfg.templateId === "inspection") {
+      const cardLines = [
+        ...(tmCfg.showTime ? [`${d.timeShort} · ${d.dateDisplay}`] : []),
+        ...(tmCfg.showAddress ? wrapLines(addressFull, detailFont, maxTextW - 36 * ui) : []),
+        `🧭 ${d.compassText} · ⛰️ ${d.altText}`,
+        ...(tmCfg.showCoordinate ? [`Coord: ${d.coordDisplay}`] : []),
+        ...(tmCfg.showNotes && tmCfg.notesText.trim() ? wrapLines(`Note: ${tmCfg.notesText.trim()}`, detailFont, maxTextW - 36 * ui) : []),
+        ...(tmCfg.showPhotoCode ? [`✓ Photo Code: ${timemarkPhotoCode}`] : []),
+      ];
+      const hdrH = Math.round(48 * ui);
+      const cardH = hdrH + styledNoteH + cardLines.length * lineHeight + Math.round(24 * ui);
+      const cardW = Math.min(maxTextW, Math.round(520 * ui));
+      let curY = outH - cardH - pad;
+
+      ctx.save();
+      ctx.fillStyle = "rgba(9,16,32,0.88)";
+      drawRoundedRectPath(ctx, pad, curY, cardW, cardH, Math.round(14 * ui));
+      ctx.fill();
+      ctx.fillStyle = tmCfg.accentColor || "#fbbf24";
+      ctx.fillRect(pad, curY, Math.round(7 * ui), cardH);
+
+      ctx.font = `900 ${Math.round(20 * ui)}px Inter, Arial, sans-serif`;
+      const bw = ctx.measureText(d.titleText).width + 24 * ui;
+      drawRoundedRectPath(ctx, pad + 18 * ui, curY + 12 * ui, bw, 32 * ui, 7 * ui);
+      ctx.fill();
+      ctx.fillStyle = "#111827";
+      ctx.fillText(d.titleText, pad + 30 * ui, curY + 35 * ui);
+      if (tmCfg.showLogo) {
+        drawEesiLogoVector(ctx, pad + cardW - 78 * ui, curY + 10 * ui, 64 * ui, 35 * ui);
+      }
+      curY += hdrH + 10 * ui;
+      if (styledNoteH) {
+        ctx.font = `800 ${Math.round(20 * ui)}px Inter, Arial, sans-serif`;
+        ctx.fillStyle = tmCfg.styledNoteColor;
+        ctx.fillText(tmCfg.styledNoteText, pad + 18 * ui, curY + 20 * ui);
+        curY += styledNoteH;
+      }
+      cardLines.forEach((line, i) => {
+        const isCode = line.startsWith("✓ Photo Code:");
+        ctx.fillStyle = isCode ? "#7dd3fc" : "#f8fafc";
+        ctx.font = `600 ${Math.round(21 * ui)}px Inter, Arial, sans-serif`;
+        ctx.fillText(line, pad + 18 * ui, curY + 22 * ui + i * lineHeight);
+      });
+      ctx.restore();
+    } else if (tmCfg.templateId === "time_loc") {
+      const hdrH = Math.round(62 * ui);
+      const totalH = styledNoteH + hdrH + detailLines.length * lineHeight + Math.round(16 * ui);
+      let curY = outH - totalH - pad;
+
+      if (styledNoteH) {
+        ctx.font = `800 ${Math.round(22 * ui)}px Inter, Arial, sans-serif`;
+        ctx.fillStyle = tmCfg.styledNoteColor;
+        ctx.fillText(tmCfg.styledNoteText, pad, curY + 23 * ui);
+        curY += styledNoteH;
+      }
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.9)";
+      ctx.shadowBlur = 8 * ui;
+      let hx = pad;
+      if (tmCfg.showTime) {
+        ctx.fillStyle = "#ffffff";
+        ctx.font = `900 ${Math.round(48 * ui)}px Inter, Arial, sans-serif`;
+        ctx.fillText(d.timeShort, hx, curY + 46 * ui);
+        hx += ctx.measureText(d.timeShort).width + 16 * ui;
+      }
+      if (tmCfg.showTitle) {
+        ctx.font = `900 ${Math.round(20 * ui)}px Inter, Arial, sans-serif`;
+        const bw = ctx.measureText(d.titleText).width + 20 * ui;
+        ctx.fillStyle = tmCfg.accentColor || "#fbbf24";
+        drawRoundedRectPath(ctx, hx, curY + 14 * ui, bw, 32 * ui, 7 * ui);
+        ctx.fill();
+        ctx.fillStyle = "#111827";
+        ctx.fillText(d.titleText, hx + 10 * ui, curY + 37 * ui);
+        hx += bw + 12 * ui;
+      }
+      if (tmCfg.showLogo) {
+        drawEesiLogoVector(ctx, hx, curY + 12 * ui, 68 * ui, 37 * ui);
+      }
+      curY += hdrH;
+      detailLines.forEach((line, i) => {
+        const isCode = line.startsWith("✓ Photo Code:");
+        const isWarn = line.startsWith("⚠️");
+        ctx.fillStyle = isWarn ? "#fecaca" : (isCode ? "#bae6fd" : "#ffffff");
+        ctx.font = isCode || isWarn ? `700 ${Math.round(21 * ui)}px Inter, Arial, sans-serif` : detailFont;
+        ctx.fillText(line, pad, curY + 22 * ui + i * lineHeight);
+      });
+      ctx.restore();
+    } else {
+      // Default "clock_in" & "photo_code" matching the exact video stamp
+      const barH = tmCfg.showTitle || tmCfg.showTime || tmCfg.showLogo ? Math.round(62 * ui) : 0;
+      const totalBlockH = styledNoteH + barH + (detailLines.length * lineHeight) + Math.round(18 * ui);
+      let curY = outH - totalBlockH - pad;
+
+      if (styledNoteH) {
+        ctx.font = `800 ${Math.round(22 * ui)}px Inter, Arial, sans-serif`;
+        const snW = Math.min(maxTextW, ctx.measureText(tmCfg.styledNoteText).width + 24 * ui);
+        if (tmCfg.styledNoteBoxed) {
+          ctx.fillStyle = tmCfg.styledNoteColor;
+          drawRoundedRectPath(ctx, pad, curY, snW, Math.round(32 * ui), Math.round(8 * ui));
+          ctx.fill();
+          ctx.fillStyle = tmCfg.styledNoteColor.toLowerCase() === "#ffffff" ? "#0f172a" : "#ffffff";
+        } else {
+          ctx.fillStyle = tmCfg.styledNoteColor;
+        }
+        ctx.fillText(tmCfg.styledNoteText, pad + (tmCfg.styledNoteBoxed ? 12 * ui : 0), curY + 23 * ui);
+        curY += styledNoteH;
+      }
+
+      if (barH > 0) {
+        ctx.font = `900 ${Math.round(36 * ui)}px Inter, Arial, sans-serif`;
+        const clockW = tmCfg.showTime ? ctx.measureText(d.timeShort).width + 18 * ui : 0;
+        ctx.font = `900 ${Math.round(20 * ui)}px Inter, Arial, sans-serif`;
+        const badgeTextW = tmCfg.showTitle ? ctx.measureText(d.titleText).width + 24 * ui : 0;
+        const logoW = tmCfg.showLogo ? 82 * ui : 0;
+        const pillW = Math.min(maxTextW, 14 * ui + badgeTextW + clockW + logoW + 16 * ui);
+
+        ctx.save();
+        ctx.shadowColor = "rgba(0,0,0,0.45)";
+        ctx.shadowBlur = 12 * ui;
+        ctx.fillStyle = "rgba(255,255,255,0.95)";
+        drawRoundedRectPath(ctx, pad, curY, pillW, Math.round(52 * ui), Math.round(12 * ui));
+        ctx.fill();
+        ctx.restore();
+
+        let innerX = pad + 6 * ui;
+        if (tmCfg.showTitle) {
+          ctx.fillStyle = tmCfg.accentColor || "#fbbf24";
+          drawRoundedRectPath(ctx, innerX, curY + 6 * ui, badgeTextW, Math.round(40 * ui), Math.round(8 * ui));
+          ctx.fill();
+          ctx.fillStyle = "#111827";
+          ctx.font = `900 ${Math.round(20 * ui)}px Inter, Arial, sans-serif`;
+          ctx.fillText(d.titleText, innerX + 12 * ui, curY + 33 * ui);
+          innerX += badgeTextW + 12 * ui;
+        }
+        if (tmCfg.showTime) {
+          ctx.fillStyle = "#0f172a";
+          ctx.font = `900 ${Math.round(34 * ui)}px Inter, Arial, sans-serif`;
+          ctx.fillText(d.timeShort, innerX, curY + 38 * ui);
+          innerX += clockW;
+        }
+        if (tmCfg.showLogo) {
+          drawEesiLogoVector(ctx, innerX, curY + 7 * ui, 72 * ui, 38 * ui);
+        }
+        curY += barH;
+      }
+
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.94)";
+      ctx.shadowBlur = 7 * ui;
+      ctx.shadowOffsetY = 1.5 * ui;
+      detailLines.forEach((line, i) => {
+        const isCode = line.startsWith("✓ Photo Code:");
+        const isWarn = line.startsWith("⚠️");
+        ctx.fillStyle = isWarn ? "#fecaca" : (isCode ? "#bae6fd" : "#ffffff");
+        ctx.font = isCode || isWarn ? `700 ${Math.round(21 * ui)}px Inter, Arial, sans-serif` : detailFont;
+        ctx.fillText(line, pad, curY + 22 * ui + i * lineHeight);
+      });
+      ctx.restore();
+    }
+
+    const blob = await new Promise<Blob | null>(resolve =>
+      canvas.toBlob(b => resolve(b), "image/jpeg", spec.quality)
+    );
+    if (!blob) {
+      toast("Could not capture image.");
+      return;
+    }
+    const prevUrl = timemarkLastPreviewUrl;
+    timemarkLastPreviewUrl = URL.createObjectURL(blob);
+    if (prevUrl && prevUrl.startsWith("blob:")) {
+      setTimeout(() => URL.revokeObjectURL(prevUrl), 4000);
+    }
+    const file = new File(
+      [blob],
+      `timemark-${tmCfg.resolution}-${runtime.timeLogMode}-${Date.now()}.jpg`,
+      { type: "image/jpeg" }
+    );
     closeTimemarkCamera();
     void submitTimeLogPhoto(file);
-  }, "image/jpeg", 0.92);
+  } finally {
+    timemarkCapturing = false;
+    syncTimemarkControlUi();
+  }
 }
 
 function getCurrentPreviewExportedIds(): string[] {
@@ -5140,10 +6675,18 @@ export function initFeatureWiring(): void {
     const ls = $("timeLogSite") as HTMLSelectElement | null;
     if (ls) ls.dataset.autoFilled = "0";
     renderTimeLogSitePickers();
+    syncTimemarkSiteSelectOptions();
     if (!$("timemarkCamOverlay")?.classList.contains("hidden")) {
       updateTimemarkHud();
       void evaluateTimemarkSiteProximity();
     }
+  });
+  $("timemarkSiteSelect")?.addEventListener("change", () => {
+    const picked = val("timemarkSiteSelect");
+    setVal("timeLogSite", picked);
+    renderTimeLogSitePickers();
+    updateTimemarkHud();
+    void evaluateTimemarkSiteProximity();
   });
   ["timeLogCam", "timeLogPhoto"].forEach(id => {
     const inp = $(id) as HTMLInputElement | null;
@@ -5421,21 +6964,18 @@ export function initFeatureWiring(): void {
   });
 
   $("cancelAddSite")?.addEventListener("click", () => {
+    runtime.editingSiteId = null;
     $("addSiteOverlay")?.classList.add("hidden");
     resetAddSitePinPicker();
   });
-  $("openAddSite")?.addEventListener("click", () => {
-    $("addSiteOverlay")?.classList.remove("hidden");
-    resetAddSitePinPicker();
-    initAddSitePinPicker();
-  });
+  $("openAddSite")?.addEventListener("click", openAddSiteModal);
 
-  document.querySelectorAll<HTMLElement>("[data-sites-region]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      runtime.sitesRegionFilter = btn.dataset.sitesRegion || "ALL";
-      renderSites();
-      void refreshVisibleSiteDistances(getFilteredSites());
-    });
+  $("sitesRegionTabs")?.addEventListener("click", ev => {
+    const btn = (ev.target as HTMLElement | null)?.closest<HTMLElement>("[data-sites-region]");
+    if (!btn) return;
+    runtime.sitesRegionFilter = btn.dataset.sitesRegion || "ALL";
+    renderSites();
+    void refreshVisibleSiteDistances(getFilteredSites());
   });
   document.querySelectorAll<HTMLElement>("[data-sites-status]").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -5544,12 +7084,36 @@ export function initFeatureWiring(): void {
       const key = markBtn.dataset.markNoticeRead || "";
       const appId = markBtn.dataset.dbApp || "";
       const apprId = markBtn.dataset.dbAppr || "";
-      if (appId) await runtime.client.from("app_notifications").update({ is_read: true }).eq("id", appId);
-      if (apprId) await runtime.client.from("approval_notifications").update({ is_read: true }).eq("id", apprId);
+      if (appId) {
+        state.appNotifications = (state.appNotifications || []).map(n =>
+          String(n.id) === String(appId) ? { ...n, is_read: true } : n
+        );
+      }
+      if (apprId) {
+        state.approvalNotifications = (state.approvalNotifications || []).map(n =>
+          String(n.id) === String(apprId) ? { ...n, is_read: true } : n
+        );
+      }
       markNoticeRead(key);
-      if (appId) await loadAppNotifications();
-      if (apprId) await loadApprovalNotifications();
+      if (appId && navigator.onLine) {
+        await runtime.client.from("app_notifications").update({ is_read: true }).eq("id", appId);
+      }
+      if (apprId && navigator.onLine) {
+        await runtime.client.from("approval_notifications").update({ is_read: true }).eq("id", apprId);
+      }
       toast("Marked as read");
+      return;
+    }
+
+    const delNoticeBtn = target.closest<HTMLElement>("[data-del-notice]");
+    if (delNoticeBtn) {
+      e.stopPropagation();
+      await deleteSingleNotice({
+        key: delNoticeBtn.dataset.delNotice || "",
+        appId: delNoticeBtn.dataset.dbApp || "",
+        approvalId: delNoticeBtn.dataset.dbAppr || "",
+        reportId: delNoticeBtn.dataset.reportId || "",
+      });
       return;
     }
 
@@ -5709,6 +7273,10 @@ export function initFeatureWiring(): void {
         suppressNotifications();
         await loadSchedules();
         toast("Deleted");
+        return;
+      }
+      case "edit-site": {
+        openEditSiteOverlay(id);
         return;
       }
       case "del-site": {
