@@ -160,11 +160,12 @@ CREATE TABLE IF NOT EXISTS public.dtr_entries (
   job TEXT,
   time_in TEXT,
   time_out TEXT,
-  overtime_approved BOOLEAN NOT NULL DEFAULT FALSE,
+  overtime_approved BOOLEAN NOT NULL DEFAULT TRUE,
   approved_by TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE public.dtr_entries ADD COLUMN IF NOT EXISTS approved_by TEXT;
+ALTER TABLE public.dtr_entries ALTER COLUMN overtime_approved SET DEFAULT TRUE;
 ALTER TABLE public.dtr_entries ALTER COLUMN location DROP NOT NULL;
 ALTER TABLE public.dtr_entries ALTER COLUMN job DROP NOT NULL;
 ALTER TABLE public.dtr_entries ALTER COLUMN time_in DROP NOT NULL;
@@ -362,13 +363,17 @@ CREATE TABLE IF NOT EXISTS public.stories (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   author_name TEXT,
+  sender_name TEXT,
   media_url TEXT,
   media_type TEXT NOT NULL DEFAULT 'image' CHECK (media_type IN ('image', 'video', 'text')),
   caption TEXT,
   bg_color TEXT DEFAULT '#1e6cf2',
+  bg_style TEXT DEFAULT 'linear-gradient(135deg,#1e6cf2,#0d2549)',
   expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours'),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE public.stories ADD COLUMN IF NOT EXISTS sender_name TEXT;
+ALTER TABLE public.stories ADD COLUMN IF NOT EXISTS bg_style TEXT;
 
 /* 4. SECURITY HELPER FUNCTIONS */
 CREATE OR REPLACE FUNCTION public.is_approved_user()
@@ -839,7 +844,12 @@ CREATE POLICY leave_select ON public.leave_requests FOR SELECT USING (public.is_
 DROP POLICY IF EXISTS leave_insert ON public.leave_requests;
 CREATE POLICY leave_insert ON public.leave_requests FOR INSERT WITH CHECK (public.is_approved_user() AND auth.uid() = user_id);
 DROP POLICY IF EXISTS leave_update ON public.leave_requests;
-CREATE POLICY leave_update ON public.leave_requests FOR UPDATE USING (public.is_manager()) WITH CHECK (public.is_manager());
+CREATE POLICY leave_update ON public.leave_requests FOR UPDATE
+  USING (public.is_manager() OR (auth.uid() = user_id AND status = 'pending'))
+  WITH CHECK (public.is_manager() OR (auth.uid() = user_id AND status = 'pending'));
+DROP POLICY IF EXISTS leave_delete ON public.leave_requests;
+CREATE POLICY leave_delete ON public.leave_requests FOR DELETE
+  USING (public.is_manager() OR (auth.uid() = user_id AND status = 'pending'));
 
 /* Threads, Members, Messages, Reactions */
 DROP POLICY IF EXISTS threads_select ON public.threads;
@@ -955,6 +965,13 @@ CREATE INDEX IF NOT EXISTS idx_dtr_entries_user_date ON public.dtr_entries (user
 CREATE INDEX IF NOT EXISTS idx_dtr_time_logs_created_at ON public.dtr_time_logs (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_recommendations_created_at ON public.recommendations (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_stories_expires_at ON public.stories (expires_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_thread_created ON public.messages (thread_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_thread_members_user ON public.thread_members (user_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_leave_requests_user ON public.leave_requests (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_locations_updated ON public.employee_locations (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_notifications_created ON public.app_notifications (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reports_date_created ON public.service_delivery_reports (report_date DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pms_date_created ON public.pms_checklist_records (checklist_date DESC, created_at DESC);
 
 /* 10. SEED AYALA MALLS CENTRAL BLOC (AMCB) & 34 UNITS */
 DO $$

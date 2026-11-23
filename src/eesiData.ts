@@ -1856,7 +1856,13 @@ export async function resolveSiteCoordinatesByName(siteName: string): Promise<{ 
     city: site.city || "",
     region: site.region || "",
   });
-  if (resolved && Number.isFinite(resolved.lat) && Number.isFinite(resolved.lng)) {
+  if (
+    resolved &&
+    resolved.lat !== null &&
+    resolved.lng !== null &&
+    Number.isFinite(resolved.lat) &&
+    Number.isFinite(resolved.lng)
+  ) {
     site.latitude = resolved.lat;
     site.longitude = resolved.lng;
     return { lat: resolved.lat, lng: resolved.lng, name: site.name };

@@ -847,10 +847,12 @@ async function bootInner(session: any): Promise<void> {
     loadPmsRecords(),
     loadReports(),
     loadStories(),
+    loadAppNotifications(),
+    loadApprovalNotifications(),
+    loadThreads(),
   ]);
   void ensureAmcbUnitsSeeded();
   await Promise.all([
-    loadThreads(),
     loadUnread(),
     loadRecentChatNotices(),
   ]);
@@ -858,6 +860,7 @@ async function bootInner(session: any): Promise<void> {
 
   state.booted = true;
   renderAssigneesPicker();
+  renderReportSites();
   renderAll();
   startLive();
 }
@@ -869,11 +872,6 @@ async function boot(session: any): Promise<void> {
   try {
     await bootInner(session);
     if (!state.booted) return;
-    renderReportSites();
-    await Promise.all([
-      loadAppNotifications(),
-      loadApprovalNotifications(),
-    ]);
     syncPushSession(session);
     enablePush(true);
     const openedFromPush = await openStartupThread();
@@ -901,6 +899,11 @@ function resetState(): void {
   runtime.replyingToMsg = null;
   runtime.expandedUnitSiteIds = {};
   runtime.selectedUnitsSiteId = null;
+  runtime.unitsLocationFilter = "ALL";
+  runtime.unitsSideFilter = "ALL";
+  runtime.unitsFloorFilter = "ALL";
+  runtime.unitsDirFilter = "ALL";
+  runtime.unitsShowAllInline = false;
   runtime.editingLeaveId = null;
   runtime.adminRoleFilter = "all";
   runtime.selectedSiteId = null;

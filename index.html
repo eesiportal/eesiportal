@@ -954,6 +954,20 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
         <button class="tab" type="button" data-units-region="Visayas">Visayas</button>
         <button class="tab" type="button" data-units-region="Mindanao">Mindanao</button>
       </div>
+      <div class="card" style="padding:10px 12px;margin-bottom:10px;">
+        <div class="row" style="gap:8px;margin-bottom:8px;">
+          <div class="field" style="margin-bottom:0;"><label for="unitsLocationFilter">Location / Site</label><select id="unitsLocationFilter"><option value="ALL">All Locations &amp; Sites</option></select></div>
+          <div class="field" style="margin-bottom:0;"><label for="unitsSideFilter">Side</label><select id="unitsSideFilter"><option value="ALL">All Sides</option></select></div>
+        </div>
+        <div class="row" style="gap:8px;margin-bottom:8px;">
+          <div class="field" style="margin-bottom:0;"><label for="unitsFloorFilter">Floor Level</label><select id="unitsFloorFilter"><option value="ALL">All Floors</option></select></div>
+          <div class="field" style="margin-bottom:0;"><label for="unitsDirFilter">Direction (Up / Down)</label><select id="unitsDirFilter"><option value="ALL">All (Up, Down &amp; Elevators)</option><option value="UP">⬆️ UP</option><option value="DOWN">⬇️ DOWN</option><option value="ELEVATOR">🛗 Elevators</option></select></div>
+        </div>
+        <div class="inline-actions" style="justify-content:space-between;margin-top:4px;">
+          <button id="unitsShowAllBtn" class="gray small-btn" type="button">📋 Expand All Units Inline</button>
+          <button id="unitsResetFiltersBtn" class="gray small-btn hidden" type="button">✕ Reset Filters</button>
+        </div>
+      </div>
       <div id="unitsSetupHint" class="card warn hidden"></div>
       <div id="unitsListView"><div id="unitsList"></div></div>
       <input id="unitManualFile" type="file" class="sr-file-input" accept="image/*,.pdf,.doc,.docx,.txt">

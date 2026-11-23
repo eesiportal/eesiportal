@@ -70,6 +70,8 @@ import {
 } from "./eesiTypes";
 import {
   createSiteAutoSnapshotFile,
+  getCachedUserGpsCoords,
+  haversineMeters,
   initAddSitePinPicker,
   initSitesMapOverview,
   isNoticeMarkedRead,
@@ -98,6 +100,7 @@ import {
   resetAddSitePinPicker,
   resolveSiteAddressAndPin,
   resolveSiteAutoPhotoUrl,
+  resolveSiteCoordinatesByName,
   saveLastView,
   scheduleSiteMapLazyInit,
   timelineReports,
@@ -2013,31 +2016,146 @@ export async function ensureAmcbUnitsSeeded(): Promise<void> {
   } catch {}
 }
 
+function parseFloorTokenLevel(rawTok: string): number {
+  const t = String(rawTok || "").trim().toUpperCase();
+  if (!t) return 999;
+  const bMatch = t.match(/^B(\d+)$/);
+  if (bMatch) return -Number(bMatch[1]);
+  if (t === "G" || t === "GF" || t === "GROUND") return 0;
+  if (t === "M" || t === "MZ" || t === "MEZZ") return 0.5;
+  const lMatch = t.match(/^(?:L|F)?(\d+)(?:F)?$/);
+  if (lMatch) return Number(lMatch[1]);
+  return 999;
+}
+
+function formatFloorBadge(lvl: number, raw: string): string {
+  if (lvl < 0) return `B${Math.abs(lvl)}`;
+  if (lvl === 0) return "G";
+  if (lvl === 0.5) return "MZ";
+  if (lvl < 100 && Number.isInteger(lvl)) return lvl === 1 ? "1F" : `${lvl}F`;
+  return String(raw || "").trim().toUpperCase();
+}
+
+function extractUnitTaxonomy(u: any): {
+  side: string;
+  floorLabel: string;
+  floorRank: number;
+  direction: "UP" | "DOWN" | "ELEVATOR";
+  directionRank: number;
+  cleanNotes: string;
+} {
+  const manualMeta = parseUnitManualMeta(u.notes);
+  const sideMeta = parseUnitSideTag(manualMeta.cleanNotes);
+  let side = sideMeta.side;
+  const combined = [u.unit_name, u.capacity_floors, sideMeta.cleanNotes].filter(Boolean).join(" ");
+  if (!side) {
+    const inlineSide = combined.match(/\b([A-Za-z0-9]+(?:\s+[A-Za-z0-9]+)?\s+SIDE)\b/i);
+    if (inlineSide) side = inlineSide[1].trim().toUpperCase();
+  }
+  side = side || "GENERAL SIDE";
+
+  // Extract floor transition pair (e.g. B2-B3, G-B1, 2-G, 3-4)
+  const pairMatch = combined.match(/\b(B\d+|GF|G|MZ|M|L?\d+F?)\s*[-–/]\s*(B\d+|GF|G|MZ|M|L?\d+F?)\b/i);
+  let floorLabel = "General Floor";
+  let floorRank = 500;
+  let inferredDir: "UP" | "DOWN" | null = null;
+
+  if (pairMatch) {
+    const aLvl = parseFloorTokenLevel(pairMatch[1]);
+    const bLvl = parseFloorTokenLevel(pairMatch[2]);
+    if (aLvl < 999 && bLvl < 999) {
+      const lowLvl = Math.min(aLvl, bLvl);
+      const highLvl = Math.max(aLvl, bLvl);
+      const lowName = formatFloorBadge(lowLvl, aLvl <= bLvl ? pairMatch[1] : pairMatch[2]);
+      const highName = formatFloorBadge(highLvl, bLvl >= aLvl ? pairMatch[2] : pairMatch[1]);
+      floorLabel = lowLvl === highLvl ? lowName : `${lowName} ↔ ${highName}`;
+      floorRank = lowLvl * 10 + highLvl;
+      if (bLvl > aLvl) inferredDir = "UP";
+      else if (bLvl < aLvl) inferredDir = "DOWN";
+    }
+  } else if (u.unit_type === "elevator") {
+    floorLabel = /cargo|service/i.test(combined) ? "Cargo / Service Elevators" : "Passenger Elevators";
+    floorRank = 700;
+  } else if (u.capacity_floors) {
+    floorLabel = String(u.capacity_floors).replace(/\s*·\s*(UP|DOWN)\b/gi, "").trim() || "General Floor";
+  }
+
+  let direction: "UP" | "DOWN" | "ELEVATOR" = "ELEVATOR";
+  if (/\bUP\b/i.test(combined)) direction = "UP";
+  else if (/\bDOWN\b/i.test(combined)) direction = "DOWN";
+  else if (inferredDir) direction = inferredDir;
+  else if (u.unit_type !== "elevator") direction = "UP";
+
+  const directionRank = direction === "UP" ? 1 : direction === "DOWN" ? 2 : 3;
+  return {
+    side,
+    floorLabel,
+    floorRank,
+    direction,
+    directionRank,
+    cleanNotes: sideMeta.cleanNotes,
+  };
+}
+
 function buildSiteUnitsHtml(site: any, siteUnits: any[]): string {
   if (!siteUnits.length) {
     return '<p class="muted" style="margin:8px 0 0;">No units added for this site yet.</p>';
   }
-  const hasSideTags = siteUnits.some(u => !!parseUnitSideTag(parseUnitManualMeta(u.notes).cleanNotes).side);
-  if (hasSideTags) {
-    const sideOrder = ["SEDA SIDE", "IVILLA SIDE", "PADRIGA SIDE"];
-    const grouped: Record<string, any[]> = {};
-    siteUnits.forEach(u => {
-      const sTag = parseUnitSideTag(parseUnitManualMeta(u.notes).cleanNotes).side || "OTHER UNITS";
-      (grouped[sTag] = grouped[sTag] || []).push(u);
+
+  const sideOrder = ["SEDA SIDE", "IVILLA SIDE", "PADRIGA SIDE"];
+  const bySide: Record<string, Array<{ unit: any; tax: ReturnType<typeof extractUnitTaxonomy> }>> = {};
+
+  siteUnits.forEach(u => {
+    const tax = extractUnitTaxonomy(u);
+    (bySide[tax.side] = bySide[tax.side] || []).push({ unit: u, tax });
+  });
+
+  const orderedSides = [
+    ...sideOrder.filter(k => bySide[k]?.length),
+    ...Object.keys(bySide).filter(k => !sideOrder.includes(k)).sort(),
+  ];
+
+  return orderedSides.map(sideName => {
+    const sideItems = bySide[sideName];
+    const byFloor = new Map<string, { rank: number; items: Array<{ unit: any; tax: ReturnType<typeof extractUnitTaxonomy> }> }>();
+
+    sideItems.forEach(entry => {
+      const fKey = entry.tax.floorLabel;
+      let fg = byFloor.get(fKey);
+      if (!fg) {
+        fg = { rank: entry.tax.floorRank, items: [] };
+        byFloor.set(fKey, fg);
+      }
+      fg.items.push(entry);
     });
-    const orderedSides = [
-      ...sideOrder.filter(k => grouped[k]?.length),
-      ...Object.keys(grouped).filter(k => !sideOrder.includes(k)).sort(),
-    ];
-    return orderedSides.map(sideName =>
-      `<div class="person-group-title" style="margin-top:10px;">${esc(sideName)} (${grouped[sideName].length})</div>` +
-      grouped[sideName].map(u => renderUnitCardRow(u, site)).join("")
-    ).join("");
-  }
-  return [...siteUnits]
-    .sort((a, b) => String(a.unit_name || "").localeCompare(String(b.unit_name || "")))
-    .map(u => renderUnitCardRow(u, site))
-    .join("");
+
+    const orderedFloors = [...byFloor.entries()].sort((a, b) => a[1].rank - b[1].rank || a[0].localeCompare(b[0]));
+
+    const floorsHtml = orderedFloors.map(([floorLabel, fg]) => {
+      const sortedEntries = [...fg.items].sort(
+        (a, b) => a.tax.directionRank - b.tax.directionRank || String(a.unit.unit_name || "").localeCompare(String(b.unit.unit_name || ""))
+      );
+      const upCount = sortedEntries.filter(e => e.tax.direction === "UP").length;
+      const downCount = sortedEntries.filter(e => e.tax.direction === "DOWN").length;
+      const dirSummary = [
+        upCount ? `⬆️ ${upCount} UP` : "",
+        downCount ? `⬇️ ${downCount} DOWN` : "",
+      ].filter(Boolean).join(" · ");
+
+      return `<div style="margin:8px 0 6px;padding-left:6px;border-left:2px solid rgba(30,108,242,.35);">` +
+        `<div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">` +
+        `<span>🪜 Floor: ${esc(floorLabel)}</span>` +
+        (dirSummary ? `<span class="badge">${esc(dirSummary)}</span>` : "") +
+        `</div>` +
+        sortedEntries.map(e => renderUnitCardRow(e.unit, site, e.tax)).join("") +
+        `</div>`;
+    }).join("");
+
+    return `<div style="margin-top:10px;">` +
+      `<div class="person-group-title" style="margin-top:0;">📐 ${esc(sideName)} (${sideItems.length})</div>` +
+      floorsHtml +
+      `</div>`;
+  }).join("");
 }
 
 export function openSiteUnitsOverlay(siteId: string): void {
@@ -2362,25 +2480,99 @@ export async function deleteUnit(unitId: string): Promise<void> {
   toast("Unit deleted");
 }
 
-function renderUnitCardRow(u: any, site: any): string {
+function renderUnitCardRow(u: any, site: any, taxOpt?: ReturnType<typeof extractUnitTaxonomy>): string {
   const canManage = isManager() || String(u.created_by) === String(state.userId);
   const statusBadge = u.status === "Operational" ? "now" : (u.status === "Needs Repair" || u.status === "Shutdown" ? "" : "soon");
   const badgeStyle = (u.status === "Needs Repair" || u.status === "Shutdown") ? ' style="background:var(--red);color:#fff;"' : "";
-  const specs = [u.unit_type, u.brand_model, u.serial_no ? "S/N: " + u.serial_no : "", u.capacity_floors].filter(Boolean).join(" · ");
-  const meta = parseUnitManualMeta(u.notes);
-  const sideMeta = parseUnitSideTag(meta.cleanNotes);
-  return '<div class="item" style="margin-top:8px;">' +
+  const tax = taxOpt || extractUnitTaxonomy(u);
+  const dirBadge = tax.direction === "UP"
+    ? '<span class="badge" style="background:rgba(16,185,129,.18);color:#10b981;font-weight:700;">⬆️ UP</span>'
+    : (tax.direction === "DOWN"
+        ? '<span class="badge" style="background:rgba(245,166,35,.18);color:#f59e0b;font-weight:700;">⬇️ DOWN</span>'
+        : '<span class="badge">🛗 ELEVATOR</span>');
+  const specs = [u.unit_type, u.brand_model, u.serial_no ? "S/N: " + u.serial_no : "", tax.floorLabel].filter(Boolean).join(" · ");
+  return '<div class="item" style="margin-top:6px;">' +
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">' +
-    '<div><b>🛗 ' + esc(u.unit_name) + '</b> <span class="sess-badge ' + statusBadge + '"' + badgeStyle + ">" + esc(u.status || "Operational") + "</span></div>" +
+    '<div><b>🛗 ' + esc(u.unit_name) + '</b> ' + dirBadge + ' <span class="sess-badge ' + statusBadge + '"' + badgeStyle + ">" + esc(u.status || "Operational") + "</span></div>" +
     '<span class="muted" style="font-size:12px;">📍 ' + esc(site.name + (site.city ? " · " + site.city : "")) + "</span></div>" +
     '<div class="muted">' + esc(specs) + "</div>" +
-    (sideMeta.cleanNotes ? '<div style="margin-top:4px;font-size:12px;">' + esc(sideMeta.cleanNotes) + "</div>" : "") +
+    (tax.cleanNotes ? '<div style="margin-top:4px;font-size:12px;">' + esc(tax.cleanNotes) + "</div>" : "") +
     '<div class="inline-actions">' +
     '<button class="btn small-btn" type="button" onclick="openUnitManual(\'' + esc(u.id) + '\')">📖 Manual</button>' +
     '<button class="gray small-btn" type="button" onclick="openUnitPms(\'' + esc(site.id) + "','" + esc(site.region) + "','" + esc(u.unit_type) + "','" + esc(u.id) + '\')">✅ PMS</button>' +
     '<button class="gray small-btn" type="button" onclick="openUnitReport(\'' + esc(site.id) + "','" + esc(u.unit_name) + "','" + esc(u.id) + '\')">📄 Report</button>' +
     (canManage ? '<button class="gray small-btn" type="button" onclick="editUnit(\'' + esc(u.id) + '\')">Edit</button><button class="red small-btn" type="button" onclick="deleteUnit(\'' + esc(u.id) + '\')">Delete</button>' : "") +
     "</div></div>";
+}
+
+function syncUnitsTaxonomyFilterOptions(regionSites: any[]): void {
+  const locSel = $("unitsLocationFilter") as HTMLSelectElement | null;
+  const sideSel = $("unitsSideFilter") as HTMLSelectElement | null;
+  const floorSel = $("unitsFloorFilter") as HTMLSelectElement | null;
+  const dirSel = $("unitsDirFilter") as HTMLSelectElement | null;
+  const resetBtn = $("unitsResetFiltersBtn");
+  const expandBtn = $("unitsShowAllBtn");
+
+  const regionSiteIds = new Set(regionSites.map(s => String(s.id)));
+  const regionUnits = state.units.filter(u => regionSiteIds.has(String(u.site_id)));
+
+  if (locSel) {
+    const prev = runtime.unitsLocationFilter || "ALL";
+    locSel.innerHTML = '<option value="ALL">All Locations &amp; Sites</option>' +
+      regionSites
+        .map(s => `<option value="${esc(s.id)}">${esc(s.name)}${s.city ? " · " + esc(s.city) : ""}</option>`)
+        .join("");
+    locSel.value = (prev === "ALL" || regionSites.some(s => String(s.id) === prev)) ? prev : "ALL";
+    runtime.unitsLocationFilter = locSel.value;
+  }
+
+  const scopedUnits = runtime.unitsLocationFilter !== "ALL"
+    ? regionUnits.filter(u => String(u.site_id) === String(runtime.unitsLocationFilter))
+    : regionUnits;
+  const taxList = scopedUnits.map(u => extractUnitTaxonomy(u));
+
+  if (sideSel) {
+    const prev = runtime.unitsSideFilter || "ALL";
+    const sideOrder = ["SEDA SIDE", "IVILLA SIDE", "PADRIGA SIDE"];
+    const uniqueSides = [...new Set(taxList.map(t => t.side))];
+    const sortedSides = [
+      ...sideOrder.filter(s => uniqueSides.includes(s)),
+      ...uniqueSides.filter(s => !sideOrder.includes(s)).sort(),
+    ];
+    sideSel.innerHTML = '<option value="ALL">All Sides</option>' +
+      sortedSides.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
+    sideSel.value = (prev === "ALL" || sortedSides.includes(prev)) ? prev : "ALL";
+    runtime.unitsSideFilter = sideSel.value;
+  }
+
+  if (floorSel) {
+    const prev = runtime.unitsFloorFilter || "ALL";
+    const floorMap = new Map<string, number>();
+    taxList.forEach(t => {
+      if (!floorMap.has(t.floorLabel)) floorMap.set(t.floorLabel, t.floorRank);
+    });
+    const sortedFloors = [...floorMap.entries()]
+      .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
+      .map(([lbl]) => lbl);
+    floorSel.innerHTML = '<option value="ALL">All Floors</option>' +
+      sortedFloors.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join("");
+    floorSel.value = (prev === "ALL" || sortedFloors.includes(prev)) ? prev : "ALL";
+    runtime.unitsFloorFilter = floorSel.value;
+  }
+
+  if (dirSel) dirSel.value = runtime.unitsDirFilter || "ALL";
+
+  const hasFilters =
+    runtime.unitsLocationFilter !== "ALL" ||
+    runtime.unitsSideFilter !== "ALL" ||
+    runtime.unitsFloorFilter !== "ALL" ||
+    runtime.unitsDirFilter !== "ALL";
+  resetBtn?.classList.toggle("hidden", !hasFilters);
+  if (expandBtn) {
+    expandBtn.textContent = runtime.unitsShowAllInline
+      ? "📂 Collapse Site Cards"
+      : "📋 Expand All Units Inline";
+  }
 }
 
 export function renderUnits(): void {
@@ -2391,10 +2583,21 @@ export function renderUnits(): void {
   const baseRegions = ["Luzon", "Visayas", "Mindanao"];
   const extraRegions = [...new Set(state.sites.map(s => String(s.region || "").trim()).filter(r => r && !baseRegions.includes(r)))].sort();
   const targetRegions = regFilter === "ALL" ? [...baseRegions, ...extraRegions] : [regFilter];
+  const allTargetSites = state.sites.filter(s => targetRegions.includes(String(s.region || "Unassigned")));
+
+  syncUnitsTaxonomyFilterOptions(allTargetSites);
+
+  const locFilter = runtime.unitsLocationFilter || "ALL";
+  const sideFilter = runtime.unitsSideFilter || "ALL";
+  const floorFilter = runtime.unitsFloorFilter || "ALL";
+  const dirFilter = runtime.unitsDirFilter || "ALL";
+  const hasDetailFilter = sideFilter !== "ALL" || floorFilter !== "ALL" || dirFilter !== "ALL";
+  const showInlineUnits = runtime.unitsShowAllInline || hasDetailFilter || locFilter !== "ALL";
 
   const html = targetRegions.map(region => {
     const regionSites = state.sites
       .filter(s => String(s.region || "Unassigned") === region)
+      .filter(s => locFilter === "ALL" || String(s.id) === String(locFilter))
       .sort((a, b) => String(a.city || a.address || a.name || "").localeCompare(String(b.city || b.address || b.name || "")) || String(a.name || "").localeCompare(String(b.name || "")));
     if (!regionSites.length) return "";
 
@@ -2406,29 +2609,53 @@ export function renderUnits(): void {
 
     const areasHtml = Object.keys(byArea).sort().map(area => {
       const sitesHtml = byArea[area].map(site => {
-        const siteUnits = state.units.filter(u => String(u.site_id) === String(site.id));
+        const rawSiteUnits = state.units.filter(u => String(u.site_id) === String(site.id));
+        const filteredSiteUnits = rawSiteUnits.filter(u => {
+          const tax = extractUnitTaxonomy(u);
+          if (sideFilter !== "ALL" && tax.side !== sideFilter) return false;
+          if (floorFilter !== "ALL" && tax.floorLabel !== floorFilter) return false;
+          if (dirFilter !== "ALL" && tax.direction !== dirFilter) return false;
+          return true;
+        });
+
+        if (hasDetailFilter && !filteredSiteUnits.length) return "";
+
         const loc = [site.address, site.city, site.region].filter(Boolean).join(" · ");
         const siteReportsCount = state.reports.filter(r => String(r.site_id) === String(site.id)).length;
         const sitePmsCount = state.pmsRecords.filter(r => String(r.site_id) === String(site.id)).length;
+        const upCount = filteredSiteUnits.filter(u => extractUnitTaxonomy(u).direction === "UP").length;
+        const downCount = filteredSiteUnits.filter(u => extractUnitTaxonomy(u).direction === "DOWN").length;
+        const elevCount = filteredSiteUnits.filter(u => extractUnitTaxonomy(u).direction === "ELEVATOR").length;
+        const countsLine = [
+          `${filteredSiteUnits.length} unit${filteredSiteUnits.length === 1 ? "" : "s"}`,
+          upCount ? `⬆️ ${upCount} UP` : "",
+          downCount ? `⬇️ ${downCount} DOWN` : "",
+          elevCount ? `🛗 ${elevCount} Elev` : "",
+        ].filter(Boolean).join(" · ");
+
         return '<div class="card" style="margin-bottom:10px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">' +
           '<div class="clickable" style="flex:1;min-width:0;" onclick="toggleUnitSiteCard(\'' + esc(site.id) + '\')">' +
           '<h2 style="margin:0 0 4px;font-size:16px;">▸ ' + esc(site.name) +
-          ' <span class="badge">' + siteUnits.length + (siteUnits.length === 1 ? " unit" : " units") + "</span></h2>" +
+          ' <span class="badge">' + esc(countsLine) + "</span></h2>" +
           '<div class="muted">📍 ' + esc(loc) + ' · ' + siteReportsCount + ' report(s) · ' + sitePmsCount + ' PMS</div>' +
-          '<div class="muted" style="font-size:11px;margin-top:2px;">Tap site to view units</div>' +
+          '<div class="muted" style="font-size:11px;margin-top:2px;">Tap site to open popup · Organized by Side → Floor → UP / DOWN</div>' +
           "</div>" +
           '<button class="gray small-btn" type="button" onclick="openSiteOnMap(\'' + esc(site.id) + '\')">📍 Map</button>' +
-          "</div></div>";
-      }).join("");
+          "</div>" +
+          (showInlineUnits ? `<div style="margin-top:8px;">${buildSiteUnitsHtml(site, filteredSiteUnits)}</div>` : "") +
+          "</div>";
+      }).filter(Boolean).join("");
 
-      return `<div class="person-group-title">📍 Area: ${esc(area)}</div>${sitesHtml}`;
-    }).join("");
+      if (!sitesHtml) return "";
+      return `<div class="person-group-title">📍 Location: ${esc(area)}</div>${sitesHtml}`;
+    }).filter(Boolean).join("");
 
+    if (!areasHtml) return "";
     return `<div style="margin-bottom:16px;"><h2 style="margin:8px 0 6px;color:var(--cyan);">🗺️ ${esc(region)}</h2>${areasHtml}</div>`;
   }).filter(Boolean).join("");
 
-  box.innerHTML = html || '<p class="muted">No work sites in ' + esc(regFilter) + " yet.</p>";
+  box.innerHTML = html || '<p class="muted">No matching units found for the selected Region / Location / Side / Floor / Direction.</p>';
   if (!$("siteUnitsOverlay")?.classList.contains("hidden") && runtime.selectedUnitsSiteId) {
     openSiteUnitsOverlay(runtime.selectedUnitsSiteId);
   }
@@ -3865,10 +4092,77 @@ function buildDtrPaper(): void {
 }
 
 /* ==================== TIMEMARK CAMERA ==================== */
+const TIMEMARK_FAR_SITE_THRESHOLD_METERS = 500;
 let timemarkStream: MediaStream | null = null;
 let timemarkFacing: "environment" | "user" = "environment";
 let timemarkTimer: any = null;
 let timemarkCoordsText = "GPS locating…";
+let timemarkCurrentCoords: { lat: number; lng: number; acc: number } | null = null;
+let timemarkProximityAlert: { rawMeters: number; effectiveMeters: number; distanceLabel: string; siteName: string } | null = null;
+let timemarkProxCheckSeq = 0;
+
+function formatProximityDist(meters: number): string {
+  return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(2)} km`;
+}
+
+async function evaluateTimemarkSiteProximity(): Promise<void> {
+  const seq = ++timemarkProxCheckSeq;
+  const warnEl = $("timemarkDistanceWarning");
+  const warnTxtEl = $("timemarkDistanceWarningText");
+  const gpsEl = $("timemarkGps");
+
+  if (runtime.timeLogMode !== "time_in") {
+    timemarkProximityAlert = null;
+    warnEl?.classList.add("hidden");
+    gpsEl?.classList.remove("timemark-gps-far");
+    return;
+  }
+
+  const sched = findScheduledWorkForUser(localDateKey(new Date()));
+  const siteName = val("timeLogSite").trim() || sched?.siteName || "";
+  const userCoords = timemarkCurrentCoords || getCachedUserGpsCoords();
+  if (!siteName || !userCoords) {
+    timemarkProximityAlert = null;
+    warnEl?.classList.add("hidden");
+    gpsEl?.classList.remove("timemark-gps-far");
+    return;
+  }
+
+  const siteCoords = await resolveSiteCoordinatesByName(siteName);
+  if (seq !== timemarkProxCheckSeq) return;
+  if (!siteCoords) {
+    timemarkProximityAlert = null;
+    warnEl?.classList.add("hidden");
+    gpsEl?.classList.remove("timemark-gps-far");
+    return;
+  }
+
+  const rawMeters = haversineMeters(userCoords.lat, userCoords.lng, siteCoords.lat, siteCoords.lng);
+  const accMargin = Math.min(Math.max(0, userCoords.acc || 0), 200);
+  const effectiveMeters = Math.max(0, rawMeters - accMargin);
+
+  if (effectiveMeters > TIMEMARK_FAR_SITE_THRESHOLD_METERS) {
+    const distanceLabel = formatProximityDist(rawMeters);
+    timemarkProximityAlert = {
+      rawMeters,
+      effectiveMeters,
+      distanceLabel,
+      siteName: siteCoords.name,
+    };
+    if (warnTxtEl) {
+      warnTxtEl.textContent =
+        `Far from work site: You are ~${distanceLabel} away from ${siteCoords.name} (outside the ${TIMEMARK_FAR_SITE_THRESHOLD_METERS} m Time-In radius). Move closer or verify the selected work site.`;
+    }
+    warnEl?.classList.remove("hidden");
+    gpsEl?.classList.add("timemark-gps-far");
+    if (gpsEl) gpsEl.textContent = `${timemarkCoordsText} · ⚠️ ~${distanceLabel} from site`;
+  } else {
+    timemarkProximityAlert = null;
+    warnEl?.classList.add("hidden");
+    gpsEl?.classList.remove("timemark-gps-far");
+    if (gpsEl) gpsEl.textContent = `${timemarkCoordsText} · ✓ Near ${siteCoords.name} (${formatProximityDist(rawMeters)})`;
+  }
+}
 
 function updateTimemarkHud(): void {
   const now = new Date();
@@ -3895,7 +4189,9 @@ function updateTimemarkHud(): void {
     siteEl.textContent = [site, unit].filter(Boolean).join(" · ");
   }
   if (gpsEl) {
-    gpsEl.textContent = timemarkCoordsText;
+    gpsEl.textContent = timemarkProximityAlert && runtime.timeLogMode === "time_in"
+      ? `${timemarkCoordsText} · ⚠️ ~${timemarkProximityAlert.distanceLabel} from site`
+      : timemarkCoordsText;
   }
 }
 
@@ -3934,18 +4230,39 @@ export function openTimemarkCamera(): void {
     return;
   }
   overlay.classList.remove("hidden");
-  timemarkCoordsText = "GPS locating…";
+  timemarkProximityAlert = null;
+  $("timemarkDistanceWarning")?.classList.add("hidden");
+  $("timemarkGps")?.classList.remove("timemark-gps-far");
+
+  const cached = getCachedUserGpsCoords();
+  if (cached) {
+    timemarkCurrentCoords = cached;
+    timemarkCoordsText = `${cached.lat.toFixed(5)}, ${cached.lng.toFixed(5)}`;
+    void evaluateTimemarkSiteProximity();
+  } else {
+    timemarkCurrentCoords = null;
+    timemarkCoordsText = "GPS locating…";
+  }
+
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
       pos => {
+        timemarkCurrentCoords = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          acc: Math.round(pos.coords.accuracy || 0),
+        };
         timemarkCoordsText = `${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`;
         updateTimemarkHud();
+        void evaluateTimemarkSiteProximity();
       },
       () => {
-        timemarkCoordsText = `${runtime.lastWeatherLat.toFixed(4)}, ${runtime.lastWeatherLon.toFixed(4)} (Approx)`;
-        updateTimemarkHud();
+        if (!timemarkCurrentCoords) {
+          timemarkCoordsText = `${runtime.lastWeatherLat.toFixed(4)}, ${runtime.lastWeatherLon.toFixed(4)} (Approx)`;
+          updateTimemarkHud();
+        }
       },
-      { enableHighAccuracy: true, timeout: 5000 }
+      { enableHighAccuracy: true, timeout: 6000, maximumAge: 10000 }
     );
   }
   updateTimemarkHud();
@@ -3963,6 +4280,7 @@ export function closeTimemarkCamera(): void {
   }
   const vid = $("timemarkVideo") as HTMLVideoElement | null;
   if (vid) vid.srcObject = null;
+  $("timemarkDistanceWarning")?.classList.add("hidden");
   $("timemarkCamOverlay")?.classList.add("hidden");
 }
 
@@ -3971,12 +4289,21 @@ export function flipTimemarkCamera(): void {
   void startTimemarkCameraStream();
 }
 
-export function captureTimemarkPhoto(): void {
+export async function captureTimemarkPhoto(): Promise<void> {
   const vid = $("timemarkVideo") as HTMLVideoElement | null;
   if (!vid || !vid.videoWidth || !vid.videoHeight) {
     toast("Camera is still starting…");
     return;
   }
+
+  if (runtime.timeLogMode === "time_in" && timemarkProximityAlert) {
+    const ok = await confirmDialog(
+      `Your current GPS location is ~${timemarkProximityAlert.distanceLabel} away from "${timemarkProximityAlert.siteName}". Are you sure you want to submit this Time In anyway?`,
+      "⚠️ Far From Work Site"
+    );
+    if (!ok) return;
+  }
+
   const w = vid.videoWidth;
   const h = vid.videoHeight;
   const canvas = document.createElement("canvas");
@@ -4005,7 +4332,9 @@ export function captureTimemarkPhoto(): void {
 
   ctx.fillStyle = "rgba(6, 14, 31, 0.78)";
   ctx.fillRect(bx, by, boxW, boxH);
-  ctx.fillStyle = runtime.timeLogMode === "time_out" ? "#ef4444" : "#f5a623";
+  ctx.fillStyle = runtime.timeLogMode === "time_out"
+    ? "#ef4444"
+    : (timemarkProximityAlert ? "#f97316" : "#f5a623");
   ctx.fillRect(bx, by, Math.max(6, Math.round(boxW * 0.015)), boxH);
 
   const tx = bx + Math.max(18, Math.round(boxW * 0.04));
@@ -4014,9 +4343,12 @@ export function captureTimemarkPhoto(): void {
   ctx.font = `800 ${Math.round(baseFont * 1.65)}px Inter, Arial, sans-serif`;
   ctx.fillText(timeStr, tx, by + Math.round(boxH * 0.34));
 
-  ctx.fillStyle = runtime.timeLogMode === "time_out" ? "#fca5a5" : "#86efac";
+  ctx.fillStyle = runtime.timeLogMode === "time_out" ? "#fca5a5" : (timemarkProximityAlert ? "#fdba74" : "#86efac");
   ctx.font = `800 ${Math.round(baseFont * 0.85)}px Inter, Arial, sans-serif`;
-  ctx.fillText(`EESI ELEVATORS · ${modeBadge}`, tx, by + Math.round(boxH * 0.54));
+  const hudTitle = timemarkProximityAlert && runtime.timeLogMode === "time_in"
+    ? `EESI ELEVATORS · ${modeBadge} (~${timemarkProximityAlert.distanceLabel} FROM SITE)`
+    : `EESI ELEVATORS · ${modeBadge}`;
+  ctx.fillText(hudTitle, tx, by + Math.round(boxH * 0.54));
 
   ctx.fillStyle = "#e8f0ff";
   ctx.font = `600 ${Math.round(baseFont * 0.8)}px Inter, Arial, sans-serif`;
@@ -4703,6 +5035,34 @@ export function initFeatureWiring(): void {
     });
   });
 
+  $("unitsLocationFilter")?.addEventListener("change", () => {
+    runtime.unitsLocationFilter = val("unitsLocationFilter") || "ALL";
+    renderUnits();
+  });
+  $("unitsSideFilter")?.addEventListener("change", () => {
+    runtime.unitsSideFilter = val("unitsSideFilter") || "ALL";
+    renderUnits();
+  });
+  $("unitsFloorFilter")?.addEventListener("change", () => {
+    runtime.unitsFloorFilter = val("unitsFloorFilter") || "ALL";
+    renderUnits();
+  });
+  $("unitsDirFilter")?.addEventListener("change", () => {
+    runtime.unitsDirFilter = (val("unitsDirFilter") as any) || "ALL";
+    renderUnits();
+  });
+  $("unitsShowAllBtn")?.addEventListener("click", () => {
+    runtime.unitsShowAllInline = !runtime.unitsShowAllInline;
+    renderUnits();
+  });
+  $("unitsResetFiltersBtn")?.addEventListener("click", () => {
+    runtime.unitsLocationFilter = "ALL";
+    runtime.unitsSideFilter = "ALL";
+    runtime.unitsFloorFilter = "ALL";
+    runtime.unitsDirFilter = "ALL";
+    renderUnits();
+  });
+
   const unitManualFile = $("unitManualFile") as HTMLInputElement | null;
   unitManualFile?.addEventListener("change", async () => {
     const f = unitManualFile.files?.[0];
@@ -4780,6 +5140,10 @@ export function initFeatureWiring(): void {
     const ls = $("timeLogSite") as HTMLSelectElement | null;
     if (ls) ls.dataset.autoFilled = "0";
     renderTimeLogSitePickers();
+    if (!$("timemarkCamOverlay")?.classList.contains("hidden")) {
+      updateTimemarkHud();
+      void evaluateTimemarkSiteProximity();
+    }
   });
   ["timeLogCam", "timeLogPhoto"].forEach(id => {
     const inp = $(id) as HTMLInputElement | null;
