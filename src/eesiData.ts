@@ -1102,6 +1102,7 @@ const RELOADERS: Record<string, () => Promise<any> | any> = {
   user_blocks: () => loadBlockedUsers(),
   stories: () => loadStories(),
   payslips: () => loadPayslips(),
+  employee_locations: () => { if (isManager()) return loadLiveMap(); },
 };
 const LIVE_TABLES = Object.keys(RELOADERS);
 
@@ -1129,18 +1130,28 @@ function queueReload(table: string): void {
   }, 280);
 }
 
-export function teardownLive(): void {
-  Object.keys(timers).forEach(t => { clearTimeout(timers[t]); delete timers[t]; });
-  clearTimeout(retryTimer);
-  retryTimer = null;
-  lastOnlineKey = "";
+export function stopLocationWatch(): void {
   if (runtime.locationWatchId != null && navigator.geolocation) {
-    navigator.geolocation.clearWatch(runtime.locationWatchId);
+    try { navigator.geolocation.clearWatch(runtime.locationWatchId); } catch {}
     runtime.locationWatchId = null;
+  }
+  if (locationCoarseWatchId != null && navigator.geolocation) {
+    try { navigator.geolocation.clearWatch(locationCoarseWatchId); } catch {}
+    locationCoarseWatchId = null;
   }
   if (locationHeartbeatTimer) {
     clearInterval(locationHeartbeatTimer);
     locationHeartbeatTimer = null;
+  }
+}
+
+export function teardownLive(stopGps = false): void {
+  Object.keys(timers).forEach(t => { clearTimeout(timers[t]); delete timers[t]; });
+  clearTimeout(retryTimer);
+  retryTimer = null;
+  lastOnlineKey = "";
+  if (stopGps) {
+    stopLocationWatch();
   }
   if (realtimeChannel && runtime.client) { runtime.client.removeChannel(realtimeChannel); realtimeChannel = null; }
   if (presenceChannel && runtime.client) { runtime.client.removeChannel(presenceChannel); presenceChannel = null; }
@@ -1153,7 +1164,7 @@ export function teardownLive(): void {
 }
 
 export function startLive(): void {
-  teardownLive();
+  teardownLive(false);
   if (!state.userId || !runtime.client) return;
   const channel = runtime.client.channel("eesi-db-" + state.userId);
   LIVE_TABLES.forEach(table => channel.on("postgres_changes", { event: "*", schema: "public", table }, () => queueReload(table)));
@@ -1195,6 +1206,7 @@ export function startLive(): void {
   });
   presenceChannel = presence;
   hooks.startCallListener();
+  startEmployeeLocationSharing();
 }
 
 export async function reloadEverything(): Promise<void> {
@@ -1225,10 +1237,40 @@ export async function reloadEverything(): Promise<void> {
 }
 
 /* ==================== LIVE MAP & ALWAYS-ON GPS LOCATION SHARING ==================== */
+const GPS_REFRESH_INTERVAL_MS = 5000;
 let locationHeartbeatTimer: any = null;
+let locationCoarseWatchId: number | null = null;
 let lastLocationUploadAt = 0;
+let lastUploadedAcc = Number.POSITIVE_INFINITY;
 let lastKnownCoords: { lat: number; lng: number; acc: number; updatedAt: number } | null = null;
 let locationLifecycleBound = false;
+let locationUploadInFlight = false;
+let lastGestureRetryAt = 0;
+let lastGeoErrorCode: number | null = null;
+
+function setGpsUiStatus(text: string): void {
+  ["locationStatus", "liveMapMyGpsStatus"].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    el.classList.remove("hidden");
+    el.textContent = text;
+    el.style.cursor = "";
+    el.onclick = null;
+  });
+}
+
+function mergeOwnLocationLocally(lat: number, lng: number, updatedAt: string): void {
+  if (!state.userId) return;
+  const uid = String(state.userId);
+  const idx = liveAllLocationRows.findIndex((r: any) => String(r.user_id) === uid);
+  const row = { user_id: uid, latitude: lat, longitude: lng, updated_at: updatedAt };
+  if (idx >= 0) liveAllLocationRows[idx] = row;
+  else liveAllLocationRows.push(row);
+  renderLiveOnlineMembersList();
+  if (runtime.currentPage === "live-map" && isManager() && !liveBusy) {
+    void loadLiveMap();
+  }
+}
 
 function recordLocalPosition(pos: GeolocationPosition): void {
   const lat = pos.coords.latitude;
@@ -1236,55 +1278,74 @@ function recordLocalPosition(pos: GeolocationPosition): void {
   const acc = Math.round(pos.coords.accuracy || 0);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
 
+  lastGeoErrorCode = null;
   const now = Date.now();
-  // Prefer significantly more accurate recent fixes unless older than 45s
+  // Prefer significantly more accurate recent fixes unless older than 20s
   if (
     lastKnownCoords &&
-    now - lastKnownCoords.updatedAt < 45000 &&
+    now - lastKnownCoords.updatedAt < 20000 &&
     acc > Math.max(250, lastKnownCoords.acc * 2.5)
   ) {
     return;
   }
   lastKnownCoords = { lat, lng, acc, updatedAt: now };
 
-  const statusEl = $("locationStatus");
-  if (statusEl) {
-    statusEl.classList.remove("hidden");
-    statusEl.textContent = "Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + " (±" + acc + " m)";
-  }
+  setGpsUiStatus("🟢 Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Auto-refresh 5s");
   if (Math.abs(lat - runtime.lastWeatherLat) > 0.02 || Math.abs(lng - runtime.lastWeatherLon) > 0.02) {
     updateLiveWeather(lat, lng);
+  }
+}
+
+async function upsertCoordsToSupabase(lat: number, lng: number, acc: number, force = false): Promise<boolean> {
+  if (!state.userId || !runtime.client || locationUploadInFlight) return false;
+  const now = Date.now();
+  const hasRecentUpload = lastLocationUploadAt > 0 && now - lastLocationUploadAt < GPS_REFRESH_INTERVAL_MS - 400;
+  const significantlyMoreAccurate = acc > 0 && lastUploadedAcc > 0 && acc <= lastUploadedAcc * 0.65;
+  if (!force && hasRecentUpload && !significantlyMoreAccurate) {
+    return false;
+  }
+  // Avoid overwriting a recent accurate GPS lock with a coarse cell-tower bounce for 20s
+  if (!force && lastLocationUploadAt > 0 && lastUploadedAcc <= 150 && acc > 2000 && now - lastLocationUploadAt < 20000) {
+    return false;
+  }
+
+  locationUploadInFlight = true;
+  try {
+    const isoNow = new Date().toISOString();
+    const { error } = await runtime.client
+      .from("employee_locations")
+      .upsert(
+        { user_id: state.userId, latitude: lat, longitude: lng, updated_at: isoNow },
+        { onConflict: "user_id" }
+      );
+    if (error) {
+      console.warn("GPS location upload error:", error.message || error);
+      lastLocationUploadAt = 0;
+      return false;
+    }
+    lastLocationUploadAt = Date.now();
+    lastUploadedAcc = acc || lastUploadedAcc;
+    setGpsUiStatus("🟢 Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Auto-refresh 5s");
+    mergeOwnLocationLocally(lat, lng, isoNow);
+    return true;
+  } catch (err) {
+    console.warn("GPS location upload threw:", err);
+    lastLocationUploadAt = 0;
+    return false;
+  } finally {
+    locationUploadInFlight = false;
   }
 }
 
 async function uploadEmployeeCoordinates(pos: GeolocationPosition, isInitial = false): Promise<void> {
   recordLocalPosition(pos);
   if (!state.userId || !runtime.client) return;
-  const statusEl = $("locationStatus");
   const acc = Math.round(pos.coords.accuracy || 0);
-  // Accept indoor / Wi-Fi / network fixes up to 5000m when we don't have a recent upload yet,
-  // while continuing to refine whenever finer GPS fixes arrive.
-  const hasRecentUpload = lastLocationUploadAt > 0 && Date.now() - lastLocationUploadAt < 120000;
-  const maxAcc = !hasRecentUpload ? 5000 : isInitial ? 1000 : 500;
-  if (acc > maxAcc) {
-    if (statusEl) {
-      statusEl.classList.remove("hidden");
-      statusEl.textContent = "Refining GPS signal (±" + acc + " m)…";
-    }
-    return;
-  }
-  const now = Date.now();
-  if (!isInitial && now - lastLocationUploadAt < 5000) return;
-  lastLocationUploadAt = now;
-
   const { latitude, longitude } = pos.coords;
-  if (statusEl) {
-    statusEl.classList.remove("hidden");
-    statusEl.textContent = "Live GPS: " + latitude.toFixed(5) + ", " + longitude.toFixed(5) + " (±" + acc + " m)";
-  }
-  await runtime.client
-    .from("employee_locations")
-    .upsert({ user_id: state.userId, latitude, longitude, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+
+  const dueForRefresh = lastLocationUploadAt === 0 || Date.now() - lastLocationUploadAt >= GPS_REFRESH_INTERVAL_MS - 400;
+  await upsertCoordsToSupabase(latitude, longitude, acc, isInitial || dueForRefresh);
 }
 
 function handleGeoFix(pos: GeolocationPosition, isInitial = false): void {
@@ -1295,83 +1356,174 @@ function handleGeoFix(pos: GeolocationPosition, isInitial = false): void {
   }
 }
 
-function startLocationWatch(): void {
-  const statusEl = $("locationStatus");
-  if (!navigator.geolocation) {
-    if (statusEl) {
-      statusEl.classList.remove("hidden");
-      statusEl.textContent = "This device cannot share location.";
-    }
-    return;
-  }
-  if (statusEl) {
-    statusEl.classList.remove("hidden");
-    if (!lastKnownCoords) statusEl.textContent = "Acquiring GPS location…";
-  }
+export function pushLiveCoordsSample(pos: GeolocationPosition): void {
+  handleGeoFix(pos, true);
+}
+
+function ensureCoarseWatchFallback(): void {
+  if (!navigator.geolocation || locationCoarseWatchId != null) return;
+  locationCoarseWatchId = navigator.geolocation.watchPosition(
+    pos => {
+      handleGeoFix(pos, lastLocationUploadAt === 0);
+      if (Math.round(pos.coords.accuracy || 0) <= 150 && locationCoarseWatchId != null) {
+        try { navigator.geolocation.clearWatch(locationCoarseWatchId); } catch {}
+        locationCoarseWatchId = null;
+      }
+    },
+    () => {},
+    { enableHighAccuracy: false, maximumAge: 10000, timeout: 10000 }
+  );
+}
+
+function requestInstantGeoFix(isInitial: boolean): void {
+  if (!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(
+    pos => { handleGeoFix(pos, isInitial); },
+    err => {
+      lastGeoErrorCode = err?.code ?? null;
+      if (err?.code === 1 && !lastKnownCoords) {
+        setGpsUiStatus("📍 Waiting for Location permission in browser/device settings…");
+      } else if (!lastKnownCoords) {
+        ensureCoarseWatchFallback();
+      }
+      if (state.userId && runtime.client && lastKnownCoords && Date.now() - lastLocationUploadAt >= GPS_REFRESH_INTERVAL_MS - 400) {
+        void upsertCoordsToSupabase(lastKnownCoords.lat, lastKnownCoords.lng, lastKnownCoords.acc, true);
+      }
+    },
+    { enableHighAccuracy: true, maximumAge: 4000, timeout: 4500 }
+  );
 
   navigator.geolocation.getCurrentPosition(
-    pos => { handleGeoFix(pos, true); },
-    () => {
-      // High-accuracy GPS can time out indoors; fall back to network/Wi-Fi geolocation immediately
-      navigator.geolocation.getCurrentPosition(
-        pos => { handleGeoFix(pos, true); },
-        err => {
-          if (statusEl && !lastKnownCoords) {
-            statusEl.textContent = err.code === 1
-              ? "GPS permission needed — allow Location access to keep Live GPS active."
-              : "Acquiring GPS location…";
-          }
-        },
-        { enableHighAccuracy: false, maximumAge: 60000, timeout: 12000 }
-      );
+    pos => { handleGeoFix(pos, isInitial || lastLocationUploadAt === 0); },
+    err => {
+      if (err?.code === 1 && !lastKnownCoords) {
+        lastGeoErrorCode = 1;
+        setGpsUiStatus("📍 Waiting for Location permission in browser/device settings…");
+      }
     },
-    { enableHighAccuracy: true, maximumAge: 10000, timeout: 12000 }
+    { enableHighAccuracy: false, maximumAge: 15000, timeout: 4500 }
   );
+}
+
+function startLocationWatch(forceRestart = false): void {
+  if (!navigator.geolocation) {
+    setGpsUiStatus("This device cannot share GPS location.");
+    return;
+  }
+  if (!lastKnownCoords) {
+    setGpsUiStatus("📡 Auto-enabling GPS location…");
+  }
+
+  if (forceRestart) {
+    stopLocationWatch();
+  }
+
+  requestInstantGeoFix(lastLocationUploadAt === 0);
 
   if (runtime.locationWatchId == null) {
     runtime.locationWatchId = navigator.geolocation.watchPosition(
-      pos => { handleGeoFix(pos, false); },
+      pos => { handleGeoFix(pos, lastLocationUploadAt === 0); },
       err => {
-        if (err?.code === 1 && statusEl && !lastKnownCoords) {
-          statusEl.textContent = "Location permission denied — please enable device GPS.";
+        lastGeoErrorCode = err?.code ?? null;
+        if (err?.code === 1 && !lastKnownCoords) {
+          setGpsUiStatus("📍 Allow Location permission in browser/phone settings for automatic GPS.");
+        } else if (err?.code === 2 || err?.code === 3) {
+          ensureCoarseWatchFallback();
         }
       },
-      { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
+      { enableHighAccuracy: true, maximumAge: 4000, timeout: 10000 }
     );
   }
 
-  if (locationHeartbeatTimer) clearInterval(locationHeartbeatTimer);
-  locationHeartbeatTimer = setInterval(() => {
-    if (document.visibilityState !== "visible") return;
+  if (!lastKnownCoords) {
+    ensureCoarseWatchFallback();
+  }
+
+  if (!locationHeartbeatTimer) {
+    locationHeartbeatTimer = setInterval(() => {
+      if (!navigator.geolocation) return;
+      if (runtime.locationWatchId == null) {
+        startLocationWatch(false);
+        return;
+      }
+      requestInstantGeoFix(false);
+    }, GPS_REFRESH_INTERVAL_MS);
+  }
+}
+
+async function refreshOwnGpsNow(): Promise<boolean> {
+  if (!navigator.geolocation) return false;
+  startLocationWatch(false);
+  const pos = await new Promise<GeolocationPosition | null>(resolve => {
+    let settled = false;
+    const finish = (p: GeolocationPosition | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(p);
+    };
     navigator.geolocation.getCurrentPosition(
-      pos => { handleGeoFix(pos, false); },
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 10000, timeout: 10000 }
+      p => finish(p),
+      () => {
+        navigator.geolocation.getCurrentPosition(
+          p2 => finish(p2),
+          err => {
+            lastGeoErrorCode = err?.code ?? null;
+            finish(null);
+          },
+          { enableHighAccuracy: false, maximumAge: 15000, timeout: 4500 }
+        );
+      },
+      { enableHighAccuracy: true, maximumAge: 4000, timeout: 4500 }
     );
-  }, 15000);
+  });
+
+  if (pos) {
+    await uploadEmployeeCoordinates(pos, true);
+    return true;
+  }
+  if (lastKnownCoords && state.userId && runtime.client) {
+    return await upsertCoordsToSupabase(lastKnownCoords.lat, lastKnownCoords.lng, lastKnownCoords.acc, true);
+  }
+  return false;
 }
 
 export function initAlwaysOnLocation(): void {
-  startLocationWatch();
+  startLocationWatch(false);
   if (locationLifecycleBound) return;
   locationLifecycleBound = true;
 
   const refreshFix = () => {
-    if (document.visibilityState === "visible") startLocationWatch();
+    if (document.visibilityState === "visible") startLocationWatch(false);
   };
   document.addEventListener("visibilitychange", refreshFix);
   window.addEventListener("focus", refreshFix);
 
+  // If a mobile browser suppresses the auto geolocation prompt until the first tap,
+  // automatically retry on user interaction until GPS is locked.
+  const gestureRetry = () => {
+    if (lastKnownCoords && runtime.locationWatchId != null) return;
+    const now = Date.now();
+    if (now - lastGestureRetryAt < GPS_REFRESH_INTERVAL_MS) return;
+    lastGestureRetryAt = now;
+    startLocationWatch(false);
+  };
+  window.addEventListener("pointerdown", gestureRetry, { passive: true });
+
   try {
     if (navigator.permissions?.query) {
       navigator.permissions.query({ name: "geolocation" as PermissionName }).then(perm => {
+        if (perm.state === "denied") {
+          lastGeoErrorCode = 1;
+          setGpsUiStatus("📍 Location permission blocked — allow Location in browser/phone settings.");
+        }
         perm.onchange = () => {
           if (perm.state === "granted") {
-            if (runtime.locationWatchId != null) {
-              try { navigator.geolocation.clearWatch(runtime.locationWatchId); } catch {}
-              runtime.locationWatchId = null;
-            }
-            startLocationWatch();
+            lastGeoErrorCode = null;
+            lastLocationUploadAt = 0;
+            startLocationWatch(true);
+          } else if (perm.state === "denied") {
+            lastGeoErrorCode = 1;
+            setGpsUiStatus("📍 Location permission blocked — allow Location in browser/phone settings.");
           }
         };
       }).catch(() => {});
@@ -1382,14 +1534,10 @@ export function initAlwaysOnLocation(): void {
 export function startEmployeeLocationSharing(): void {
   initAlwaysOnLocation();
   if (state.userId && runtime.client && lastKnownCoords) {
-    const c = lastKnownCoords;
-    lastLocationUploadAt = Date.now();
-    void runtime.client
-      .from("employee_locations")
-      .upsert(
-        { user_id: state.userId, latitude: c.lat, longitude: c.lng, updated_at: new Date().toISOString() },
-        { onConflict: "user_id" }
-      );
+    const hasRecentUpload = lastLocationUploadAt > 0 && Date.now() - lastLocationUploadAt < GPS_REFRESH_INTERVAL_MS - 400;
+    if (!hasRecentUpload) {
+      void upsertCoordsToSupabase(lastKnownCoords.lat, lastKnownCoords.lng, lastKnownCoords.acc, true);
+    }
   }
 }
 
@@ -1454,7 +1602,7 @@ const liveMarkers = new Map<
   string,
   { marker: google.maps.marker.AdvancedMarkerElement; infoHtml: string; position: { lat: number; lng: number } }
 >();
-const LIVE_REFRESH_MS = 10000;
+const LIVE_REFRESH_MS = 5000;
 const LIVE_STALE_MS = 5 * 60 * 1000;
 
 const BASEMAPS: Record<string, "roadmap" | "hybrid" | "terrain"> = {
@@ -1614,6 +1762,10 @@ export async function focusLiveEmployee(userId: string): Promise<void> {
   let entry = liveMarkers.get(uid);
   if (!entry) {
     let locRow = liveAllLocationRows.find((r: any) => String(r.user_id) === uid);
+    if (!locRow && uid === String(state.userId || "")) {
+      await refreshOwnGpsNow();
+      locRow = liveAllLocationRows.find((r: any) => String(r.user_id) === uid);
+    }
     if (!locRow && runtime.client) {
       const { data } = await runtime.client
         .from("employee_locations")
@@ -1625,7 +1777,11 @@ export async function focusLiveEmployee(userId: string): Promise<void> {
       }
     }
     if (!locRow) {
-      toast(`${profileName(uid)} is online, but GPS location is not shared yet.`);
+      toast(
+        uid === String(state.userId || "")
+          ? "Turn on GPS / allow Location permission on your device so your position appears here."
+          : `${profileName(uid)} is online, but GPS location is not shared yet.`
+      );
       return;
     }
 
@@ -1778,7 +1934,7 @@ export async function loadLiveMap(opts: { fit?: boolean } = {}): Promise<void> {
     const freshCount = items.filter(i => i.fresh).length;
     if (statusEl) {
       statusEl.textContent =
-        items.length + " shown (" + freshCount + " live in last 5 min) · Auto-refresh every 10s · Last reload " + new Date().toLocaleTimeString();
+        items.length + " shown (" + freshCount + " live in last 5 min) · Auto-refresh every 5s · Last reload " + new Date().toLocaleTimeString();
     }
     if (listEl) {
       listEl.innerHTML = items.map(({ row, name, roleText, areaTeam, fresh, age }) =>

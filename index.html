@@ -1702,7 +1702,7 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
     <section class="page hidden" id="page-live-map">
       <div class="ct">
         <h1 class="title">🗺️ Live employee locations</h1>
-        <p class="muted">Administrators &amp; Selective Representatives. Refreshes every 10 seconds. Green dot = updated in the last 5 minutes, grey = stale. Monitors Technicians, Selective Representatives &amp; Employees.</p>
+        <p class="muted">Administrators &amp; Selective Representatives. Refreshes every 5 seconds. Green dot = updated in the last 5 minutes, grey = stale. Monitors Technicians, Selective Representatives &amp; Employees.</p>
         <div class="tabs" style="margin-bottom:8px;">
           <button type="button" class="tab active" data-livemap-filter="all" onclick="setLiveMapFilter('all')">All Staff</button>
           <button type="button" class="tab" data-livemap-filter="live" onclick="setLiveMapFilter('live')">🟢 Live Only</button>
@@ -1719,6 +1719,7 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
           <button type="button" class="gray small-btn" onclick="fitLiveMapAll()">Fit all</button>
           <button type="button" class="gray small-btn" onclick="loadLiveMap({ fit: false })">Refresh now</button>
         </div>
+        <p id="liveMapMyGpsStatus" class="muted" style="font-size:12px;margin:4px 0 8px;"></p>
         <div id="liveOnlineMembersCard" class="card" style="padding:12px;margin-bottom:10px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
             <h2 style="margin:0;font-size:15px;">🟢 Online Members (<span id="liveOnlineCount">0</span>)</h2>

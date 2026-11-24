@@ -1144,7 +1144,7 @@ function resetState(): void {
 }
 
 export async function signOut(): Promise<void> {
-  teardownLive();
+  teardownLive(true);
   state.booted = false;
   const { error } = await runtime.client.auth.signOut();
   if (error) { toast("Sign-out failed: " + error.message); return; }
@@ -1294,7 +1294,7 @@ export function initEesiApp(): void {
     if (event === "SIGNED_OUT" || !session) {
       runtime.authRun++;
       state.booted = false;
-      teardownLive();
+      teardownLive(true);
       resetState();
       showAuth("Sign in to continue.");
       return;

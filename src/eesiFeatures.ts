@@ -112,6 +112,7 @@ import {
   markNoticesReadBulk,
   onlineIds,
   openSiteGoogleMap,
+  pushLiveCoordsSample,
   refreshVisibleSiteDistances,
   resetAddSitePinPicker,
   resolveSiteAddressAndPin,
@@ -5763,6 +5764,7 @@ export function openTimemarkCamera(): void {
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
       pos => {
+        pushLiveCoordsSample(pos);
         timemarkCurrentCoords = {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
