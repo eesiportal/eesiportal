@@ -119,6 +119,7 @@ export interface AppState {
   booted: boolean;
   blockedUsers: string[];
   stories: any[];
+  payslips: any[];
 }
 
 export const state: AppState = {
@@ -155,6 +156,7 @@ export const state: AppState = {
   booted: false,
   blockedUsers: [],
   stories: [],
+  payslips: [],
 };
 
 export const runtime = {
@@ -207,6 +209,9 @@ export const runtime = {
   dtrApprovedByColMissing: false,
   storiesTableMissing: false,
   notificationDismissalsTableMissing: false,
+  payslipsTableMissing: false,
+  editingPayslipId: null as string | null,
+  activeDtrSigDataUrl: "" as string,
   amcbSeedAttempted: false,
   dtrCutoffKey: "",
   tickerIndex: 0,
@@ -295,8 +300,11 @@ export const hooks: Record<string, (...args: any[]) => any> = {
   openSiteOnMap: () => {},
   refreshVisibleSiteDistances: async () => {},
   clearDtrAfterExport: async (_ids?: string[]) => {},
+  canRunDtrThreeStepPdf: () => true,
+  completeDtrExportStep: async (_step: "jpeg" | "print" | "pdf", _ids?: string[]) => {},
   renderLiveOnlineMembers: () => {},
   closeSiteUnitsOverlay: () => {},
+  renderPayroll: () => {},
 };
 
 export const $ = (id: string): HTMLElement | null => document.getElementById(id);
@@ -673,19 +681,188 @@ export function filterDtrRowsByCutoff(rows: any[], cutoffKey?: string): { period
   };
 }
 
-export function calculateDtrHours(timeIn: string, timeOut: string, _isApproved = true): number {
-  if (!timeIn || !timeOut) return 0;
-  const p = (t: string) => { const x = String(t).split(":").map(Number); return (x[0] || 0) * 60 + (x[1] || 0); };
-  let mins = p(timeOut) - p(timeIn);
-  if (mins < 0) mins += 1440;
-  return mins / 60;
+export function parseTimeToMinutes(raw: string): number | null {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  const m = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap]\.?m\.?)?$/i);
+  if (!m) return null;
+  let hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm) || mm < 0 || mm > 59) return null;
+  const ap = (m[3] || "").replace(/\./g, "").toLowerCase();
+  if (ap === "pm" && hh < 12) hh += 12;
+  else if (ap === "am" && hh === 12) hh = 0;
+  if (hh < 0 || hh > 23) return null;
+  return hh * 60 + mm;
 }
-export function calculateOtMinutes(timeIn: string, timeOut: string): number {
-  if (!timeIn || !timeOut) return 0;
-  const p = (t: string) => { const x = String(t).split(":").map(Number); return (x[0] || 0) * 60 + (x[1] || 0); };
-  let mins = p(timeOut) - p(timeIn);
+
+export const REGULAR_WORKING_HOURS_PER_DAY = 9;
+export const DTR_MAX_TIME_OUT_MINUTES = 19 * 60; // 7:00 PM (19:00)
+
+export interface DtrRuleOptions {
+  workDate?: string | null;
+  nightshiftRepair?: boolean;
+}
+
+export function isSundayDate(workDate: string | null | undefined): boolean {
+  const s = String(workDate || "").trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return false;
+  const dt = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return !isNaN(dt.getTime()) && dt.getDay() === 0;
+}
+
+export function capDtrTimeOut(
+  timeIn: string | null | undefined,
+  timeOut: string | null | undefined,
+  opts?: DtrRuleOptions
+): string {
+  const rawOut = String(timeOut || "").trim();
+  if (!rawOut) return "";
+  if (opts?.nightshiftRepair) return rawOut;
+  const outMins = parseTimeToMinutes(rawOut);
+  if (outMins === null) return rawOut;
+  const inMins = parseTimeToMinutes(String(timeIn || ""));
+  if ((inMins === null || inMins < DTR_MAX_TIME_OUT_MINUTES) && outMins > DTR_MAX_TIME_OUT_MINUTES) {
+    return "19:00";
+  }
+  return rawOut;
+}
+
+export function calculateDtrMinutes(
+  timeIn: string | null | undefined,
+  timeOut: string | null | undefined,
+  liveNowMinutes?: number | null,
+  opts?: DtrRuleOptions
+): number {
+  const inMins = parseTimeToMinutes(String(timeIn || ""));
+  if (inMins === null) return 0;
+  const outMins = parseTimeToMinutes(String(timeOut || ""));
+  if (outMins === null) {
+    if (typeof liveNowMinutes === "number" && Number.isFinite(liveNowMinutes)) {
+      const effectiveNow = (!opts?.nightshiftRepair && inMins < DTR_MAX_TIME_OUT_MINUTES)
+        ? Math.min(liveNowMinutes, DTR_MAX_TIME_OUT_MINUTES)
+        : liveNowMinutes;
+      return Math.max(0, effectiveNow - inMins);
+    }
+    return 0;
+  }
+  const effectiveOut = (!opts?.nightshiftRepair && inMins < DTR_MAX_TIME_OUT_MINUTES && outMins > DTR_MAX_TIME_OUT_MINUTES)
+    ? DTR_MAX_TIME_OUT_MINUTES
+    : outMins;
+  let mins = effectiveOut - inMins;
   if (mins < 0) mins += 1440;
-  return Math.max(0, mins - 9 * 60);
+  return mins;
+}
+
+export function formatDtrDuration(totalMins: number): string {
+  const total = Math.max(0, Math.round(totalMins));
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  if (h === 0) return `${m} ${m === 1 ? "min" : "mins"}`;
+  return `${h}h ${String(m).padStart(2, "0")}m`;
+}
+
+export function calculateDtrHours(
+  timeIn: string,
+  timeOut: string,
+  _isApproved = true,
+  opts?: DtrRuleOptions
+): number {
+  return calculateDtrMinutes(timeIn, timeOut, null, opts) / 60;
+}
+
+export function calculateOtMinutes(
+  timeIn: string,
+  timeOut: string,
+  opts?: DtrRuleOptions
+): number {
+  return calculateShiftBreakdown(timeIn, timeOut, null, opts).finalOtMins;
+}
+
+export interface DtrShiftBreakdown {
+  workedMins: number;
+  standardMins: number;
+  regularMins: number;
+  lackingMins: number;
+  inShiftWorkedMins: number;
+  grossOtMins: number;
+  finalOtMins: number;
+  shiftStartLabel: string;
+  shiftEndLabel: string;
+  isSunday: boolean;
+  nightshiftRepair: boolean;
+}
+
+export function calculateShiftBreakdown(
+  firstTimeIn: string | null | undefined,
+  lastTimeOut: string | null | undefined,
+  totalWorkedOverride?: number | null,
+  opts?: DtrRuleOptions
+): DtrShiftBreakdown {
+  const standardMins = REGULAR_WORKING_HOURS_PER_DAY * 60; // 540 mins (9 hours)
+  const isSun = isSundayDate(opts?.workDate);
+  const nightshiftRepair = Boolean(opts?.nightshiftRepair);
+  const inMins = parseTimeToMinutes(String(firstTimeIn || ""));
+  const cappedOut = capDtrTimeOut(firstTimeIn, lastTimeOut, opts);
+  const outMins = parseTimeToMinutes(cappedOut);
+  const computedWorked =
+    typeof totalWorkedOverride === "number" && Number.isFinite(totalWorkedOverride)
+      ? Math.max(0, Math.round(totalWorkedOverride))
+      : calculateDtrMinutes(firstTimeIn, cappedOut, null, opts);
+
+  const regularMins = Math.min(standardMins, computedWorked);
+  let finalOtMins = Math.max(0, computedWorked - standardMins);
+
+  // Sunday regular hours: 10:00 AM–7:00 PM (9h); O.T. only if started before 9:00 AM or Nightshift/Repair Op requested (after 8pm/exceeding)
+  if (isSun && !nightshiftRepair) {
+    const startedBefore9Am = inMins !== null && inMins < 9 * 60;
+    if (!startedBefore9Am) {
+      finalOtMins = 0;
+    }
+  }
+
+  // Standard 9h shift anchor
+  const isSevenShift = !isSun && inMins !== null && inMins >= 6 * 60 + 30 && inMins < 7 * 60 + 45;
+  const shiftStart = isSun ? 10 * 60 : (isSevenShift ? 7 * 60 : 8 * 60);
+  const shiftEnd = shiftStart + standardMins;
+  const shiftStartLabel = isSun ? "10:00 AM" : (isSevenShift ? "7:00 AM" : "8:00 AM");
+  const shiftEndLabel = isSun ? "7:00 PM" : (isSevenShift ? "4:00 PM" : "5:00 PM");
+
+  let lateMins = 0;
+  let inShiftWorkedMins = regularMins;
+  let grossOtMins = finalOtMins;
+  if (inMins !== null && outMins !== null) {
+    let effOut = outMins;
+    if (effOut < inMins) effOut += 1440;
+    const effIn = Math.max(inMins, shiftStart);
+    const windowOut = Math.min(effOut, shiftEnd);
+    inShiftWorkedMins = Math.max(0, Math.min(computedWorked, windowOut - effIn));
+    lateMins = Math.max(0, standardMins - inShiftWorkedMins);
+    if (isSun) {
+      const earlyBefore10 = inMins < shiftStart ? Math.max(0, shiftStart - inMins) : 0;
+      const after7Pm = nightshiftRepair ? Math.max(0, effOut - shiftEnd) : 0;
+      grossOtMins = (!nightshiftRepair && inMins >= 9 * 60) ? 0 : (earlyBefore10 + after7Pm);
+    } else {
+      grossOtMins = Math.max(0, effOut - shiftEnd);
+    }
+  } else {
+    lateMins = Math.max(0, standardMins - computedWorked);
+  }
+
+  return {
+    workedMins: computedWorked,
+    standardMins,
+    regularMins,
+    lackingMins: lateMins,
+    inShiftWorkedMins,
+    grossOtMins,
+    finalOtMins,
+    shiftStartLabel,
+    shiftEndLabel,
+    isSunday: isSun,
+    nightshiftRepair,
+  };
 }
 
 export function profileOf(id: string | null | undefined): any {
@@ -1215,12 +1392,19 @@ export function fmtTime12h(t: unknown): string {
 
 export function parseDtrJobMeta(
   job: unknown,
-  approvedByCol?: unknown
-): { unitName: string; approvedBy: string; cleanJob: string } {
+  approvedByCol?: unknown,
+  nightshiftRepairCol?: unknown
+): { unitName: string; approvedBy: string; cleanJob: string; nightshiftRepair: boolean } {
   let text = String(job || "").trim();
   let unitName = "";
   let approvedBy = String(approvedByCol || "").trim();
+  let nightshiftRepair = Boolean(nightshiftRepairCol);
 
+  const nsMatch = text.match(/\s*\[NS_REPAIR\]\s*/i);
+  if (nsMatch) {
+    nightshiftRepair = true;
+    text = text.replace(/\s*\[NS_REPAIR\]\s*/gi, " ").trim();
+  }
   const unitMatch = text.match(/^\[Unit:\s*([^\]]+)\]\s*/i);
   if (unitMatch) {
     unitName = unitMatch[1].trim();
@@ -1231,18 +1415,25 @@ export function parseDtrJobMeta(
     if (!approvedBy) approvedBy = apprMatch[1].trim();
     text = text.slice(0, apprMatch.index).trim();
   }
-  return { unitName, approvedBy, cleanJob: text };
+  if (/night\s*shift|operations?\s+to\s+repair|repair\s+op/i.test(approvedBy)) {
+    nightshiftRepair = true;
+  }
+  return { unitName, approvedBy, cleanJob: text, nightshiftRepair };
 }
 
 export function buildDtrJobWithApproval(
   unitName: string,
   cleanJob: string,
   approvedBy: string,
-  includeApprTag = true
+  includeApprTag = true,
+  nightshiftRepair = false
 ): string {
-  let out = String(cleanJob || "").trim();
+  let out = String(cleanJob || "").replace(/\s*\[NS_REPAIR\]\s*/gi, " ").trim();
   if (unitName && unitName.trim() && !out.toLowerCase().startsWith("[unit:")) {
     out = `[Unit: ${unitName.trim()}] ${out}`.trim();
+  }
+  if (nightshiftRepair) {
+    out = `${out} [NS_REPAIR]`.trim();
   }
   if (includeApprTag && approvedBy && approvedBy.trim()) {
     out = `${out} [APPR: ${approvedBy.trim()}]`.trim();
@@ -1365,8 +1556,60 @@ export function isSiteMetaNotice(n: any): boolean {
   return String(n?.body || "").includes("[[SITE_META:");
 }
 
+export interface PayslipRecord {
+  id: string;
+  user_id: string;
+  employee_name: string;
+  period_start: string;
+  period_end: string;
+  basic_pay: number;
+  overtime_hours: number;
+  overtime_amount: number;
+  night_diff_hours: number;
+  night_diff_amount: number;
+  allowance: number;
+  sss: number;
+  philhealth: number;
+  pagibig: number;
+  cash_advance: number;
+  absent: number;
+  abuloy: number;
+  total_earnings: number;
+  total_deductions: number;
+  net_pay: number;
+  created_by?: string | null;
+  created_at?: string;
+  app_notification_id?: string | null;
+}
+
+export function isPayslipNotice(n: any): boolean {
+  return String(n?.body || "").includes("[[PAYSLIP_DATA:");
+}
+
 export function isHiddenSystemNotice(n: any): boolean {
-  return isStoryNotice(n) || isSiteMetaNotice(n);
+  return isStoryNotice(n) || isSiteMetaNotice(n) || isPayslipNotice(n);
+}
+
+export function buildPayslipAppNoticeBody(rec: Omit<PayslipRecord, "id">): string {
+  return `Payslip record for ${rec.employee_name}\n[[PAYSLIP_DATA:${JSON.stringify(rec)}]]`;
+}
+
+export function parsePayslipFromAppNotice(n: any): PayslipRecord | null {
+  const raw = String(n?.body || "");
+  const match = raw.match(/\[\[PAYSLIP_DATA:([\s\S]*?)\]\]/);
+  if (!match) return null;
+  try {
+    const p = JSON.parse(match[1]);
+    if (!p || !p.user_id) return null;
+    return {
+      ...p,
+      id: `notice:${n.id}`,
+      app_notification_id: String(n.id),
+      created_at: p.created_at || n.created_at || new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function buildSiteMetaAppNoticeBody(meta: SiteMetaNoticePayload): string {

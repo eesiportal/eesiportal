@@ -4,7 +4,9 @@ import {
   $,
   SUPABASE_PUBLISHABLE_KEY,
   SUPABASE_URL,
-  calculateDtrHours,
+  calculateDtrMinutes,
+  calculateShiftBreakdown,
+  capDtrTimeOut,
   checkNetwork,
   closeSheet,
   extractReportPhotoUrls,
@@ -13,6 +15,7 @@ import {
   fmtDay,
   fmtTableDate,
   hooks,
+  parseDtrJobMeta,
   parseRecMeta,
   parseReportUnit,
   profileName,
@@ -74,6 +77,7 @@ import {
   loadLeaveRequests,
   loadLiveMap,
   loadNotes,
+  loadPayslips,
   loadPending,
   loadPmsRecords,
   loadProfiles,
@@ -172,6 +176,7 @@ import {
   cancelUnitForm,
   captureTimemarkPhoto,
   changePassword,
+  canRunDtrThreeStepPdf,
   checkUpcomingShiftReminders,
   clearDtrAfterExport,
   clearDtrForm,
@@ -193,22 +198,28 @@ import {
   closeTimemarkStyledNoteModal,
   closeTimemarkTemplatesDrawer,
   closeUnitManualOverlay,
+  completeDtrExportStep,
   cycleTimemarkZoom,
   deleteAdminMember,
   deleteAllNotices,
+  deletePayslipRecord,
   deleteTimeLog,
   deleteUnit,
   downloadDtr,
   downloadLeaveSheet,
+  downloadPayslipJpeg,
+  downloadPayslipPdf,
   dtrTab,
   editLeaveRequest,
   editTimemarkNotesText,
   editUnit,
   ensureAmcbUnitsSeeded,
+  exportPayslipXlsxAction,
   flipTimemarkCamera,
   focusTimemarkAt,
   go,
   initFeatureWiring,
+  loadPayslipIntoEditor,
   loadSavedDrawnSignature,
   loadSavedSignaturePhoto,
   markAllNoticesRead,
@@ -219,6 +230,7 @@ import {
   openEditSiteOverlay,
   openLastTimemarkPreview,
   openLeaveSheetPreview,
+  openPayrollPage,
   openPmsChecklist,
   openQuickTimeAction,
   openScheduleFormOverlay,
@@ -234,6 +246,7 @@ import {
   postAnnouncement,
   printDtr,
   printLeaveSheet,
+  printPayslip,
   promptTimemarkTitle,
   refreshLeaveBalances,
   removeAdminMember,
@@ -253,6 +266,7 @@ import {
   renderNotes,
   renderNotices,
   renderOnline,
+  renderPayroll,
   renderPending,
   renderPmsAttachmentPreview,
   renderPmsChecklist,
@@ -274,11 +288,13 @@ import {
   renderTimemarkTemplatesGrid,
   renderUnitSiteOptions,
   renderUnits,
+  resetPayrollInputs,
   resetSignatureState,
   runSearch,
   saveAdminEdit,
   saveEditedDtr,
   saveNote,
+  savePayslipRecord,
   saveProfile,
   saveRec,
   saveSchedule,
@@ -306,6 +322,7 @@ import {
   submitLeaveRequest,
   switchNoteTab,
   switchUnitsTab,
+  syncPayrollFromDtr,
   toggleTimemarkConfigField,
   toggleTimemarkFlash,
   toggleTimemarkGrid,
@@ -442,23 +459,123 @@ export function exportData(
     sheetTitle = "EESI ELEVATORS INC. — DAILY TIME RECORD (DTR) LOGS";
     sheetName = "DTR Logs";
     fileName = `eesi-dtr-logs-${stamp}.xlsx`;
-    headers = ["Date", "Employee", "Team / Area", "Location / Site", "Work Description / Unit", "Time In", "Time Out", "Total Hours", "OT Approved"];
-    colWidths = [14, 24, 20, 26, 36, 12, 12, 14, 14];
+    headers = ["Date", "Employee", "Team / Area", "Location / Site", "Work Description / Unit", "Time In", "Time Out", "Total Hours", "Regular (9h)", "O.T. Hours", "OT Approved"];
+    colWidths = [14, 24, 20, 26, 36, 12, 12, 13, 13, 12, 14];
+    const dayBuckets = new Map<string, { firstIn: string | null; lastOut: string | null; mins: number; nsRepair: boolean }>();
+    list.forEach(d => {
+      const meta = parseDtrJobMeta(d.job, d.approved_by);
+      const ruleOpts = { workDate: d.work_date, nightshiftRepair: meta.nightshiftRepair };
+      const cappedOut = capDtrTimeOut(d.time_in, d.time_out, ruleOpts);
+      const mins = calculateDtrMinutes(d.time_in, cappedOut, null, ruleOpts);
+      const key = `${String(d.work_date || "")}::${String(d.user_id || "")}`;
+      const b = dayBuckets.get(key) || { firstIn: null, lastOut: null, mins: 0, nsRepair: false };
+      if (!b.firstIn && d.time_in) b.firstIn = d.time_in;
+      if (cappedOut && cappedOut !== d.time_in) b.lastOut = cappedOut;
+      b.mins += mins;
+      if (meta.nightshiftRepair) b.nsRepair = true;
+      dayBuckets.set(key, b);
+    });
+    const dailyRegAllocated = new Map<string, number>();
+    const dailyOtRemaining = new Map<string, number>();
+    const empOtStats = new Map<string, { grossOt: number; lacking: number; totalHrs: number; regHrs: number }>();
+    const nowDt = new Date();
+    const todayIsoStr = `${nowDt.getFullYear()}-${String(nowDt.getMonth() + 1).padStart(2, "0")}-${String(nowDt.getDate()).padStart(2, "0")}`;
+    dayBuckets.forEach((b, key) => {
+      const [wd, uid] = key.split("::");
+      const bd = calculateShiftBreakdown(b.firstIn, b.lastOut, b.mins, {
+        workDate: wd,
+        nightshiftRepair: b.nsRepair,
+      });
+      dailyRegAllocated.set(key, 0);
+      dailyOtRemaining.set(key, bd.finalOtMins);
+      const isClosed = Boolean(b.lastOut) || wd < todayIsoStr;
+      const uncoveredLacking = (b.mins > 0 && isClosed) ? Math.max(0, bd.standardMins - bd.workedMins) : 0;
+      const st = empOtStats.get(uid) || { grossOt: 0, lacking: 0, totalHrs: 0, regHrs: 0 };
+      st.grossOt += bd.finalOtMins;
+      st.lacking += uncoveredLacking;
+      st.totalHrs += b.mins / 60;
+      st.regHrs += bd.regularMins / 60;
+      empOtStats.set(uid, st);
+    });
+
     rows = list.map(d => {
       const p = profileOf(d.user_id);
-      const hrs = calculateDtrHours(d.time_in, d.time_out, true);
+      const meta = parseDtrJobMeta(d.job, d.approved_by, d.nightshift_repair);
+      const ruleOpts = { workDate: d.work_date, nightshiftRepair: meta.nightshiftRepair };
+      const cappedOut = capDtrTimeOut(d.time_in, d.time_out, ruleOpts);
+      const mins = calculateDtrMinutes(d.time_in, cappedOut, null, ruleOpts);
+      const hrs = mins / 60;
+      const key = `${String(d.work_date || "")}::${String(d.user_id || "")}`;
+      const regSoFar = dailyRegAllocated.get(key) || 0;
+      const otRem = dailyOtRemaining.get(key) || 0;
+      const regCap = 9 * 60;
+      const regShare = otRem > 0 ? Math.min(mins, Math.max(0, regCap - regSoFar)) : mins;
+      const otShare = Math.min(otRem, Math.max(0, mins - regShare));
+      dailyRegAllocated.set(key, regSoFar + regShare);
+      dailyOtRemaining.set(key, Math.max(0, otRem - otShare));
+      const regHrs = regShare / 60;
+      const otHrs = otShare / 60;
+      const jobDisplay = [
+        meta.unitName ? `[${meta.unitName}]` : "",
+        meta.cleanJob,
+        meta.nightshiftRepair ? "(Nightshift/Repair)" : "",
+      ].filter(Boolean).join(" ") || "—";
       return [
         fmtTableDate(d.work_date),
         profileName(d.user_id),
         [p?.team, p?.area].filter(Boolean).join(" / ") || "—",
         d.location || "—",
-        d.job || "—",
+        jobDisplay,
         d.time_in || "—",
-        d.time_out || "—",
+        cappedOut || "—",
         Number(hrs.toFixed(2)),
-        "Approved",
+        Number(regHrs.toFixed(2)),
+        Number(otHrs.toFixed(2)),
+        meta.approvedBy || (meta.nightshiftRepair ? "Nightshift/Repair" : "Approved"),
       ];
     });
+
+    let sumTotalHrs = 0;
+    let sumRegHrs = 0;
+    let sumGrossOtMins = 0;
+    let sumLackingMins = 0;
+    let sumFinalOtMins = 0;
+    empOtStats.forEach(st => {
+      sumTotalHrs += st.totalHrs;
+      sumRegHrs += st.regHrs;
+      sumGrossOtMins += st.grossOt;
+      sumLackingMins += st.lacking;
+      sumFinalOtMins += Math.max(0, st.grossOt - st.lacking);
+    });
+    if (sumLackingMins > 0) {
+      rows.push([
+        "SUMMARY",
+        "All Working Days",
+        "—",
+        "—",
+        `Gross Day O.T.: ${(sumGrossOtMins / 60).toFixed(2)}h − Lacking Deducted: ${(sumLackingMins / 60).toFixed(2)}h`,
+        "—",
+        "—",
+        Number(sumTotalHrs.toFixed(2)),
+        Number(sumRegHrs.toFixed(2)),
+        Number((sumFinalOtMins / 60).toFixed(2)),
+        "Final Overall O.T.",
+      ]);
+    } else {
+      rows.push([
+        "SUMMARY",
+        "All Working Days",
+        "—",
+        "—",
+        "Final Total Overall O.T.",
+        "—",
+        "—",
+        Number(sumTotalHrs.toFixed(2)),
+        Number(sumRegHrs.toFixed(2)),
+        Number((sumFinalOtMins / 60).toFixed(2)),
+        "Final Overall O.T.",
+      ]);
+    }
   } else if (kind === "recommendations") {
     const list = state.recs || [];
     if (!list.length) { toast("No recommendations to export."); return; }
@@ -590,8 +707,11 @@ function registerHooks(): void {
     refreshVisibleSiteDistances,
     openSiteOnMap,
     clearDtrAfterExport,
+    canRunDtrThreeStepPdf,
+    completeDtrExportStep,
     renderLiveOnlineMembers: renderLiveOnlineMembersList,
     closeSiteUnitsOverlay,
+    renderPayroll,
   });
 }
 
@@ -788,6 +908,16 @@ function exposeWindowGlobals(): void {
     exportCurrentChecklist,
     exportPmsRecords,
     exportRecommendations,
+    openPayrollPage,
+    syncPayrollFromDtr,
+    savePayslipRecord,
+    loadPayslipIntoEditor,
+    deletePayslipRecord,
+    resetPayrollInputs,
+    downloadPayslipJpeg,
+    printPayslip,
+    downloadPayslipPdf,
+    exportPayslipXlsx: exportPayslipXlsxAction,
   });
 }
 
@@ -928,6 +1058,7 @@ async function bootInner(session: any): Promise<void> {
     loadAppNotifications(),
     loadApprovalNotifications(),
     loadThreads(),
+    loadPayslips(),
   ]);
   void ensureAmcbUnitsSeeded();
   await Promise.all([
@@ -965,7 +1096,7 @@ function resetState(): void {
     sites: [], units: [], schedules: [], dtrs: [], dtrTimeLogs: [], notes: [], recs: [], announcements: [], pending: [],
     leaveRequests: [], pmsRecords: [], recentChatNotices: [], threads: [], unread: {}, previews: {},
     chatFilter: "all", activeThread: null, messages: [], setupIssue: "", appNotifications: [],
-    approvalNotifications: [], blockedUsers: [], stories: [], booted: false, reportType: "service",
+    approvalNotifications: [], blockedUsers: [], stories: [], payslips: [], booted: false, reportType: "service",
   });
   resetDataLoadFlags();
   runtime.editingAnnouncementId = null;
@@ -973,6 +1104,7 @@ function resetState(): void {
   runtime.editingExistingUrls = [];
   runtime.editingUnitId = null;
   runtime.editingDtrId = null;
+  runtime.editingPayslipId = null;
   runtime.editingMessageId = null;
   runtime.replyingToMsg = null;
   runtime.expandedUnitSiteIds = {};

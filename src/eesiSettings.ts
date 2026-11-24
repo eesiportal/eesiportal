@@ -678,7 +678,9 @@ export function applyDisplaySettings(): void {
     times: "'Times New Roman',Times,serif",
     courier: "'Courier New',Courier,monospace",
   };
-  document.body.style.fontFamily = fonts[font] || fonts.system;
+  const selectedFont = fonts[font] || fonts.system;
+  document.documentElement.style.setProperty("--app-font", selectedFont);
+  document.body.style.setProperty("font-family", selectedFont, "important");
   ["fw-light", "fw-regular", "fw-semibold", "fw-bold"].forEach(c => document.body.classList.remove(c));
   document.body.classList.add("fw-" + (["light", "regular", "semibold", "bold"].includes(weight) ? weight : "regular"));
   ["fs-regular", "fs-italic", "fs-oblique", "fs-uppercase", "fs-capitalize", "fs-wide", "fs-smallcaps"].forEach(c => document.body.classList.remove(c));

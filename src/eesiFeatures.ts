@@ -2,19 +2,25 @@ import {
   $,
   BLANK_IMG,
   PMS_ITEMS,
+  PayslipRecord,
+  REGULAR_WORKING_HOURS_PER_DAY,
   SITE_STATUS_OPTIONS,
   TimeLogNoticeMeta,
   UNIT_MANUAL_DEFAULTS,
   buildDtrJobWithApproval,
   buildLeaveReasonWithMeta,
+  buildPayslipAppNoticeBody,
   buildRecReasonWithMeta,
   buildReportDetailsWithUnit,
   buildSiteMetaAppNoticeBody,
   buildTimeLogAppNoticeBody,
   buildUnitNotesWithManual,
   calculateDtrHours,
+  calculateDtrMinutes,
   calculateOtMinutes,
+  calculateShiftBreakdown,
   canCommentOnRec,
+  capDtrTimeOut,
   checkNetwork,
   closeSheet,
   compressImageToDataUrl,
@@ -30,6 +36,7 @@ import {
   fmtHalfSheetDate,
   fmtTableDate,
   fmtTime12h,
+  formatDtrDuration,
   getDtrCutoffForDate,
   getSiteEffectiveStatus,
   getSiteThumbnailUrl,
@@ -40,6 +47,7 @@ import {
   isImageUrl,
   isManager,
   isMissingTableError,
+  isSundayDate,
   isVideoUrl,
   leaveDaysCount,
   listAvailableDtrCutoffs,
@@ -50,6 +58,7 @@ import {
   parseLeaveMeta,
   parseRecMeta,
   parseReportUnit,
+  parseTimeToMinutes,
   parseUnitManualMeta,
   parseUnitSideTag,
   prepareImageFile,
@@ -66,12 +75,14 @@ import {
   stripTimeLogMeta,
   suppressNotifications,
   toast,
+  todayIso,
   val,
 } from "./eesiTypes";
 import {
   createSiteAutoSnapshotFile,
   fetchReverseGeocode,
   getCachedUserGpsCoords,
+  getLocalPayslipsKey,
   haversineMeters,
   initAddSitePinPicker,
   initSitesMapOverview,
@@ -84,6 +95,7 @@ import {
   loadLeaveRequests,
   loadLiveMap,
   loadNotes,
+  loadPayslips,
   loadPending,
   loadPmsRecords,
   loadProfiles,
@@ -119,6 +131,7 @@ import {
   renderMessages,
   threadTitle,
 } from "./eesiChat";
+import { exportPayslipPdf, exportPayslipXlsx } from "./eesiExport";
 import { phHolidays, triggerShiftAlert } from "./eesiSettings";
 
 const SYSTEM_ANNOUNCEMENTS = [
@@ -180,6 +193,7 @@ export function go(p: string, opts: { skipScrollReset?: boolean } = {}): void {
   }
   if (p === "notes") { renderConnectedPickers(); }
   if (p === "dtr") { renderConnectedPickers(); autoFillDtrFromSchedule(false); renderTimeLog(); }
+  if (p === "payroll") { renderPayroll(); }
   renderAll();
   if (!opts.skipScrollReset) window.scrollTo(0, 0);
   saveLastView(opts.skipScrollReset ? undefined : 0);
@@ -195,6 +209,7 @@ export function renderAll(): void {
   renderSites();
   renderUnits();
   renderDtr();
+  renderPayroll();
   renderNotes();
   renderRecs();
   renderNotices();
@@ -606,6 +621,155 @@ export function openQuickTimeAction(mode: "time_in" | "time_out"): void {
   dtrTab("time_log");
 }
 
+function getLiveDtrTodaySummary(): {
+  todayStr: string;
+  nowMins: number;
+  activeEntry: any | null;
+  latestClosed: any | null;
+  closedMins: number;
+  liveMins: number;
+  totalMins: number;
+  hasNightshiftRepair: boolean;
+  activeNightshiftRepair: boolean;
+} {
+  const now = new Date();
+  const todayStr = localDateKey(now);
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+  const myToday = (state.dtrs || []).filter(
+    d => String(d.user_id) === String(state.userId) && String(d.work_date) === String(todayStr)
+  );
+  const activeEntry = myToday.find(d => d.time_in && (!d.time_out || d.time_out === d.time_in)) || null;
+  const closedRows = myToday.filter(d => d.time_in && d.time_out && d.time_out !== d.time_in);
+  const latestClosed = closedRows.length ? closedRows[closedRows.length - 1] : null;
+  const closedMins = closedRows.reduce(
+    (sum, d) => {
+      const m = parseDtrJobMeta(d.job, d.approved_by);
+      return sum + calculateDtrMinutes(d.time_in, d.time_out, null, { workDate: todayStr, nightshiftRepair: m.nightshiftRepair });
+    },
+    0
+  );
+  const activeMeta = activeEntry ? parseDtrJobMeta(activeEntry.job, activeEntry.approved_by) : null;
+  const activeNightshiftRepair = Boolean(activeMeta?.nightshiftRepair);
+  const hasNightshiftRepair = myToday.some(d => parseDtrJobMeta(d.job, d.approved_by).nightshiftRepair);
+  const liveMins = activeEntry
+    ? calculateDtrMinutes(activeEntry.time_in, null, nowMins, { workDate: todayStr, nightshiftRepair: activeNightshiftRepair })
+    : 0;
+  return {
+    todayStr,
+    nowMins,
+    activeEntry,
+    latestClosed,
+    closedMins,
+    liveMins,
+    totalMins: closedMins + liveMins,
+    hasNightshiftRepair,
+    activeNightshiftRepair,
+  };
+}
+
+export function renderDtrLiveStatus(): void {
+  const summary = getLiveDtrTodaySummary();
+  const formHint = $("dtrFormDurationHint");
+  if (formHint) {
+    const inVal = val("dtrIn").trim();
+    const outVal = val("dtrOut").trim();
+    const dateVal = val("dtrDate").trim() || summary.todayStr;
+    const isFormNsRepair = Boolean(($("dtrNightshiftOrRepair") as HTMLInputElement | null)?.checked);
+    const formRuleOpts = { workDate: dateVal, nightshiftRepair: isFormNsRepair };
+    const dayTag = isSundayDate(dateVal) ? "Sun 10AM–7PM" : "Mon–Sat";
+    const nsTag = isFormNsRepair ? " · 🌙 Nightshift/Repair" : "";
+    if (inVal && outVal) {
+      const cappedOutVal = capDtrTimeOut(inVal, outVal, formRuleOpts);
+      const outLbl = fmtTime12h(cappedOutVal) || cappedOutVal;
+      const wasCapped = cappedOutVal !== outVal && !!outVal;
+      const bd = calculateShiftBreakdown(inVal, cappedOutVal, null, formRuleOpts);
+      const capNote = wasCapped ? " (7:00 PM max without Nightshift/Repair)" : "";
+      const sundayNoOtNote = bd.isSunday && !bd.nightshiftRepair && bd.workedMins > bd.regularMins && bd.finalOtMins === 0
+        ? " (Sunday O.T. needs <9:00 AM start or Nightshift/Repair)"
+        : "";
+      if (bd.lackingMins > 0 && bd.grossOtMins > 0 && bd.finalOtMins >= 0 && (!bd.isSunday || bd.nightshiftRepair || bd.finalOtMins > 0)) {
+        formHint.innerHTML =
+          `⏱ [${esc(dayTag)}${nsTag}] Worked: <b>${esc(formatDtrDuration(bd.workedMins))}</b> (${(bd.workedMins / 60).toFixed(2)} hrs)` +
+          ` · Std 9h (${esc(bd.shiftStartLabel)}–${esc(bd.shiftEndLabel)}): <b>${esc(formatDtrDuration(bd.inShiftWorkedMins))}</b>` +
+          ` <span class="muted">(Lacking ${esc(formatDtrDuration(bd.lackingMins))})</span>` +
+          ` · O.T.: <b>${esc(formatDtrDuration(bd.grossOtMins))}</b> − <b>${esc(formatDtrDuration(bd.lackingMins))}</b> = Final O.T.: <b>${esc(formatDtrDuration(bd.finalOtMins))}</b>` +
+          ` · Time Out: <b>${esc(outLbl)}</b>${capNote}`;
+      } else if (bd.lackingMins > 0) {
+        formHint.innerHTML =
+          `⏱ [${esc(dayTag)}${nsTag}] Worked: <b>${esc(formatDtrDuration(bd.workedMins))}</b> (${(bd.workedMins / 60).toFixed(2)} hrs)` +
+          ` · Std 9h (${esc(bd.shiftStartLabel)}–${esc(bd.shiftEndLabel)}): Lacking <b>${esc(formatDtrDuration(bd.lackingMins))}</b>` +
+          ` · Final O.T.: <b>${esc(formatDtrDuration(bd.finalOtMins))}</b>${sundayNoOtNote} · Time Out: <b>${esc(outLbl)}</b>${capNote}`;
+      } else {
+        formHint.innerHTML =
+          `⏱ [${esc(dayTag)}${nsTag}] Worked: <b>${esc(formatDtrDuration(bd.workedMins))}</b> (${(bd.workedMins / 60).toFixed(2)} hrs)` +
+          ` · Reg: <b>${esc(formatDtrDuration(bd.regularMins))}</b> · Final O.T.: <b>${esc(formatDtrDuration(bd.finalOtMins))}</b>${sundayNoOtNote}` +
+          ` · Time Out: <b>${esc(outLbl)}</b>${capNote}`;
+      }
+    } else if (inVal && dateVal === summary.todayStr) {
+      const liveMins = calculateDtrMinutes(inVal, null, summary.nowMins, formRuleOpts);
+      const bd = calculateShiftBreakdown(inVal, null, liveMins, formRuleOpts);
+      const cappedAt7Pm = !isFormNsRepair && summary.nowMins >= 19 * 60 && liveMins > 0;
+      formHint.innerHTML =
+        `🟢 [${esc(dayTag)}${nsTag}] Counting from <b>${esc(fmtTime12h(inVal) || inVal)}</b>: <b>${esc(formatDtrDuration(liveMins))}</b>` +
+        ` (${(liveMins / 60).toFixed(2)} hrs) · Reg: ${esc(formatDtrDuration(bd.regularMins))} / 9h 00m, Final O.T.: ${esc(formatDtrDuration(bd.finalOtMins))}` +
+        (cappedAt7Pm ? " · <b>Stopped at 7:00 PM Time Out</b>" : "");
+    } else {
+      formHint.textContent = isSundayDate(dateVal)
+        ? `📅 Sunday rule: Regular 10:00 AM–7:00 PM (9h). O.T. applies if starting before 9:00 AM or with Nightshift/Repair.`
+        : `📅 Mon–Sat rule: Regular 8:00 AM–5:00 PM (9h). O.T. 5:01–7:00 PM (7:01 PM+ requires Nightshift/Repair).`;
+    }
+  }
+
+  let statusHtml = "";
+  if (summary.activeEntry) {
+    const inLbl = fmtTime12h(summary.activeEntry.time_in) || summary.activeEntry.time_in;
+    const activeOpts = { workDate: summary.todayStr, nightshiftRepair: summary.hasNightshiftRepair };
+    const bd = calculateShiftBreakdown(summary.activeEntry.time_in, null, summary.totalMins, activeOpts);
+    const cappedAt7Pm = !summary.activeNightshiftRepair && summary.nowMins >= 19 * 60 && summary.liveMins > 0;
+    statusHtml =
+      `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">` +
+      `<div><span class="sess-badge now" style="margin-left:0;margin-right:6px;">${cappedAt7Pm ? "🔴 Stopped 7:00 PM" : "● Live Counting"}</span>` +
+      `<b>${esc(formatDtrDuration(summary.liveMins))}</b> <span class="muted">(${(summary.liveMins / 60).toFixed(2)} hrs) since <b>${esc(inLbl)}</b>${summary.activeNightshiftRepair ? " · 🌙 Nightshift/Repair" : ""}</span></div>` +
+      `<div class="muted" style="font-size:12px;">Today: <b>${esc(formatDtrDuration(summary.totalMins))}</b> · Reg ${esc(formatDtrDuration(bd.regularMins))} / 9h · O.T. ${esc(formatDtrDuration(bd.finalOtMins))}</div>` +
+      `</div>`;
+  } else if (summary.latestClosed) {
+    const inLbl = fmtTime12h(summary.latestClosed.time_in) || summary.latestClosed.time_in;
+    const closedMeta = parseDtrJobMeta(summary.latestClosed.job, summary.latestClosed.approved_by);
+    const cappedClosedOut = capDtrTimeOut(summary.latestClosed.time_in, summary.latestClosed.time_out, {
+      workDate: summary.todayStr,
+      nightshiftRepair: closedMeta.nightshiftRepair,
+    });
+    const outLbl = fmtTime12h(cappedClosedOut) || cappedClosedOut;
+    const bd = calculateShiftBreakdown(summary.latestClosed.time_in, cappedClosedOut, summary.totalMins, {
+      workDate: summary.todayStr,
+      nightshiftRepair: summary.hasNightshiftRepair,
+    });
+    const breakdownPart = bd.lackingMins > 0 && bd.grossOtMins > 0 && (!bd.isSunday || bd.nightshiftRepair || bd.finalOtMins > 0)
+      ? ` · OT ${esc(formatDtrDuration(bd.grossOtMins))} − ${esc(formatDtrDuration(bd.lackingMins))} lacking = Final O.T. <b>${esc(formatDtrDuration(bd.finalOtMins))}</b>`
+      : bd.lackingMins > 0
+        ? ` · Lacking ${esc(formatDtrDuration(bd.lackingMins))} · Final O.T. <b>${esc(formatDtrDuration(bd.finalOtMins))}</b>`
+        : ` · Reg ${esc(formatDtrDuration(bd.regularMins))} · Final O.T. <b>${esc(formatDtrDuration(bd.finalOtMins))}</b>`;
+    statusHtml =
+      `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">` +
+      `<div><span class="badge" style="margin-left:0;margin-right:6px;">🔴 Time Out Locked</span>` +
+      `<b>${esc(inLbl)} – ${esc(outLbl)}</b> <span class="muted">(Stopped at ${esc(outLbl)}${summary.hasNightshiftRepair ? " · 🌙 NS/Repair" : ""})</span></div>` +
+      `<div class="muted" style="font-size:12px;">Total: <b>${esc(formatDtrDuration(summary.totalMins))}</b> (${(summary.totalMins / 60).toFixed(2)}h)${breakdownPart}</div>` +
+      `</div>`;
+  }
+
+  ["dtrLiveStatusCard", "timeLogLiveCard"].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    if (!statusHtml) {
+      el.classList.add("hidden");
+      el.innerHTML = "";
+    } else {
+      el.classList.remove("hidden");
+      el.innerHTML = statusHtml;
+    }
+  });
+}
+
 export function renderHomeDtrStatus(): void {
   const card = $("homeDtrStatusCard");
   if (!card) return;
@@ -613,36 +777,32 @@ export function renderHomeDtrStatus(): void {
     card.classList.add("hidden");
     return;
   }
-  const todayStr = localDateKey(new Date());
-  const myToday = (state.dtrs || []).filter(
-    d => String(d.user_id) === String(state.userId) && String(d.work_date) === String(todayStr)
-  );
-  const activeEntry = myToday.find(d => d.time_in && (!d.time_out || d.time_out === d.time_in));
-  let totalHours = myToday.reduce(
-    (sum, d) => sum + calculateDtrHours(d.time_in, d.time_out, true),
-    0
-  );
-  if (activeEntry && activeEntry.time_in) {
-    const [ih, im] = String(activeEntry.time_in).split(":").map(Number);
-    if (Number.isFinite(ih) && Number.isFinite(im)) {
-      const now = new Date();
-      const nowMins = now.getHours() * 60 + now.getMinutes();
-      const inMins = ih * 60 + im;
-      const elapsed = Math.max(0, nowMins - inMins);
-      totalHours += elapsed / 60;
-    }
-  }
-  const hasAnyToday = myToday.length > 0;
+  const summary = getLiveDtrTodaySummary();
+  const activeEntry = summary.activeEntry;
+  const latestClosed = summary.latestClosed;
+  const totalMins = summary.totalMins;
+  const totalHours = totalMins / 60;
+  const hasAnyToday = Boolean(activeEntry || latestClosed);
   const statusBadge = activeEntry
     ? '<span class="sess-badge now" style="margin-left:0;">● Clocked In</span>'
     : (hasAnyToday
-      ? '<span class="badge">✅ Shift Logged</span>'
+      ? '<span class="badge">🔴 Timed Out</span>'
       : '<span class="badge">⚪ Not Clocked In</span>');
+  const closedMeta = latestClosed ? parseDtrJobMeta(latestClosed.job, latestClosed.approved_by) : null;
+  const homeClosedOut = latestClosed
+    ? capDtrTimeOut(latestClosed.time_in, latestClosed.time_out, {
+        workDate: summary.todayStr,
+        nightshiftRepair: Boolean(closedMeta?.nightshiftRepair),
+      })
+    : "";
+  const homeCapped7Pm = Boolean(activeEntry && !summary.activeNightshiftRepair && summary.nowMins >= 19 * 60 && summary.liveMins > 0);
   const detailText = activeEntry
-    ? `Total today: <b>${totalHours.toFixed(2)} hrs</b> · Since <b>${esc(activeEntry.time_in)}</b>` +
+    ? `Live: <b>${esc(formatDtrDuration(totalMins))}</b> (${totalHours.toFixed(2)} hrs) · Since <b>${esc(fmtTime12h(activeEntry.time_in) || activeEntry.time_in)}</b>` +
+      (homeCapped7Pm ? " · <b>Stopped at 7:00 PM</b>" : (summary.activeNightshiftRepair ? " · 🌙 Nightshift/Repair" : "")) +
       (activeEntry.location ? ` · 📍 ${esc(activeEntry.location)}` : "")
-    : `Total today: <b>${totalHours.toFixed(2)} hrs</b>` +
-      (hasAnyToday ? " · Shift completed" : " · Tap Time In to start");
+    : (latestClosed
+      ? `Total today: <b>${esc(formatDtrDuration(totalMins))}</b> (${totalHours.toFixed(2)} hrs) · Stopped at <b>${esc(fmtTime12h(homeClosedOut) || homeClosedOut)}</b>`
+      : `Total today: <b>0 mins</b> · Tap Time In to start`);
   const actionBtn = activeEntry
     ? '<button class="red small-btn" type="button" onclick="openQuickTimeAction(\'time_out\')">🔴 Time Out</button>'
     : '<button class="green small-btn" type="button" onclick="openQuickTimeAction(\'time_in\')">🟢 Time In</button>';
@@ -656,6 +816,24 @@ export function renderHomeDtrStatus(): void {
     "</div>" +
     '<div style="flex:0 0 auto;">' + actionBtn + "</div>" +
     "</div>";
+}
+
+function isScheduleWithinTimelineDuration(s: any, nowMs: number, todayStr: string): boolean {
+  const dateStr = String(s?.scheduled_date || "").trim();
+  if (!dateStr) return false;
+  if (dateStr === todayStr) return true;
+  const m = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return false;
+  const dayStartMs = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0).getTime();
+  const oneDayMs = 86400000;
+  if (Number.isFinite(dayStartMs) && nowMs >= dayStartMs && nowMs < dayStartMs + oneDayMs) {
+    return true;
+  }
+  const parsed = parseScheduleStartMs(s);
+  if (parsed && parsed.startMs >= nowMs && parsed.startMs - nowMs <= oneDayMs) {
+    return true;
+  }
+  return false;
 }
 
 export function renderHome(): void {
@@ -679,16 +857,30 @@ export function renderHome(): void {
   const box = $("homeTimeline");
   if (!box) return;
   const now = new Date();
+  const nowMs = now.getTime();
   const year = now.getFullYear();
   const todayStr = localDateKey(now);
   const upcomingHolidays = [...phHolidays(year), ...phHolidays(year + 1)].filter(h => h.date >= todayStr).slice(0, 4);
 
   const recentItems = [
-    ...state.announcements.map(a => ({ date: a.created_at, icon: "📢", title: a.title || "Announcement", detail: a.body || "", label: "Announcement" })),
-    ...visibleSchedules().filter(s => s.scheduled_date).map(s => ({
-      date: s.scheduled_date + "T" + (s.time_in || "00:00"), icon: "📅", title: s.title || "Schedule",
-      detail: [s.region, s.time_in && s.time_out ? s.time_in + "–" + s.time_out : ""].filter(Boolean).join(" · "), label: "Schedule",
+    ...state.announcements.map(a => ({
+      date: a.created_at,
+      icon: "📢",
+      title: a.title || "Announcement",
+      detail: a.body || "",
+      label: "Announcement",
+      attr: 'data-act="go-announcements"',
     })),
+    ...visibleSchedules()
+      .filter(s => isScheduleWithinTimelineDuration(s, nowMs, todayStr))
+      .map(s => ({
+        date: s.scheduled_date + "T" + (s.time_in || "00:00"),
+        icon: "📅",
+        title: s.title || "Schedule",
+        detail: [s.region, s.time_in && s.time_out ? `${formatScheduleTimeDisplay(s.time_in)}–${formatScheduleTimeDisplay(s.time_out)}` : (s.time_in ? formatScheduleTimeDisplay(s.time_in) : "")].filter(Boolean).join(" · "),
+        label: "Schedule (1-day)",
+        attr: 'data-act="go-schedule"',
+      })),
     ...timelineReports().map(r => {
       const site = state.sites.find(s => String(s.id) === String(r.site_id));
       const typeLbl = r.report_type === "delivery" ? "Delivery Report" : "Service Report";
@@ -700,6 +892,7 @@ export function renderHome(): void {
         title: r.title || typeLbl,
         detail: [profileName(r.created_by), site ? site.name : "", parsedUnit.unitName, bodyText.slice(0, 140)].filter(Boolean).join(" · "),
         label: typeLbl,
+        attr: 'data-report-notice="' + esc(r.id) + '"',
       };
     }),
   ].filter(item => item.date).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 10);
@@ -711,7 +904,7 @@ export function renderHome(): void {
   }).join("") || '<p class="muted">No upcoming holidays.</p>';
 
   const recentHtml = recentItems.map(item =>
-    '<div class="item"><b>' + item.icon + " " + esc(item.title) + '</b><div class="muted">' + esc(item.label) + " · " + esc(fmtDate(item.date)) + "</div><div>" + esc(item.detail) + "</div></div>"
+    '<div class="item clickable" ' + item.attr + '><b>' + item.icon + " " + esc(item.title) + '</b><div class="muted">' + esc(item.label) + " · " + esc(fmtDate(item.date)) + "</div><div>" + esc(item.detail) + "</div></div>"
   ).join("") || '<p class="muted">No recent timeline items yet.</p>';
 
   const nextHtml =
@@ -3433,30 +3626,167 @@ function renderDtrCutoffOptions(): void {
 export function renderDtr(): void {
   const tbody = $("dtrRows");
   if (!tbody) return;
+  const tfoot = $("dtrRowsFoot");
   renderDtrCutoffOptions();
   renderDtrPreviewEmployeeOptions();
   const baseRows = isManager() ? state.dtrs : state.dtrs.filter(d => String(d.user_id) === String(state.userId));
   const activeKey = getActiveDtrCutoffKey();
   const { period, rows } = filterDtrRowsByCutoff(baseRows, activeKey);
 
+  // Group chronologically by (work_date, user_id) so each working day computes total hours (9h regular + rest OT)
+  const dayGroups: Array<{ workDate: string; userId: string; entries: any[] }> = [];
+  const dayMap = new Map<string, { workDate: string; userId: string; entries: any[] }>();
+  for (const d of rows) {
+    const workDate = String(d.work_date || "");
+    const uid = String(d.user_id || "");
+    const key = `${workDate}::${uid}`;
+    let grp = dayMap.get(key);
+    if (!grp) {
+      grp = { workDate, userId: uid, entries: [] };
+      dayMap.set(key, grp);
+      dayGroups.push(grp);
+    }
+    grp.entries.push(d);
+  }
+
+  const now = new Date();
+  const todayStr = localDateKey(now);
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+
+  let workingDaysCount = 0;
+  let allDaysTotalMins = 0;
+  let allDaysRegMins = 0;
+  const empOtStats = new Map<string, { grossOtMins: number; uncoveredLackingMins: number }>();
+  const bodyHtmlParts: string[] = [];
+
+  for (const grp of dayGroups) {
+    let dayTotalMins = 0;
+    let dayNsRepair = false;
+    for (const d of grp.entries) {
+      const meta = parseDtrJobMeta(d.job, d.approved_by, d.nightshift_repair);
+      if (meta.nightshiftRepair) dayNsRepair = true;
+      const rowOpts = { workDate: d.work_date, nightshiftRepair: meta.nightshiftRepair };
+      const isOpenToday =
+        String(d.work_date) === todayStr &&
+        Boolean(d.time_in) &&
+        (!d.time_out || d.time_out === d.time_in);
+      const mins = isOpenToday
+        ? calculateDtrMinutes(d.time_in, null, nowMins, rowOpts)
+        : calculateDtrMinutes(d.time_in, d.time_out, null, rowOpts);
+      const hrs = mins / 60;
+      dayTotalMins += mins;
+      const cappedOut = capDtrTimeOut(d.time_in, d.time_out, rowOpts);
+      const entryOtMins = calculateShiftBreakdown(d.time_in, isOpenToday ? null : cappedOut, mins, rowOpts).finalOtMins;
+      const canDelete = String(d.user_id) === String(state.userId) || isManager();
+      const jobText = [
+        meta.unitName ? `[${meta.unitName}]` : "",
+        meta.cleanJob,
+        meta.nightshiftRepair ? "[🌙 Nightshift/Repair]" : "",
+        meta.approvedBy ? `(${meta.approvedBy})` : "",
+      ].filter(Boolean).join(" ");
+      const timeOutDisplay = isOpenToday
+        ? '<span class="badge" style="margin-left:0;">⏱ Active</span>'
+        : esc(cappedOut || "—");
+      const hrsDisplay = mins > 0 || isOpenToday
+        ? (isOpenToday ? "⏱ " : "") + esc(formatDtrDuration(mins)) +
+          ` <span class="muted">(${hrs.toFixed(2)}h)</span>` +
+          (entryOtMins > 0 ? ` (+${esc(formatDtrDuration(entryOtMins))} OT)` : "")
+        : "0.00";
+      bodyHtmlParts.push(
+        "<tr><td>" + esc(fmtTableDate(d.work_date)) + "</td><td>" + esc(employeeDisplayName(d.user_id)) + "</td><td>" +
+        esc([d.location, jobText].filter(Boolean).join(" · ")) + "</td><td><b>" + esc(d.time_in || "—") + "</b></td><td><b>" +
+        timeOutDisplay + "</b></td><td>" + hrsDisplay + "</td><td>" +
+        (canDelete ? '<button class="gray small-btn" type="button" onclick="openEditDtr(\'' + esc(d.id) + '\')" aria-label="Edit DTR">✏️</button> ' : "") +
+        (canDelete ? '<button class="red small-btn" type="button" data-act="del-dtr" data-id="' + esc(d.id) + '">×</button>' : "") + "</td></tr>"
+      );
+    }
+    if (dayTotalMins > 0) workingDaysCount++;
+    const firstEntryIn = grp.entries.find((e: any) => e.time_in)?.time_in || null;
+    const closedEntries = grp.entries.filter((e: any) => e.time_out && e.time_out !== e.time_in);
+    const lastEntryOut = closedEntries.length ? closedEntries[closedEntries.length - 1].time_out : null;
+    const dayBd = calculateShiftBreakdown(firstEntryIn, lastEntryOut, dayTotalMins, {
+      workDate: grp.workDate,
+      nightshiftRepair: dayNsRepair,
+    });
+    const dayRegMins = dayBd.regularMins;
+    const dayOtMins = dayBd.finalOtMins;
+    const isClosedDay = Boolean(lastEntryOut) || grp.workDate < todayStr;
+    const dayUncoveredLackingMins = (dayTotalMins > 0 && isClosedDay)
+      ? Math.max(0, dayBd.standardMins - dayBd.workedMins)
+      : 0;
+    allDaysTotalMins += dayTotalMins;
+    allDaysRegMins += dayRegMins;
+    const empStat = empOtStats.get(grp.userId) || { grossOtMins: 0, uncoveredLackingMins: 0 };
+    empStat.grossOtMins += dayOtMins;
+    empStat.uncoveredLackingMins += dayUncoveredLackingMins;
+    empOtStats.set(grp.userId, empStat);
+
+    const dayRuleBadge = dayBd.isSunday
+      ? (dayBd.nightshiftRepair ? " · Sun 10AM–7PM + 🌙 NS/Repair" : " · Sun 10AM–7PM")
+      : (dayBd.nightshiftRepair ? " · 🌙 NS/Repair" : "");
+    const dayBreakdownSub = dayBd.isSunday && !dayBd.nightshiftRepair && dayBd.workedMins > dayBd.regularMins && dayOtMins === 0
+      ? `(Sun 10AM–7PM: ${esc(formatDtrDuration(dayRegMins))} Reg · Final O.T.: 0 mins [Needs <9AM start or NS/Repair])`
+      : dayBd.lackingMins > 0 && dayBd.grossOtMins > 0 && dayUncoveredLackingMins === 0
+        ? `(Std 9h${dayRuleBadge}: ${esc(formatDtrDuration(dayBd.inShiftWorkedMins))} [Lacking ${esc(formatDtrDuration(dayBd.lackingMins))}] · OT: ${esc(formatDtrDuration(dayBd.grossOtMins))} − ${esc(formatDtrDuration(dayBd.lackingMins))} = Final O.T.: ${esc(formatDtrDuration(dayOtMins))})`
+        : dayUncoveredLackingMins > 0
+          ? `(Reg: ${esc(formatDtrDuration(dayRegMins))} / 9h 00m${dayRuleBadge} · Lacking: ${esc(formatDtrDuration(dayUncoveredLackingMins))} [Deducted from overall O.T.] · Final O.T.: 0 mins)`
+          : dayBd.lackingMins > 0 && lastEntryOut
+            ? `(Reg: ${esc(formatDtrDuration(dayRegMins))} / 9h 00m${dayRuleBadge} · Lacking: ${esc(formatDtrDuration(dayBd.lackingMins))} · Final O.T.: 0 mins)`
+            : `(Reg: ${esc(formatDtrDuration(dayRegMins))}${dayRuleBadge} · O.T.: ${esc(formatDtrDuration(dayOtMins))})`;
+
+    bodyHtmlParts.push(
+      '<tr class="dtr-day-total-row">' +
+      '<td colspan="5"><b>📅 ' + esc(fmtTableDate(grp.workDate)) + " · " + esc(employeeDisplayName(grp.userId)) + " — Day Total</b>" +
+      ' <span class="muted">' + dayBreakdownSub + "</span></td>" +
+      "<td><b>" + esc(formatDtrDuration(dayTotalMins)) + "</b> <span class=\"muted\">(" + (dayTotalMins / 60).toFixed(2) + "h)</span></td>" +
+      "<td>" + (dayOtMins > 0
+        ? '<span class="badge">+' + esc(formatDtrDuration(dayOtMins)) + " OT</span>"
+        : (dayUncoveredLackingMins > 0 ? '<span class="muted">−' + esc(formatDtrDuration(dayUncoveredLackingMins)) + "</span>" : '<span class="muted">Reg</span>')) +
+      "</td>" +
+      "</tr>"
+    );
+  }
+
+  let allDaysGrossOtMins = 0;
+  let allDaysUncoveredLackingMins = 0;
+  let allDaysOtMins = 0;
+  empOtStats.forEach(s => {
+    allDaysGrossOtMins += s.grossOtMins;
+    allDaysUncoveredLackingMins += s.uncoveredLackingMins;
+    allDaysOtMins += Math.max(0, s.grossOtMins - s.uncoveredLackingMins);
+  });
+
+  const allDaysTotalHrs = allDaysTotalMins / 60;
+  const allDaysOtHrs = allDaysOtMins / 60;
+
   const summaryEl = $("dtrCutoffSummary");
   if (summaryEl) {
     const periodText = period ? period.label : "All Dates";
-    summaryEl.textContent = `${periodText} · ${rows.length} ${rows.length === 1 ? "entry" : "entries"}`;
+    const lackingTag = allDaysUncoveredLackingMins > 0
+      ? ` (after −${formatDtrDuration(allDaysUncoveredLackingMins)} lacking)`
+      : "";
+    summaryEl.textContent = `${periodText} · ${rows.length} ${rows.length === 1 ? "entry" : "entries"} · ${workingDaysCount} day(s) · ${formatDtrDuration(allDaysOtMins)} (${allDaysOtHrs.toFixed(2)}h) Final OT${lackingTag}`;
   }
 
-  tbody.innerHTML = rows.map(d => {
-    const hrs = calculateDtrHours(d.time_in, d.time_out, true);
-    const otMins = calculateOtMinutes(d.time_in, d.time_out);
-    const meta = parseDtrJobMeta(d.job, d.approved_by);
-    const canDelete = String(d.user_id) === String(state.userId) || isManager();
-    const jobText = [meta.unitName ? `[${meta.unitName}]` : "", meta.cleanJob, meta.approvedBy ? `(${meta.approvedBy})` : ""].filter(Boolean).join(" ");
-    return "<tr><td>" + esc(fmtTableDate(d.work_date)) + "</td><td>" + esc(employeeDisplayName(d.user_id)) + "</td><td>" +
-      esc([d.location, jobText].filter(Boolean).join(" · ")) + "</td><td><b>" + esc(d.time_in || "—") + "</b></td><td><b>" +
-      esc(d.time_out || "—") + "</b></td><td>" + hrs.toFixed(2) + (otMins > 0 ? " (OT✓)" : "") + "</td><td>" +
-      (canDelete ? '<button class="gray small-btn" type="button" onclick="openEditDtr(\'' + esc(d.id) + '\')" aria-label="Edit DTR">✏️</button> ' : "") +
-      (canDelete ? '<button class="red small-btn" type="button" data-act="del-dtr" data-id="' + esc(d.id) + '">×</button>' : "") + "</td></tr>";
-  }).join("") || '<tr><td colspan="7" class="muted">No DTR entries for this cutoff period.</td></tr>';
+  tbody.innerHTML = bodyHtmlParts.join("") || '<tr><td colspan="7" class="muted">No DTR entries for this cutoff period.</td></tr>';
+  if (tfoot) {
+    const otFormulaDesc = allDaysUncoveredLackingMins > 0
+      ? `Day O.T.: ${esc(formatDtrDuration(allDaysGrossOtMins))} − Lacking: ${esc(formatDtrDuration(allDaysUncoveredLackingMins))} = Final Overall O.T.: ${esc(formatDtrDuration(allDaysOtMins))}`
+      : `Mon–Sat Reg: 8AM–5PM, max 7PM · Sun Reg: 10AM–7PM · NS/Repair unlocks 7:01PM+`;
+    tfoot.innerHTML = rows.length
+      ? '<tr class="dtr-all-ot-row">' +
+        '<td colspan="5"><b>⏱️ ' + (allDaysUncoveredLackingMins > 0 ? "Final Total Overall O.T." : "All Working Days O.T.") + '</b> <span class="muted">(' + otFormulaDesc + ")</span></td>" +
+        "<td><b>" + esc(formatDtrDuration(allDaysOtMins)) + '</b> <span class="muted">(' + allDaysOtHrs.toFixed(2) + "h)</span></td>" +
+        '<td><span class="badge">Final OT</span></td>' +
+        "</tr>" +
+        '<tr class="dtr-all-total-row">' +
+        '<td colspan="5"><b>📊 All Working Days Total (' + workingDaysCount + " " + (workingDaysCount === 1 ? "day" : "days") + ')</b> <span class="muted">(Reg: ' + esc(formatDtrDuration(allDaysRegMins)) + " + Final O.T.: " + esc(formatDtrDuration(allDaysOtMins)) + ")</span></td>" +
+        "<td><b>" + esc(formatDtrDuration(allDaysTotalMins)) + '</b> <span class="muted">(' + allDaysTotalHrs.toFixed(2) + "h)</span></td>" +
+        "<td></td>" +
+        "</tr>"
+      : "";
+  }
+  renderDtrLiveStatus();
   if (!$("dtrPreview")?.classList.contains("hidden")) buildDtrPaper();
 }
 
@@ -3635,7 +3965,9 @@ export function dtrTab(tab: "fill" | "time_log" | "preview" | "time_in" | "time_
     renderTimeLogSitePickers();
     autoFillDtrFromSchedule(false);
     renderTimeLog();
+    renderDtrLiveStatus();
   }
+  if (normalized === "fill") renderDtrLiveStatus();
   saveLastView();
 }
 
@@ -3709,15 +4041,20 @@ export async function addDtr(): Promise<void> {
   if (!date) { toast("Choose a date"); return; }
   const unitName = val("dtrUnit").trim();
   const jobRaw = val("dtrJob").trim();
-  const jobFull = [unitName ? `[Unit: ${unitName}]` : "", jobRaw].filter(Boolean).join(" ");
+  const nsBox = $("dtrNightshiftOrRepair") as HTMLInputElement | null;
+  const nightshiftRepair = Boolean(nsBox?.checked);
+  const jobFull = buildDtrJobWithApproval(unitName, jobRaw, "", false, nightshiftRepair);
+  const rawTimeIn = val("dtrIn") || null;
+  const rawTimeOut = val("dtrOut") || null;
+  const cappedTimeOut = rawTimeOut ? capDtrTimeOut(rawTimeIn, rawTimeOut, { workDate: date, nightshiftRepair }) : null;
   try {
     await insertDtrEntrySafe({
       user_id: state.userId,
       work_date: date,
       location: val("dtrLocation").trim() || null,
       job: jobFull || null,
-      time_in: val("dtrIn") || null,
-      time_out: val("dtrOut") || null,
+      time_in: rawTimeIn,
+      time_out: cappedTimeOut,
       overtime_approved: true,
     });
   } catch (err: any) {
@@ -3732,8 +4069,11 @@ export async function addDtr(): Promise<void> {
   setVal("dtrJob", "");
   setVal("dtrIn", "");
   setVal("dtrOut", "");
+  if (nsBox) nsBox.checked = false;
   suppressNotifications();
   await loadDtrs();
+  renderHomeDtrStatus();
+  renderDtrLiveStatus();
   toast("Entry added");
 }
 
@@ -3745,8 +4085,11 @@ export function clearDtrForm(): void {
   if (unitEl) delete unitEl.dataset.autoFilled;
   if (jobEl) delete jobEl.dataset.autoFilled;
   ["dtrDate", "dtrLocation", "dtrUnit", "dtrJob", "dtrIn", "dtrOut"].forEach(id => setVal(id, ""));
+  const nsEl = $("dtrNightshiftOrRepair") as HTMLInputElement | null;
+  if (nsEl) nsEl.checked = false;
   const otEl = $("dtrOvertimeApproved") as HTMLInputElement | null;
   if (otEl) otEl.checked = true;
+  renderDtrLiveStatus();
 }
 
 export function setTimeLogMode(mode: "time_in" | "time_out", isManual = true): void {
@@ -3937,38 +4280,50 @@ async function writeAnalyzedTimeToDtr(
   time24: string,
   location: string,
   unit: string,
-  summary: string
-): Promise<{ dtrEntryId: string | null; savedTimeIn: string; savedTimeOut: string }> {
+  summary: string,
+  nightshiftRepair = false
+): Promise<{ dtrEntryId: string | null; savedTimeIn: string; savedTimeOut: string; keptLockedTimeOut?: boolean }> {
   if (!state.userId) throw new Error("Sign in required before saving DTR.");
   const schedWork = findScheduledWorkForUser(workDate);
   const scheduledJob = schedWork?.jobDescription || "";
-  const jobLabel = [
-    unit ? `[Unit: ${unit}]` : "",
+  const cleanJobDesc = [
     scheduledJob || (mode === "time_in" ? "Photo Time In" : "Photo Time Out"),
     summary ? `(${summary.slice(0, 70)})` : "",
   ].filter(Boolean).join(" ");
+  const jobLabel = buildDtrJobWithApproval(unit, cleanJobDesc, "", false, nightshiftRepair);
   const myRowsForDate = (state.dtrs || []).filter(
     d => String(d.user_id) === String(state.userId) && String(d.work_date) === String(workDate)
   );
+  const ruleOpts = { workDate, nightshiftRepair };
 
   let dtrEntryId: string | null = null;
   let savedTimeIn = mode === "time_in" ? time24 : "";
-  let savedTimeOut = mode === "time_out" ? time24 : "";
+  let savedTimeOut = mode === "time_out" ? capDtrTimeOut(null, time24, ruleOpts) : "";
+  let keptLockedTimeOut = false;
 
   if (mode === "time_in") {
     const existingNoIn = myRowsForDate.find(d => !d.time_in);
     if (existingNoIn) {
+      const exMeta = parseDtrJobMeta(existingNoIn.job, existingNoIn.approved_by);
+      const nextNs = nightshiftRepair || exMeta.nightshiftRepair;
+      const nextJob = existingNoIn.job
+        ? (nightshiftRepair && !exMeta.nightshiftRepair
+            ? buildDtrJobWithApproval(exMeta.unitName, exMeta.cleanJob, exMeta.approvedBy, runtime.dtrApprovedByColMissing, true)
+            : existingNoIn.job)
+        : jobLabel;
       const { error } = await runtime.client
         .from("dtr_entries")
         .update({
           time_in: time24,
           ...(location && !existingNoIn.location ? { location } : {}),
-          ...(jobLabel && !existingNoIn.job ? { job: jobLabel } : {}),
+          ...(nextJob ? { job: nextJob } : {}),
         })
         .eq("id", existingNoIn.id);
       if (error) throw error;
       dtrEntryId = String(existingNoIn.id);
-      savedTimeOut = existingNoIn.time_out || "";
+      savedTimeOut = existingNoIn.time_out
+        ? capDtrTimeOut(time24, existingNoIn.time_out, { workDate, nightshiftRepair: nextNs })
+        : "";
     } else {
       dtrEntryId = await insertDtrEntrySafe({
         user_id: state.userId,
@@ -3981,32 +4336,55 @@ async function writeAnalyzedTimeToDtr(
       });
     }
   } else {
-    const targetRow =
+    const openRow =
       myRowsForDate.find(d => d.time_in && (!d.time_out || d.time_out === d.time_in)) ||
-      myRowsForDate.find(d => !d.time_out) ||
-      myRowsForDate[0];
-    if (targetRow) {
+      myRowsForDate.find(d => !d.time_out);
+    const lockedClosedRow = !openRow
+      ? [...myRowsForDate].reverse().find(d => d.time_in && d.time_out && d.time_out !== d.time_in)
+      : null;
+
+    if (openRow) {
+      const openMeta = parseDtrJobMeta(openRow.job, openRow.approved_by);
+      const rowNs = nightshiftRepair || openMeta.nightshiftRepair;
+      const cappedOut = capDtrTimeOut(openRow.time_in, time24, { workDate, nightshiftRepair: rowNs });
+      const updatedJob = nightshiftRepair && !openMeta.nightshiftRepair
+        ? buildDtrJobWithApproval(openMeta.unitName, openMeta.cleanJob, openMeta.approvedBy, runtime.dtrApprovedByColMissing, true)
+        : null;
       const { error } = await runtime.client
         .from("dtr_entries")
         .update({
-          time_out: time24,
+          time_out: cappedOut,
           overtime_approved: true,
-          ...(location && !targetRow.location ? { location } : {}),
+          ...(location && !openRow.location ? { location } : {}),
+          ...(updatedJob ? { job: updatedJob } : {}),
         })
-        .eq("id", targetRow.id);
+        .eq("id", openRow.id);
       if (error) throw error;
-      dtrEntryId = String(targetRow.id);
-      savedTimeIn = targetRow.time_in || "";
+      dtrEntryId = String(openRow.id);
+      savedTimeIn = openRow.time_in || "";
+      savedTimeOut = cappedOut;
+    } else if (lockedClosedRow) {
+      // Preserve already-recorded Time Out (e.g. 7:00 PM stays 7:00 PM even if 7:01/7:21 PM arrives continuously)
+      const lockedMeta = parseDtrJobMeta(lockedClosedRow.job, lockedClosedRow.approved_by);
+      dtrEntryId = String(lockedClosedRow.id);
+      savedTimeIn = lockedClosedRow.time_in || "";
+      savedTimeOut = capDtrTimeOut(lockedClosedRow.time_in, lockedClosedRow.time_out, {
+        workDate,
+        nightshiftRepair: lockedMeta.nightshiftRepair,
+      });
+      keptLockedTimeOut = true;
     } else {
+      const cappedOut = capDtrTimeOut(null, time24, ruleOpts);
       dtrEntryId = await insertDtrEntrySafe({
         user_id: state.userId,
         work_date: workDate,
         location: location || null,
         job: jobLabel || null,
         time_in: null,
-        time_out: time24,
+        time_out: cappedOut,
         overtime_approved: true,
       });
+      savedTimeOut = cappedOut;
     }
   }
 
@@ -4023,9 +4401,12 @@ async function writeAnalyzedTimeToDtr(
   if (scheduledJob) setVal("dtrJob", scheduledJob);
   if (savedTimeIn) setVal("dtrIn", savedTimeIn);
   if (savedTimeOut) setVal("dtrOut", savedTimeOut);
+  const dtrNsEl = $("dtrNightshiftOrRepair") as HTMLInputElement | null;
+  if (dtrNsEl) dtrNsEl.checked = nightshiftRepair;
+  renderDtrLiveStatus();
   buildDtrPaper();
 
-  return { dtrEntryId, savedTimeIn, savedTimeOut };
+  return { dtrEntryId, savedTimeIn, savedTimeOut, keptLockedTimeOut };
 }
 
 export async function submitTimeLogPhoto(file: File): Promise<void> {
@@ -4163,9 +4544,13 @@ export async function submitTimeLogPhoto(file: File): Promise<void> {
       return;
     }
 
-    const slotResult = await writeAnalyzedTimeToDtr(mode, workDate, time24, detectedLoc, selectedUnit, summary);
+    const timeLogNsRepair = Boolean(($("timeLogNightshiftOrRepair") as HTMLInputElement | null)?.checked);
+    const slotResult = await writeAnalyzedTimeToDtr(mode, workDate, time24, detectedLoc, selectedUnit, summary, timeLogNsRepair);
     const slotText = `Time In: ${slotResult.savedTimeIn || "—"} | Time Out: ${slotResult.savedTimeOut || "—"}`;
-    const aiReadingMsg = `Done reading! AI verified ${modeLabel}: ${time12 || time24} (${fmtDay(workDate)}) and already filled the ${modeLabel} slot in DTR (${slotText}).${summary ? " " + summary : ""}`;
+    const lockedNote = slotResult.keptLockedTimeOut
+      ? ` Time Out stayed locked at ${fmtTime12h(slotResult.savedTimeOut) || slotResult.savedTimeOut}.`
+      : "";
+    const aiReadingMsg = `Done reading! AI verified ${modeLabel}: ${time12 || time24} (${fmtDay(workDate)}) and updated DTR (${slotText}).${lockedNote}${summary ? " " + summary : ""}`;
 
     await insertTimeLogEntry(
       {
@@ -4183,7 +4568,7 @@ export async function submitTimeLogPhoto(file: File): Promise<void> {
         dtr_entry_id: slotResult.dtrEntryId,
       },
       `${modeIcon} ${modeLabel} — ${senderName}`,
-      `AI Reading: ${time12 || time24} (${fmtDay(workDate)}) · Site: ${detectedLoc}${selectedUnit ? " (" + selectedUnit + ")" : ""} · Filled ${modeLabel} slot.`
+      `AI Reading: ${time12 || time24} (${fmtDay(workDate)}) · Site: ${detectedLoc}${selectedUnit ? " (" + selectedUnit + ")" : ""} · ${slotResult.keptLockedTimeOut ? `Kept Time Out at ${fmtTime12h(slotResult.savedTimeOut) || slotResult.savedTimeOut}` : `Filled ${modeLabel} slot`}.`
     );
 
     const nextMode: "time_in" | "time_out" = mode === "time_in" ? "time_out" : "time_in";
@@ -4197,10 +4582,17 @@ export async function submitTimeLogPhoto(file: File): Promise<void> {
     suppressNotifications();
     await loadAppNotifications();
     await loadTimeLogs();
+    renderDtrLiveStatus();
     if (statusEl) {
-      statusEl.textContent = `✅ Done reading! Filled ${modeLabel} (${time12 || time24}) · ${slotText}${tmCfg.autoFlipMode ? ` · Next upload: ${nextLabel}` : ""}`;
+      statusEl.textContent = slotResult.keptLockedTimeOut
+        ? `✅ Uploaded! Time Out remained locked at ${fmtTime12h(slotResult.savedTimeOut) || slotResult.savedTimeOut} · ${slotText}`
+        : `✅ Done reading! Filled ${modeLabel} (${time12 || time24}) · ${slotText}${tmCfg.autoFlipMode ? ` · Next upload: ${nextLabel}` : ""}`;
     }
-    toast(`✅ ${modeLabel} (${time12 || time24}) saved!${tmCfg.autoFlipMode ? ` Next: ${nextLabel}` : ""}`);
+    toast(
+      slotResult.keptLockedTimeOut
+        ? `🔴 Time Out kept at ${fmtTime12h(slotResult.savedTimeOut) || slotResult.savedTimeOut}`
+        : `✅ ${modeLabel} (${time12 || time24}) saved!${tmCfg.autoFlipMode ? ` Next: ${nextLabel}` : ""}`
+    );
   } catch (err: any) {
     const msg = err?.message || "Could not analyze photo";
     if (statusEl) statusEl.textContent = "Failed: " + msg;
@@ -4307,6 +4699,8 @@ export function openEditDtr(id: string): void {
   setVal("editDtrIn", String(row.time_in || ""));
   setVal("editDtrOut", String(row.time_out || ""));
   setVal("editDtrApprovedBy", meta.approvedBy || "");
+  const nsBox = $("editDtrNightshiftOrRepair") as HTMLInputElement | null;
+  if (nsBox) nsBox.checked = meta.nightshiftRepair;
   const otWrap = $("editDtrOvertimeWrap");
   if (otWrap) otWrap.classList.remove("hidden");
   const otBox = $("editDtrOvertimeApproved") as HTMLInputElement | null;
@@ -4327,13 +4721,14 @@ export async function saveEditedDtr(): Promise<void> {
   const unitName = val("editDtrUnit").trim();
   const cleanJob = val("editDtrJob").trim();
   const timeIn = val("editDtrIn").trim();
-  const timeOut = val("editDtrOut").trim();
+  const nightshiftRepair = Boolean(($("editDtrNightshiftOrRepair") as HTMLInputElement | null)?.checked);
+  const timeOut = capDtrTimeOut(timeIn, val("editDtrOut").trim(), { workDate, nightshiftRepair });
   const approvedBy = val("editDtrApprovedBy").trim();
 
   const basePayload: Record<string, any> = {
     work_date: workDate,
     location: location || null,
-    job: buildDtrJobWithApproval(unitName, cleanJob, approvedBy, runtime.dtrApprovedByColMissing) || null,
+    job: buildDtrJobWithApproval(unitName, cleanJob, approvedBy, runtime.dtrApprovedByColMissing, nightshiftRepair) || null,
     time_in: timeIn || null,
     time_out: timeOut || null,
     overtime_approved: true,
@@ -4345,7 +4740,7 @@ export async function saveEditedDtr(): Promise<void> {
     if (error && /approved_by|42703|schema cache/i.test(String(error.message || ""))) {
       runtime.dtrApprovedByColMissing = true;
       delete basePayload.approved_by;
-      basePayload.job = buildDtrJobWithApproval(unitName, cleanJob, approvedBy, true) || null;
+      basePayload.job = buildDtrJobWithApproval(unitName, cleanJob, approvedBy, true, nightshiftRepair) || null;
       const retry = await runtime.client.from("dtr_entries").update(basePayload).eq("id", runtime.editingDtrId);
       error = retry.error;
     }
@@ -4366,6 +4761,8 @@ export async function saveEditedDtr(): Promise<void> {
     closeEditDtr();
     suppressNotifications();
     await loadDtrs();
+    renderHomeDtrStatus();
+    renderDtrLiveStatus();
     buildDtrPaper();
     toast("DTR entry updated");
   } catch (err: any) {
@@ -4379,24 +4776,49 @@ function buildDtrPaper(): void {
   const employeeRows = state.dtrs.filter(d => String(d.user_id) === String(pickedUid));
   const { rows } = filterDtrRowsByCutoff(employeeRows, getActiveDtrCutoffKey());
   const isOwn = String(pickedUid) === String(state.userId);
-  const sig = isOwn
-    ? (signaturePhotoDataUrl ? '<img src="' + esc(signaturePhotoDataUrl) + '" alt="Signature">' : (drawnSigDataUrl ? '<img src="' + esc(drawnSigDataUrl) + '" alt="Signature">' : ""))
-    : "";
+  const sigUrl = isOwn ? (signaturePhotoDataUrl || drawnSigDataUrl || "") : "";
+  runtime.activeDtrSigDataUrl = sigUrl;
+  const sig = sigUrl ? '<img src="' + esc(sigUrl) + '" alt="Signature">' : "";
+
+  const dayMetaMap = new Map<string, { firstIn: string | null; lastOut: string | null; mins: number; nsRepair: boolean }>();
+  rows.forEach(d => {
+    const meta = parseDtrJobMeta(d.job, d.approved_by);
+    const dayKey = `${String(d.work_date || "")}::${String(d.user_id || "")}`;
+    const ruleOpts = { workDate: d.work_date, nightshiftRepair: meta.nightshiftRepair };
+    const mins = calculateDtrMinutes(d.time_in, d.time_out, null, ruleOpts);
+    const capped = capDtrTimeOut(d.time_in, d.time_out, ruleOpts);
+    const cur = dayMetaMap.get(dayKey) || { firstIn: null, lastOut: null, mins: 0, nsRepair: false };
+    if (!cur.firstIn && d.time_in) cur.firstIn = d.time_in;
+    if (capped && capped !== d.time_in) cur.lastOut = capped;
+    cur.mins += mins;
+    if (meta.nightshiftRepair) cur.nsRepair = true;
+    dayMetaMap.set(dayKey, cur);
+  });
+
   const body = rows.map(d => {
     const meta = parseDtrJobMeta(d.job, d.approved_by);
-    const wdDate = d.work_date ? new Date(String(d.work_date) + "T00:00:00") : null;
-    const isSunday = wdDate && !isNaN(wdDate.getTime()) && wdDate.getDay() === 0;
+    const isSunday = isSundayDate(d.work_date);
+    const ruleOpts = { workDate: d.work_date, nightshiftRepair: meta.nightshiftRepair };
+    const dayKey = `${String(d.work_date || "")}::${String(d.user_id || "")}`;
+    const dayInfo = dayMetaMap.get(dayKey);
+    const dayBd = dayInfo
+      ? calculateShiftBreakdown(dayInfo.firstIn, dayInfo.lastOut, dayInfo.mins, {
+          workDate: d.work_date,
+          nightshiftRepair: dayInfo.nsRepair,
+        })
+      : null;
+    const hasDailyOt = Boolean(dayBd && dayBd.finalOtMins > 0);
     const tIn = fmtTime12h(d.time_in);
-    const tOut = fmtTime12h(d.time_out);
+    const tOut = fmtTime12h(capDtrTimeOut(d.time_in, d.time_out, ruleOpts));
     const timeRange = (tIn && tOut) ? `${tIn} - ${tOut}` : (tIn || tOut || "—");
     const desc = [meta.cleanJob, meta.unitName ? `(${meta.unitName})` : ""].filter(Boolean).join(" ") || meta.unitName || "";
     const approvedTxt = meta.approvedBy ||
-      (isSunday ? "SUNDAY DUTY" : (calculateOtMinutes(d.time_in, d.time_out) > 0 ? "EXTEND" : ""));
+      (isSunday ? "SUNDAY DUTY" : ((hasDailyOt || calculateOtMinutes(d.time_in, d.time_out, ruleOpts) > 0) ? "EXTEND" : ""));
     return '<tr class="clickable" data-edit-dtr="' + esc(d.id) + '" title="Tap to edit DTR entry">' +
       "<td>" + esc(fmtHalfSheetDate(d.work_date)) + "</td>" +
       "<td>" + esc(d.location || "") + "</td>" +
-      "<td>" + esc(desc) + "</td>" +
-      "<td>" + esc(timeRange) + "</td>" +
+      '<td class="dp-desc-cell">' + esc(desc) + "</td>" +
+      '<td class="dp-time-cell">' + esc(timeRange) + "</td>" +
       "<td>" + esc(approvedTxt) + "</td></tr>";
   }).join("") || '<tr><td colspan="5" class="dp-empty">No entries for this cutoff period. Tap Fill DTR to add logs.</td></tr>';
   const paper = $("dtrPaper");
@@ -4406,19 +4828,19 @@ function buildDtrPaper(): void {
       '<tr><th colspan="5" class="dp-sheet-title">DAILY TIME RECORD &amp; AUTHORITY TO CONDUCT OVERTIME</th></tr>' +
       '<tr class="dp-col-head">' +
       '<th style="width:11%">DATE</th>' +
-      '<th style="width:19%">LOCATION</th>' +
+      '<th style="width:20%">LOCATION</th>' +
       '<th style="width:37%">WORK DESCRIPTION</th>' +
       '<th style="width:19%">TIME START/END</th>' +
-      '<th style="width:14%">APPROVED BY:</th>' +
+      '<th style="width:13%">APPROVED BY:</th>' +
       "</tr>" +
       body +
-      '<tr><td colspan="5" class="dp-empty"></td></tr>' +
       "</table>" +
       '<div class="dp-employee-sign">' + sig +
-      '<div class="dp-employee-name">' + esc(employeeDisplayName(pickedUid)) + "</div>" +
+      '<div class="dp-employee-name">' + esc(employeeDisplayName(pickedUid).toUpperCase()) + "</div>" +
       '<div class="dp-employee-caption">Signature Over Printed Name of Employee</div>' +
       "</div>";
   }
+  syncDtrThreeStepUi();
 }
 
 /* ==================== TIMEMARK CAMERA ==================== */
@@ -5898,11 +6320,131 @@ export async function captureTimemarkPhoto(): Promise<void> {
   }
 }
 
+type DtrExportStep = "jpeg" | "print" | "pdf";
+interface DtrThreeStepState {
+  jpeg: boolean;
+  print: boolean;
+  pdf: boolean;
+}
+const dtrThreeStepMemory: Record<string, DtrThreeStepState> = {};
+const dtrThreeStepBusy: Record<DtrExportStep, boolean> = { jpeg: false, print: false, pdf: false };
+
+function getCurrentPreviewEmployeeId(): string {
+  return isManager() && val("dtrPreviewEmployee") ? val("dtrPreviewEmployee") : String(state.userId || "");
+}
+
 function getCurrentPreviewExportedIds(): string[] {
-  const pickedUid = isManager() && val("dtrPreviewEmployee") ? val("dtrPreviewEmployee") : String(state.userId || "");
+  const pickedUid = getCurrentPreviewEmployeeId();
   const employeeRows = (state.dtrs || []).filter(d => String(d.user_id) === String(pickedUid));
   const { rows } = filterDtrRowsByCutoff(employeeRows, getActiveDtrCutoffKey());
   return rows.map(d => String(d.id)).filter(Boolean);
+}
+
+function getDtrThreeStepKey(): string {
+  return `eesi-dtr-3step:${getCurrentPreviewEmployeeId()}:${getActiveDtrCutoffKey()}`;
+}
+
+function readDtrThreeStepState(): DtrThreeStepState {
+  const key = getDtrThreeStepKey();
+  if (dtrThreeStepMemory[key]) return { ...dtrThreeStepMemory[key] };
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const p = JSON.parse(raw);
+      const next: DtrThreeStepState = { jpeg: !!p?.jpeg, print: !!p?.print, pdf: !!p?.pdf };
+      dtrThreeStepMemory[key] = next;
+      return { ...next };
+    }
+  } catch {}
+  return { jpeg: false, print: false, pdf: false };
+}
+
+function writeDtrThreeStepState(st: DtrThreeStepState, keyOverride?: string): void {
+  const key = keyOverride || getDtrThreeStepKey();
+  dtrThreeStepMemory[key] = { ...st };
+  try {
+    localStorage.setItem(key, JSON.stringify(st));
+  } catch {}
+}
+
+function clearDtrThreeStepState(keyOverride?: string): void {
+  const key = keyOverride || getDtrThreeStepKey();
+  delete dtrThreeStepMemory[key];
+  try {
+    localStorage.removeItem(key);
+  } catch {}
+}
+
+export function canRunDtrThreeStepPdf(): boolean {
+  const ids = getCurrentPreviewExportedIds();
+  if (!ids.length) return true;
+  if (dtrThreeStepBusy.pdf) return false;
+  return !readDtrThreeStepState().pdf;
+}
+
+export function syncDtrThreeStepUi(): void {
+  const ids = getCurrentPreviewExportedIds();
+  const jpegBtn = $("dtrBtnJpeg") as HTMLButtonElement | null;
+  const printBtn = $("dtrBtnPrint") as HTMLButtonElement | null;
+  const pdfBtn = $("dtrBtnPdf") as HTMLButtonElement | null;
+  const hint = $("dtrExportHint");
+
+  if (!ids.length) {
+    clearDtrThreeStepState();
+    if (jpegBtn) { jpegBtn.disabled = false; jpegBtn.textContent = "📷 Download & Share JPEG"; }
+    if (printBtn) { printBtn.disabled = false; printBtn.textContent = "🖨️ Print DTR"; }
+    if (pdfBtn) { pdfBtn.disabled = false; pdfBtn.textContent = "📑 Full History PDF"; }
+    if (hint) hint.textContent = "No DTR entries in this cutoff period.";
+    return;
+  }
+
+  const st = readDtrThreeStepState();
+  if (jpegBtn) {
+    jpegBtn.disabled = st.jpeg || dtrThreeStepBusy.jpeg;
+    jpegBtn.textContent = st.jpeg ? "✓ JPEG Done (1/1)" : "📷 Download & Share JPEG";
+  }
+  if (printBtn) {
+    printBtn.disabled = st.print || dtrThreeStepBusy.print;
+    printBtn.textContent = st.print ? "✓ Print Done (1/1)" : "🖨️ Print DTR";
+  }
+  if (pdfBtn) {
+    pdfBtn.disabled = st.pdf || dtrThreeStepBusy.pdf;
+    pdfBtn.textContent = st.pdf ? "✓ PDF Done (1/1)" : "📑 Full History PDF";
+  }
+
+  if (hint) {
+    const doneCount = [st.jpeg, st.print, st.pdf].filter(Boolean).length;
+    const remaining: string[] = [];
+    if (!st.jpeg) remaining.push("Download & Share JPEG");
+    if (!st.print) remaining.push("Print DTR");
+    if (!st.pdf) remaining.push("Full History PDF");
+    hint.textContent = doneCount === 0
+      ? "1 click per button (0/3 done) — DTR automatically clears once all 3 buttons are clicked."
+      : `Export progress: ${doneCount}/3 done (Remaining: ${remaining.join(", ")}) — DTR automatically clears at 3/3.`;
+  }
+}
+
+export async function completeDtrExportStep(step: DtrExportStep, exportedIds?: string[], keyOverride?: string): Promise<void> {
+  const key = keyOverride || getDtrThreeStepKey();
+  const st = readDtrThreeStepState();
+  st[step] = true;
+  writeDtrThreeStepState(st, key);
+  syncDtrThreeStepUi();
+
+  if (st.jpeg && st.print && st.pdf) {
+    clearDtrThreeStepState(key);
+    await clearDtrAfterExport(exportedIds);
+    syncDtrThreeStepUi();
+    toast("All 3 exports done (3/3) — DTR cleared automatically");
+    return;
+  }
+
+  const doneCount = [st.jpeg, st.print, st.pdf].filter(Boolean).length;
+  const remaining: string[] = [];
+  if (!st.jpeg) remaining.push("JPEG");
+  if (!st.print) remaining.push("Print");
+  if (!st.pdf) remaining.push("Full History PDF");
+  toast(`Completed (${doneCount}/3). Remaining: ${remaining.join(", ")}`);
 }
 
 export async function clearDtrAfterExport(ids?: string[]): Promise<void> {
@@ -5926,45 +6468,664 @@ export async function clearDtrAfterExport(ids?: string[]): Promise<void> {
 export async function downloadDtr(): Promise<void> {
   const paper = $("dtrPaper");
   if (!paper) return;
-  if (!window.html2canvas) { toast("Image export library is still loading. Try again in a moment."); return; }
   const exportedIds = getCurrentPreviewExportedIds();
+  if (!exportedIds.length) { toast("No DTR entries for this cutoff period."); return; }
+  const stepKey = getDtrThreeStepKey();
+  if (dtrThreeStepBusy.jpeg || readDtrThreeStepState().jpeg) {
+    toast("Download & Share JPEG already used (1 click per button).");
+    syncDtrThreeStepUi();
+    return;
+  }
+  if (!window.html2canvas) { toast("Image export library is still loading. Try again in a moment."); return; }
+  dtrThreeStepBusy.jpeg = true;
+  syncDtrThreeStepUi();
+
+  let sandbox: HTMLDivElement | null = null;
   try {
-    const canvas = await window.html2canvas(paper, { backgroundColor: "#fff", scale: 2 });
-    canvas.toBlob(async (blob: Blob | null) => {
-      if (!blob) return;
-      const file = new File([blob], "DTR-" + new Date().toISOString().slice(0, 10) + ".jpg", { type: "image/jpeg" });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        try {
-          await navigator.share({ files: [file], title: "Daily Time Record" });
-          await clearDtrAfterExport(exportedIds);
-          toast("DTR downloaded & cleared");
-          return;
-        } catch {}
-      }
+    sandbox = document.createElement("div");
+    sandbox.style.position = "fixed";
+    sandbox.style.left = "-99999px";
+    sandbox.style.top = "0";
+    sandbox.style.width = "1120px";
+    sandbox.style.background = "#ffffff";
+    sandbox.style.padding = "18px 22px 24px";
+    sandbox.style.boxSizing = "border-box";
+    sandbox.style.zIndex = "-1";
+
+    const clone = document.createElement("div");
+    clone.className = "dtr-paper";
+    clone.style.width = "100%";
+    clone.style.minWidth = "0";
+    clone.style.maxWidth = "none";
+    clone.style.padding = "0";
+    clone.style.margin = "0";
+    clone.style.boxShadow = "none";
+    clone.innerHTML = paper.innerHTML;
+    sandbox.appendChild(clone);
+    document.body.appendChild(sandbox);
+
+    const imgs = [...clone.querySelectorAll("img")];
+    await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise<void>(res => {
+      img.onload = () => res();
+      img.onerror = () => res();
+    })));
+
+    const canvas = await window.html2canvas(sandbox, {
+      backgroundColor: "#ffffff",
+      scale: 2,
+      width: 1120,
+      windowWidth: 1120,
+    });
+    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob((b: Blob | null) => resolve(b), "image/jpeg", 0.94));
+    if (!blob) {
+      toast("Could not generate JPEG.");
+      return;
+    }
+    const file = new File([blob], "DTR-" + new Date().toISOString().slice(0, 10) + ".jpg", { type: "image/jpeg" });
+    let shared = false;
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: "Daily Time Record" });
+        shared = true;
+      } catch {}
+    }
+    if (!shared) {
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = file.name;
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-      await clearDtrAfterExport(exportedIds);
-      toast("DTR downloaded & cleared");
-    }, "image/jpeg", 0.92);
-  } catch (err: any) { toast(err?.message || "Could not export."); }
+    }
+    await completeDtrExportStep("jpeg", exportedIds, stepKey);
+  } catch (err: any) {
+    toast(err?.message || "Could not export.");
+  } finally {
+    if (sandbox) sandbox.remove();
+    dtrThreeStepBusy.jpeg = false;
+    syncDtrThreeStepUi();
+  }
 }
+
 export function printDtr(): void {
-  document.body.classList.remove("printing-leave");
   const exportedIds = getCurrentPreviewExportedIds();
-  let cleared = false;
-  const finalizeClear = () => {
-    if (cleared) return;
-    cleared = true;
-    void clearDtrAfterExport(exportedIds).then(() => {
-      toast("DTR printed & cleared");
-    });
+  if (!exportedIds.length) { toast("No DTR entries for this cutoff period."); return; }
+  const stepKey = getDtrThreeStepKey();
+  if (dtrThreeStepBusy.print || readDtrThreeStepState().print) {
+    toast("Print DTR already used (1 click per button).");
+    syncDtrThreeStepUi();
+    return;
+  }
+  dtrThreeStepBusy.print = true;
+  syncDtrThreeStepUi();
+  document.body.classList.remove("printing-leave", "printing-payslip");
+  document.body.classList.add("printing-dtr");
+  let completed = false;
+  const finalizePrint = () => {
+    if (completed) return;
+    completed = true;
+    document.body.classList.remove("printing-dtr");
+    dtrThreeStepBusy.print = false;
+    void completeDtrExportStep("print", exportedIds, stepKey);
   };
-  window.addEventListener("afterprint", finalizeClear, { once: true });
+  window.addEventListener("afterprint", finalizePrint, { once: true });
   window.print();
-  setTimeout(finalizeClear, 1800);
+  setTimeout(finalizePrint, 1800);
+}
+
+/* ==================== PAYROLL / PAYSLIP ==================== */
+function round2(n: number): number {
+  return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+}
+
+function numVal(id: string): number {
+  const n = Number(val(id));
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+function fmtPayslipDateDisplay(iso: string): string {
+  const m = String(iso || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[2]}-${m[3]}-${m[1]}` : String(iso || "");
+}
+
+function fmtAccountingAmt(n: number, zeroAsDash = true): string {
+  const v = Number(n || 0);
+  if (!Number.isFinite(v) || (zeroAsDash && Math.abs(v) < 0.005)) return "-";
+  return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtHoursShort(n: number): string {
+  const v = Number(n || 0);
+  if (!Number.isFinite(v) || v <= 0) return "0";
+  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function computeNightDiffMinutes(timeIn: string, timeOut: string): number {
+  const inMin = parseTimeToMinutes(timeIn);
+  const outMinRaw = parseTimeToMinutes(timeOut);
+  if (inMin === null || outMinRaw === null) return 0;
+  let outMin = outMinRaw;
+  if (outMin <= inMin) outMin += 1440;
+  const windows: Array<[number, number]> = [
+    [0, 360],       // 12:00 AM - 6:00 AM
+    [1320, 1800],   // 10:00 PM - 6:00 AM next day
+    [2760, 3240],   // wrap safety
+  ];
+  let total = 0;
+  windows.forEach(([ws, we]) => {
+    const s = Math.max(inMin, ws);
+    const e = Math.min(outMin, we);
+    if (e > s) total += e - s;
+  });
+  return total;
+}
+
+function applyPayPeriodPreset(preset: string): void {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth() + 1;
+  const pad = (x: number) => String(x).padStart(2, "0");
+  const lastDay = (yr: number, mo: number) => new Date(yr, mo, 0).getDate();
+
+  if (preset === "1-15") {
+    setVal("payStartDate", `${y}-${pad(m)}-01`);
+    setVal("payEndDate", `${y}-${pad(m)}-15`);
+  } else if (preset === "16-end") {
+    setVal("payStartDate", `${y}-${pad(m)}-16`);
+    setVal("payEndDate", `${y}-${pad(m)}-${pad(lastDay(y, m))}`);
+  } else if (preset === "dtr-11-25") {
+    setVal("payStartDate", `${y}-${pad(m)}-11`);
+    setVal("payEndDate", `${y}-${pad(m)}-25`);
+  } else if (preset === "dtr-26-10") {
+    const p = getDtrCutoffForDate(localDateKey(now));
+    if (p.cycleType === "26-10") {
+      setVal("payStartDate", p.startDate);
+      setVal("payEndDate", p.endDate);
+    } else {
+      const prevMo = m === 1 ? 12 : m - 1;
+      const prevYr = m === 1 ? y - 1 : y;
+      setVal("payStartDate", `${prevYr}-${pad(prevMo)}-26`);
+      setVal("payEndDate", `${y}-${pad(m)}-10`);
+    }
+  }
+}
+
+export function openPayrollPage(): void {
+  go("payroll");
+  syncPayrollFromDtr(false);
+}
+
+export function renderPayroll(): void {
+  const empSel = $("payEmployee") as HTMLSelectElement | null;
+  if (empSel) {
+    const prevVal = empSel.value || (isManager() ? val("dtrPreviewEmployee") : "") || String(state.userId || "");
+    const list = isManager()
+      ? [...(state.profiles || [])].sort((a, b) => String(a.full_name || "").localeCompare(String(b.full_name || "")))
+      : (state.profiles || []).filter(p => String(p.user_id) === String(state.userId));
+    const options = list.length
+      ? list.map(p => `<option value="${esc(p.user_id)}">${esc(p.full_name || p.email || "Employee")}</option>`).join("")
+      : `<option value="${esc(state.userId || "")}">${esc(state.profile?.full_name || state.email || "Me")}</option>`;
+    empSel.innerHTML = options;
+    if (prevVal && [...empSel.options].some(o => o.value === prevVal)) {
+      empSel.value = prevVal;
+    } else if (state.userId && [...empSel.options].some(o => o.value === String(state.userId))) {
+      empSel.value = String(state.userId);
+    }
+    empSel.disabled = !isManager();
+  }
+
+  if (!val("payStartDate") || !val("payEndDate")) {
+    const day = new Date().getDate();
+    const preset = day <= 15 ? "1-15" : "16-end";
+    setVal("payPeriodPreset", preset);
+    applyPayPeriodPreset(preset);
+  }
+
+  updatePayslipPreview();
+  renderSavedPayslipsList();
+}
+
+export function syncPayrollFromDtr(showToast = true): void {
+  const uid = val("payEmployee") || String(state.userId || "");
+  const start = val("payStartDate");
+  const end = val("payEndDate");
+  const summaryEl = $("payDtrSummary");
+  if (!uid || !start || !end) {
+    if (showToast) toast("Select employee and pay period dates first.");
+    return;
+  }
+
+  const rows = (state.dtrs || []).filter(d => {
+    if (String(d.user_id) !== String(uid)) return false;
+    const wd = String(d.work_date || "");
+    return wd >= start && wd <= end;
+  });
+
+  const dayBuckets = new Map<string, { firstIn: string | null; lastOut: string | null; mins: number; nsRepair: boolean }>();
+  let nightMins = 0;
+  rows.forEach(d => {
+    const day = String(d.work_date || "");
+    const meta = parseDtrJobMeta(d.job, d.approved_by);
+    const ruleOpts = { workDate: day, nightshiftRepair: meta.nightshiftRepair };
+    const cappedOut = capDtrTimeOut(d.time_in, d.time_out, ruleOpts);
+    const mins = calculateDtrMinutes(d.time_in, cappedOut, null, ruleOpts);
+    const bucket = dayBuckets.get(day) || { firstIn: null, lastOut: null, mins: 0, nsRepair: false };
+    if (!bucket.firstIn && d.time_in) bucket.firstIn = d.time_in;
+    if (cappedOut && cappedOut !== d.time_in) bucket.lastOut = cappedOut;
+    bucket.mins += mins;
+    if (meta.nightshiftRepair) bucket.nsRepair = true;
+    dayBuckets.set(day, bucket);
+    nightMins += computeNightDiffMinutes(d.time_in, cappedOut);
+  });
+
+  const todayStr = localDateKey(new Date());
+  let regMins = 0;
+  let grossDayOtMins = 0;
+  let uncoveredLackingMins = 0;
+  dayBuckets.forEach((b, day) => {
+    const bd = calculateShiftBreakdown(b.firstIn, b.lastOut, b.mins, {
+      workDate: day,
+      nightshiftRepair: b.nsRepair,
+    });
+    regMins += bd.regularMins;
+    grossDayOtMins += bd.finalOtMins;
+    const isClosedDay = Boolean(b.lastOut) || day < todayStr;
+    if (b.mins > 0 && isClosedDay) {
+      uncoveredLackingMins += Math.max(0, bd.standardMins - bd.workedMins);
+    }
+  });
+  const otMins = Math.max(0, grossDayOtMins - uncoveredLackingMins);
+
+  const otHrs = round2(otMins / 60);
+  const nightHrs = round2(nightMins / 60);
+  const regHrs = round2(regMins / 60);
+  const workedDays = dayBuckets.size;
+
+  setVal("payOtHrs", String(otHrs));
+  setVal("payNightHrs", String(nightHrs));
+
+  const autoCalc = ($("payAutoCalcOt") as HTMLInputElement | null)?.checked ?? true;
+  const basicPay = numVal("payBasicPay");
+  if (autoCalc && basicPay > 0) {
+    const denomHours = Math.max(1, (workedDays > 0 ? workedDays : 13) * REGULAR_WORKING_HOURS_PER_DAY);
+    const hourlyRate = basicPay / denomHours;
+    setVal("payOtAmt", otHrs > 0 ? String(round2(otHrs * hourlyRate * 1.25)) : "0");
+    setVal("payNightAmt", nightHrs > 0 ? String(round2(nightHrs * hourlyRate * 0.1)) : "0");
+  } else if (autoCalc && basicPay <= 0) {
+    if (otHrs === 0) setVal("payOtAmt", "0");
+    if (nightHrs === 0) setVal("payNightAmt", "0");
+  }
+
+  if (summaryEl) {
+    const lackingNote = uncoveredLackingMins > 0
+      ? ` (after −${round2(uncoveredLackingMins / 60)}h lacking deducted)`
+      : "";
+    summaryEl.textContent = rows.length
+      ? `Synced ${rows.length} DTR entry(ies) across ${workedDays} day(s): ${regHrs}h regular, ${otHrs}h final OT${lackingNote}, ${nightHrs}h night diff.`
+      : `No DTR entries found for ${profileName(uid)} between ${fmtPayslipDateDisplay(start)} and ${fmtPayslipDateDisplay(end)} (you can still enter values manually).`;
+  }
+
+  updatePayslipPreview();
+  if (showToast) toast(rows.length ? `Synced ${rows.length} DTR entry(ies)` : "No DTR logs in this period — manual values kept");
+}
+
+function readPayslipDraft(): PayslipRecord {
+  const uid = val("payEmployee") || String(state.userId || "");
+  const sel = $("payEmployee") as HTMLSelectElement | null;
+  const selectedText = sel && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex]?.text || "" : "";
+  const empName = (uid ? profileName(uid) : "") || selectedText || state.profile?.full_name || "Employee";
+
+  const basic_pay = round2(numVal("payBasicPay"));
+  const overtime_hours = round2(numVal("payOtHrs"));
+  const overtime_amount = round2(numVal("payOtAmt"));
+  const night_diff_hours = round2(numVal("payNightHrs"));
+  const night_diff_amount = round2(numVal("payNightAmt"));
+  const allowance = round2(numVal("payAllow"));
+
+  const sss = round2(numVal("paySss"));
+  const philhealth = round2(numVal("payPhilhealth"));
+  const pagibig = round2(numVal("payPagibig"));
+  const cash_advance = round2(numVal("payCashAdvance"));
+  const absent = round2(numVal("payAbsent"));
+  const abuloy = round2(numVal("payAbuloy"));
+
+  const total_earnings = round2(basic_pay + overtime_amount + night_diff_amount + allowance);
+  const total_deductions = round2(sss + philhealth + pagibig + cash_advance + absent + abuloy);
+  const net_pay = round2(total_earnings - total_deductions);
+
+  return {
+    id: runtime.editingPayslipId || "",
+    user_id: uid,
+    employee_name: empName,
+    period_start: val("payStartDate"),
+    period_end: val("payEndDate"),
+    basic_pay,
+    overtime_hours,
+    overtime_amount,
+    night_diff_hours,
+    night_diff_amount,
+    allowance,
+    sss,
+    philhealth,
+    pagibig,
+    cash_advance,
+    absent,
+    abuloy,
+    total_earnings,
+    total_deductions,
+    net_pay,
+    created_by: state.userId,
+  };
+}
+
+export function updatePayslipPreview(): void {
+  const box = $("payslipPaper");
+  if (!box) return;
+  const d = readPayslipDraft();
+  const netBadge = $("payNetBadge");
+  if (netBadge) {
+    netBadge.textContent = "Net Pay: ₱" + d.net_pay.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  const periodStr = `${fmtPayslipDateDisplay(d.period_start)} to ${fmtPayslipDateDisplay(d.period_end)}`;
+
+  box.innerHTML =
+    `<table class="payslip-table">` +
+      `<colgroup>` +
+        `<col style="width:27%">` +
+        `<col style="width:7%">` +
+        `<col style="width:7%">` +
+        `<col style="width:16%">` +
+        `<col style="width:24%">` +
+        `<col style="width:19%">` +
+      `</colgroup>` +
+      `<tbody>` +
+        `<tr><td colspan="4" class="ps-title">EESI ELEVATORS, INC.</td><td colspan="2"></td></tr>` +
+        `<tr><td colspan="4" class="ps-sub">PAY SLIP</td><td colspan="2"></td></tr>` +
+        `<tr><td>Employee</td><td colspan="3" class="ps-val-left">${esc(d.employee_name)}</td><td></td><td></td></tr>` +
+        `<tr><td>Pay Period</td><td colspan="3" class="ps-val-left">${esc(periodStr)}</td><td></td><td></td></tr>` +
+        `<tr><td>Earnings</td><td></td><td></td><td class="ps-amt-head">Amount</td><td></td><td></td></tr>` +
+        `<tr><td>Basic Pay</td><td></td><td></td><td class="ps-num">${fmtAccountingAmt(d.basic_pay)}</td><td>Deductions</td><td class="ps-amt-head">Amount</td></tr>` +
+        `<tr><td>overtime</td><td class="ps-qty">${fmtHoursShort(d.overtime_hours)}</td><td class="ps-unit">hrs</td><td class="ps-num">${fmtAccountingAmt(d.overtime_amount)}</td><td>sss</td><td class="ps-num">${fmtAccountingAmt(d.sss)}</td></tr>` +
+        `<tr><td>night diff</td><td class="ps-qty">${fmtHoursShort(d.night_diff_hours)}</td><td class="ps-unit">hrs</td><td class="ps-num">${fmtAccountingAmt(d.night_diff_amount)}</td><td>philhealth</td><td class="ps-num">${fmtAccountingAmt(d.philhealth)}</td></tr>` +
+        `<tr><td></td><td></td><td></td><td class="ps-num">-</td><td>pag-ibig</td><td class="ps-num">${fmtAccountingAmt(d.pagibig)}</td></tr>` +
+        `<tr><td></td><td></td><td></td><td class="ps-num">-</td><td>cash advance</td><td class="ps-num">${fmtAccountingAmt(d.cash_advance)}</td></tr>` +
+        `<tr><td></td><td></td><td></td><td class="ps-num">-</td><td>absent</td><td class="ps-num">${fmtAccountingAmt(d.absent)}</td></tr>` +
+        `<tr><td>transpo allow/food allow.</td><td></td><td></td><td class="ps-num">${fmtAccountingAmt(d.allowance)}</td><td>abuloy</td><td class="ps-num">${fmtAccountingAmt(d.abuloy)}</td></tr>` +
+        `<tr><td>Total Earnings</td><td></td><td></td><td class="ps-num ps-total-cell">${fmtAccountingAmt(d.total_earnings)}</td><td>Total Deductions</td><td class="ps-num ps-total-cell">${fmtAccountingAmt(d.total_deductions)}</td></tr>` +
+        `<tr><td></td><td></td><td></td><td></td><td class="ps-net-label">Net Pay</td><td class="ps-num ps-net-amt">${fmtAccountingAmt(d.net_pay, false)}</td></tr>` +
+      `</tbody>` +
+    `</table>`;
+}
+
+function saveLocalPayslipCache(rec: PayslipRecord): void {
+  try {
+    const raw = localStorage.getItem(getLocalPayslipsKey());
+    const list: PayslipRecord[] = raw ? JSON.parse(raw) : [];
+    const arr = Array.isArray(list) ? list.filter(x => String(x.id) !== String(rec.id)) : [];
+    arr.unshift(rec);
+    localStorage.setItem(getLocalPayslipsKey(), JSON.stringify(arr.slice(0, 120)));
+  } catch {}
+}
+
+function removeLocalPayslipCache(id: string): void {
+  try {
+    const raw = localStorage.getItem(getLocalPayslipsKey());
+    const list: PayslipRecord[] = raw ? JSON.parse(raw) : [];
+    const arr = Array.isArray(list) ? list.filter(x => String(x.id) !== String(id)) : [];
+    localStorage.setItem(getLocalPayslipsKey(), JSON.stringify(arr));
+  } catch {}
+}
+
+export function resetPayrollInputs(): void {
+  runtime.editingPayslipId = null;
+  ["payBasicPay", "payOtHrs", "payOtAmt", "payNightHrs", "payNightAmt", "payAllow", "paySss", "payPhilhealth", "payPagibig", "payCashAdvance", "payAbsent", "payAbuloy"].forEach(id => {
+    setVal(id, id === "payBasicPay" ? "" : "0");
+  });
+  const btn = $("savePayslipBtn");
+  if (btn) btn.textContent = "💾 Save Payslip";
+  updatePayslipPreview();
+  toast("Cleared payslip values");
+}
+
+export async function savePayslipRecord(): Promise<void> {
+  if (!state.userId) return;
+  const draft = readPayslipDraft();
+  if (!draft.period_start || !draft.period_end) {
+    toast("Please choose Period Start and Period End.");
+    return;
+  }
+  const btn = $("savePayslipBtn") as HTMLButtonElement | null;
+  const statusEl = $("payrollStatus");
+  if (btn) btn.disabled = true;
+  if (statusEl) statusEl.textContent = "Saving payslip…";
+
+  try {
+    const payload = {
+      user_id: draft.user_id || state.userId,
+      employee_name: draft.employee_name,
+      period_start: draft.period_start,
+      period_end: draft.period_end,
+      basic_pay: draft.basic_pay,
+      overtime_hours: draft.overtime_hours,
+      overtime_amount: draft.overtime_amount,
+      night_diff_hours: draft.night_diff_hours,
+      night_diff_amount: draft.night_diff_amount,
+      allowance: draft.allowance,
+      sss: draft.sss,
+      philhealth: draft.philhealth,
+      pagibig: draft.pagibig,
+      cash_advance: draft.cash_advance,
+      absent: draft.absent,
+      abuloy: draft.abuloy,
+      total_earnings: draft.total_earnings,
+      total_deductions: draft.total_deductions,
+      net_pay: draft.net_pay,
+      created_by: state.userId,
+      created_at: new Date().toISOString(),
+    };
+
+    let savedRecord: PayslipRecord | null = null;
+    if (!runtime.payslipsTableMissing && runtime.client && navigator.onLine) {
+      if (runtime.editingPayslipId && !String(runtime.editingPayslipId).startsWith("notice:") && !String(runtime.editingPayslipId).startsWith("local:")) {
+        const { data, error } = await runtime.client
+          .from("payslips")
+          .update(payload)
+          .eq("id", runtime.editingPayslipId)
+          .select("*")
+          .maybeSingle();
+        if (!error && data) {
+          savedRecord = data;
+        } else if (error && isMissingTableError(error)) {
+          runtime.payslipsTableMissing = true;
+        } else if (error) {
+          throw error;
+        }
+      } else {
+        const { data, error } = await runtime.client
+          .from("payslips")
+          .insert(payload)
+          .select("*")
+          .maybeSingle();
+        if (!error && data) {
+          savedRecord = data;
+        } else if (error && isMissingTableError(error)) {
+          runtime.payslipsTableMissing = true;
+        } else if (error) {
+          throw error;
+        }
+      }
+    }
+
+    if (!savedRecord && runtime.client && navigator.onLine) {
+      const { data, error } = await runtime.client
+        .from("app_notifications")
+        .insert({
+          title: "💵 Payslip Record",
+          body: buildPayslipAppNoticeBody(payload),
+        })
+        .select("id,created_at")
+        .maybeSingle();
+      if (!error && data) {
+        savedRecord = {
+          ...payload,
+          id: `notice:${data.id}`,
+          app_notification_id: String(data.id),
+          created_at: data.created_at || payload.created_at,
+        };
+      }
+    }
+
+    if (!savedRecord) {
+      savedRecord = {
+        ...payload,
+        id: runtime.editingPayslipId || `local:${Date.now()}`,
+      };
+    }
+
+    saveLocalPayslipCache(savedRecord);
+    runtime.editingPayslipId = savedRecord.id;
+
+    if (isManager() && String(payload.user_id) !== String(state.userId) && runtime.client && navigator.onLine) {
+      try {
+        await runtime.client.from("approval_notifications").insert({
+          recipient_user_id: payload.user_id,
+          title: "💵 New Payslip Available",
+          body: `Payslip for ${fmtPayslipDateDisplay(payload.period_start)} to ${fmtPayslipDateDisplay(payload.period_end)} — Net Pay: ₱${fmtAccountingAmt(payload.net_pay, false)}`,
+        });
+      } catch {}
+    }
+
+    suppressNotifications();
+    await loadPayslips();
+    if (statusEl) statusEl.textContent = "Payslip saved.";
+    toast("Payslip saved");
+  } catch (err: any) {
+    const msg = err?.message || "Could not save payslip.";
+    if (statusEl) statusEl.textContent = msg;
+    toast("Save failed: " + msg);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+export function loadPayslipIntoEditor(id: string): void {
+  const rec = (state.payslips || []).find(p => String(p.id) === String(id));
+  if (!rec) return;
+  runtime.editingPayslipId = String(rec.id);
+  setVal("payEmployee", String(rec.user_id || state.userId || ""));
+  setVal("payPeriodPreset", "custom");
+  setVal("payStartDate", String(rec.period_start || ""));
+  setVal("payEndDate", String(rec.period_end || ""));
+  setVal("payBasicPay", String(rec.basic_pay ?? 0));
+  setVal("payOtHrs", String(rec.overtime_hours ?? 0));
+  setVal("payOtAmt", String(rec.overtime_amount ?? 0));
+  setVal("payNightHrs", String(rec.night_diff_hours ?? 0));
+  setVal("payNightAmt", String(rec.night_diff_amount ?? 0));
+  setVal("payAllow", String(rec.allowance ?? 0));
+  setVal("paySss", String(rec.sss ?? 0));
+  setVal("payPhilhealth", String(rec.philhealth ?? 0));
+  setVal("payPagibig", String(rec.pagibig ?? 0));
+  setVal("payCashAdvance", String(rec.cash_advance ?? 0));
+  setVal("payAbsent", String(rec.absent ?? 0));
+  setVal("payAbuloy", String(rec.abuloy ?? 0));
+  const btn = $("savePayslipBtn");
+  if (btn) btn.textContent = "💾 Update Payslip";
+  updatePayslipPreview();
+  $("payslipPreviewCard")?.scrollIntoView({ behavior: "smooth" });
+  toast("Loaded payslip for " + (rec.employee_name || "Employee"));
+}
+
+export async function deletePayslipRecord(id: string): Promise<void> {
+  if (!(await confirmDialog("Delete this saved payslip?", "Delete payslip"))) return;
+  try {
+    if (String(id).startsWith("notice:") && runtime.client && navigator.onLine) {
+      const nid = String(id).replace(/^notice:/, "");
+      await runtime.client.from("app_notifications").delete().eq("id", nid);
+    } else if (!String(id).startsWith("local:") && !runtime.payslipsTableMissing && runtime.client && navigator.onLine) {
+      await runtime.client.from("payslips").delete().eq("id", id);
+    }
+    removeLocalPayslipCache(id);
+    if (runtime.editingPayslipId === id) runtime.editingPayslipId = null;
+    suppressNotifications();
+    await loadPayslips();
+    toast("Payslip deleted");
+  } catch (err: any) {
+    toast("Delete failed: " + (err?.message || err));
+  }
+}
+
+function renderSavedPayslipsList(): void {
+  const box = $("savedPayslipList");
+  if (!box) return;
+  const rows = (state.payslips || []).filter(r => isManager() || String(r.user_id) === String(state.userId));
+  if (!rows.length) {
+    box.innerHTML = '<p class="muted">No saved payslips yet.</p>';
+    return;
+  }
+  box.innerHTML = rows.map(r => {
+    const period = `${fmtPayslipDateDisplay(r.period_start)} to ${fmtPayslipDateDisplay(r.period_end)}`;
+    const canDelete = isManager() || String(r.user_id) === String(state.userId);
+    return (
+      `<div class="item">` +
+        `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">` +
+          `<div><b>${esc(r.employee_name || profileName(r.user_id))}</b><div class="muted">${esc(period)}</div></div>` +
+          `<span class="badge">Net Pay: ₱${esc(fmtAccountingAmt(r.net_pay, false))}</span>` +
+        `</div>` +
+        `<div class="muted" style="font-size:12px;margin-top:4px;">Basic: ₱${esc(fmtAccountingAmt(r.basic_pay, false))} · Earnings: ₱${esc(fmtAccountingAmt(r.total_earnings, false))} · Deductions: ₱${esc(fmtAccountingAmt(r.total_deductions, false))}</div>` +
+        `<div class="inline-actions" style="margin-top:8px;">` +
+          `<button class="btn small-btn" type="button" onclick="loadPayslipIntoEditor('${esc(r.id)}')">👁 Open</button>` +
+          (canDelete ? `<button class="red small-btn" type="button" onclick="deletePayslipRecord('${esc(r.id)}')">Delete</button>` : "") +
+        `</div>` +
+      `</div>`
+    );
+  }).join("");
+}
+
+export async function downloadPayslipJpeg(): Promise<void> {
+  const paper = $("payslipPaper");
+  if (!paper) return;
+  if (!window.html2canvas) { toast("Image export library is still loading. Try again in a moment."); return; }
+  const d = readPayslipDraft();
+  try {
+    const canvas = await window.html2canvas(paper, { backgroundColor: "#ffffff", scale: 2 });
+    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob((b: Blob | null) => resolve(b), "image/jpeg", 0.94));
+    if (!blob) { toast("Could not generate JPEG."); return; }
+    const slug = String(d.employee_name || "payslip").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "payslip";
+    const file = new File([blob], `EESI-Payslip-${slug}-${d.period_start || todayIso()}.jpg`, { type: "image/jpeg" });
+    let shared = false;
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: "EESI Pay Slip" });
+        shared = true;
+      } catch {}
+    }
+    if (!shared) {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = file.name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    }
+    toast("Payslip JPEG ready");
+  } catch (err: any) {
+    toast("Could not export JPEG: " + (err?.message || err));
+  }
+}
+
+export function printPayslip(): void {
+  document.body.classList.remove("printing-leave");
+  document.body.classList.add("printing-payslip");
+  const cleanup = () => document.body.classList.remove("printing-payslip");
+  window.addEventListener("afterprint", cleanup, { once: true });
+  window.print();
+  setTimeout(cleanup, 1800);
+}
+
+export async function downloadPayslipPdf(): Promise<void> {
+  await exportPayslipPdf(readPayslipDraft());
+}
+
+export function exportPayslipXlsxAction(): void {
+  exportPayslipXlsx(readPayslipDraft());
 }
 
 /* ==================== NOTES, RECS, LEAVE, PROFILE ==================== */
@@ -6638,7 +7799,15 @@ export function initFeatureWiring(): void {
   $("recSite")?.addEventListener("change", () => {
     renderRecPickers();
   });
-  $("dtrDate")?.addEventListener("change", () => autoFillDtrFromSchedule(false));
+  $("dtrDate")?.addEventListener("change", () => {
+    autoFillDtrFromSchedule(false);
+    renderDtrLiveStatus();
+  });
+  ["dtrIn", "dtrOut"].forEach(id => {
+    $(id)?.addEventListener("input", renderDtrLiveStatus);
+    $(id)?.addEventListener("change", renderDtrLiveStatus);
+  });
+  $("dtrNightshiftOrRepair")?.addEventListener("change", renderDtrLiveStatus);
   $("dtrLocation")?.addEventListener("input", () => {
     const locEl = $("dtrLocation") as HTMLInputElement | null;
     if (locEl) locEl.dataset.autoFilled = "0";
@@ -7003,6 +8172,45 @@ export function initFeatureWiring(): void {
     if (!siteId) return;
     await updateSiteStatus(siteId, sel.value);
   });
+
+  $("payEmployee")?.addEventListener("change", () => syncPayrollFromDtr(false));
+  $("payPeriodPreset")?.addEventListener("change", () => {
+    const preset = val("payPeriodPreset");
+    if (preset !== "custom") applyPayPeriodPreset(preset);
+    syncPayrollFromDtr(false);
+  });
+  ["payStartDate", "payEndDate"].forEach(id => {
+    $(id)?.addEventListener("change", () => {
+      setVal("payPeriodPreset", "custom");
+      syncPayrollFromDtr(false);
+    });
+  });
+  $("payAutoCalcOt")?.addEventListener("change", () => syncPayrollFromDtr(false));
+  ["payBasicPay", "payOtHrs", "payOtAmt", "payNightHrs", "payNightAmt", "payAllow", "paySss", "payPhilhealth", "payPagibig", "payCashAdvance", "payAbsent", "payAbuloy"].forEach(id => {
+    $(id)?.addEventListener("input", () => {
+      if (id === "payBasicPay" && ($("payAutoCalcOt") as HTMLInputElement | null)?.checked) {
+        const otHrs = numVal("payOtHrs");
+        const nightHrs = numVal("payNightHrs");
+        const basicPay = numVal("payBasicPay");
+        if (basicPay > 0 && (otHrs > 0 || nightHrs > 0)) {
+          const uid = val("payEmployee") || String(state.userId || "");
+          const start = val("payStartDate");
+          const end = val("payEndDate");
+          const daysSet = new Set(
+            (state.dtrs || [])
+              .filter(d => String(d.user_id) === String(uid) && String(d.work_date || "") >= start && String(d.work_date || "") <= end)
+              .map(d => String(d.work_date || ""))
+          );
+          const denom = Math.max(1, (daysSet.size || 13) * REGULAR_WORKING_HOURS_PER_DAY);
+          const hourly = basicPay / denom;
+          setVal("payOtAmt", otHrs > 0 ? String(round2(otHrs * hourly * 1.25)) : "0");
+          setVal("payNightAmt", nightHrs > 0 ? String(round2(nightHrs * hourly * 0.1)) : "0");
+        }
+      }
+      updatePayslipPreview();
+    });
+  });
+
   $("toggleScheduleFormBtn")?.addEventListener("click", () => {
     openScheduleFormOverlay();
   });
@@ -7406,12 +8614,30 @@ export function initFeatureWiring(): void {
     }
   });
 
+  let lastDtrMinuteTick = -1;
+  setInterval(() => {
+    if (!state.userId) return;
+    const now = new Date();
+    const curMin = now.getHours() * 60 + now.getMinutes();
+    if (curMin !== lastDtrMinuteTick) {
+      lastDtrMinuteTick = curMin;
+      renderHomeDtrStatus();
+      renderDtrLiveStatus();
+      const dtrPageVisible = !$("page-dtr")?.classList.contains("hidden");
+      const fillVisible = !$("dtrFill")?.classList.contains("hidden");
+      if (dtrPageVisible && fillVisible && getLiveDtrTodaySummary().activeEntry) {
+        renderDtr();
+      }
+    }
+  }, 1000);
+
   setInterval(() => {
     if (state.userId) {
       if (state.schedules && state.schedules.length) {
         renderSchedules();
         checkUpcomingShiftReminders();
       }
+      renderHome();
       renderHomeDtrStatus();
     }
   }, 30000);

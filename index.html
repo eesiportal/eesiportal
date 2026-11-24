@@ -12,7 +12,7 @@
 <meta name="twitter:card" content="summary_large_image">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cinzel:ital,wght@0,400;0,600;0,700;1,400&family=Dancing+Script:wght@500;700&family=Inter:wght@300;400;500;600;700;800&family=Montserrat:ital,wght@0,400;0,600;0,700;1,400&family=Orbitron:wght@400;500;700;900&family=Pacifico&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Poppins:ital,wght@0,300;0,400;0,600;0,700;1,400&family=Rajdhani:wght@400;500;600;700&family=Roboto+Mono:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:ital,wght@0,400;0,600;0,700;1,400&family=Dancing+Script:wght@500;700&family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,300;1,400;1,500;1,600;1,700;1,800&family=Montserrat:ital,wght@0,400;0,600;0,700;1,400;1,600;1,700&family=Orbitron:wght@400;500;700;900&family=Pacifico&family=Playfair+Display:ital,wght@0,400;0,700;1,400;1,700&family=Poppins:ital,wght@0,300;0,400;0,600;0,700;1,400;1,600&family=Rajdhani:wght@400;500;600;700&family=Roboto+Mono:ital,wght@0,400;0,600;0,700;1,400;1,700&display=swap" rel="stylesheet">
 <link rel="icon" type="image/svg+xml" href="/icon.svg">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -227,17 +227,20 @@ th,td{padding:9px 8px;border:1px solid rgba(47,140,255,.18);text-align:left;font
 th{background:rgba(47,140,255,.08);color:#8ea6cc;text-transform:uppercase;font-size:11px;font-weight:600}
 td{color:#e8f0ff}
 .dtr-tabs{display:flex;gap:8px;margin:0 0 12px}
-.dtr-paper{background:#fff;color:#000;border:0;padding:14px;width:100%;max-width:100%;min-height:420px;margin:0 auto 12px;overflow:visible;border-radius:4px;box-shadow:0 12px 40px rgba(0,0,0,.45)}
-.dp-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:11px;font-weight:700;background:#fff!important;border-radius:0!important;box-shadow:none!important;border:1px solid #000!important}
-.dp-table th,.dp-table td{border:1px solid #000!important;padding:4px 3px;text-align:center;overflow-wrap:anywhere;color:#000!important;background:#fff!important}
+.dtr-paper-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 auto 12px;padding:2px 0}
+.dtr-paper{background:#fff;color:#000;border:0;padding:16px 18px 20px;width:100%;min-width:820px;max-width:1060px;min-height:0;margin:0 auto;overflow:visible;border-radius:4px;box-shadow:0 12px 40px rgba(0,0,0,.45)}
+.dp-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px;font-weight:700;background:#fff!important;border-radius:0!important;box-shadow:none!important;border:1.5px solid #000!important}
+.dp-table th,.dp-table td{border:1.25px solid #000!important;padding:4px 6px;text-align:center;vertical-align:middle;overflow-wrap:anywhere;line-height:1.25;color:#000!important;background:#fff!important}
 .dp-table tr.clickable:hover td{background:#f0f6ff!important}
-.dp-table .dp-sheet-title{font-size:19px!important;line-height:1.2;font-style:normal;padding:5px}
-.dp-col-head th{font-style:italic;font-size:11px!important}
+.dp-table .dp-sheet-title{font-size:21px!important;line-height:1.18;font-style:normal!important;font-weight:700!important;padding:6px 8px!important;letter-spacing:.01em!important}
+.dp-col-head th{font-style:italic!important;font-weight:700!important;font-size:12px!important;padding:5px 6px!important}
+.dp-time-cell{white-space:nowrap!important}
+.dp-desc-cell{font-size:11.5px!important;line-height:1.22!important}
 .dp-empty{padding:14px!important;font-weight:400}
-.dp-employee-sign{width:34%;min-width:210px;text-align:center;margin-top:4px;color:#000}
-.dp-employee-sign img{display:block;width:190px;height:68px;object-fit:contain;margin:0 auto -22px;position:relative;z-index:2;border:0}
-.dp-employee-name{position:relative;z-index:1;font-weight:bold;font-size:13px;margin-top:2px;padding-bottom:4px;border-bottom:3px double #000;color:#000}
-.dp-employee-caption{font-weight:bold;font-style:italic;font-size:11px;margin-top:4px;color:#000}
+.dp-employee-sign{width:34%;min-width:270px;text-align:center;margin-top:6px;color:#000}
+.dp-employee-sign img{display:block;width:185px;height:66px;object-fit:contain;margin:0 auto -22px;position:relative;z-index:2;border:0}
+.dp-employee-name{position:relative;z-index:1;font-weight:700!important;font-size:13.5px!important;margin-top:4px;padding-bottom:3px;border-bottom:4px double #000!important;color:#000!important;text-transform:uppercase!important}
+.dp-employee-caption{font-weight:700!important;font-style:italic!important;font-size:11.5px!important;margin-top:4px;color:#000!important}
 .dtr-actions{display:flex;gap:8px;max-width:100%;margin:0 auto}
 .dtr-actions button{flex:1;white-space:normal}
 .dtr-sign{background:#fff;border-radius:6px;border:1px solid var(--border);max-width:100%}
@@ -596,39 +599,39 @@ body.compact nav.bottom button span{font-size:16px}
   .grid{grid-template-columns:repeat(2,1fr)}
   .row{grid-template-columns:1fr;gap:0}
   .title{font-size:19px}
-  .dtr-paper{padding:8px;min-height:0;overflow:visible}
-  .dp-table{min-width:0;font-size:clamp(8.5px,2.3vw,11px)}
-  .dp-table th,.dp-table td{padding:3px 2px}
-  .dp-table .dp-sheet-title{font-size:clamp(11px,3.4vw,18px)!important;padding:4px 2px}
-  .dp-col-head th{font-size:clamp(8px,2.1vw,11px)!important}
-  .dp-employee-sign{width:55%;min-width:160px}
-  .dp-employee-sign img{width:130px;height:48px;margin-bottom:-16px}
-  .dp-employee-name{font-size:11px}
-  .dp-employee-caption{font-size:9.5px}
+  .dtr-paper{padding:12px 14px 16px}
 }
 @media(max-width:380px){
   .grid{grid-template-columns:1fr 1fr}
   nav.bottom button{font-size:10px}
   .ct{padding:10px}
 }
+@page{margin:0.25in}
+@page dtr-landscape{size:landscape;margin:0.25in}
 @media print{
   header,.ticker,nav.bottom,#toastBox{display:none!important}
   main{max-width:none}
   body{background:#fff!important;color:#000!important;padding:0!important}
-  @page{margin:0.2in}
-  body:not(.printing-leave) .page{display:none!important}
-  body:not(.printing-leave) #page-dtr{display:block!important}
-  body:not(.printing-leave) #dtrFill,body:not(.printing-leave) .dtr-tabs,body:not(.printing-leave) .dtr-actions,body:not(.printing-leave) #dtrExportHint{display:none!important}
-  body:not(.printing-leave) #dtrPreview{display:block!important}
-  body:not(.printing-leave) .dtr-paper{width:8.1in;height:5.1in;max-width:none;aspect-ratio:auto;overflow:hidden;box-shadow:none;border:0}
-  body:not(.printing-leave) .dp-table{min-width:0}
-  body:not(.printing-leave) #page-dtr .title{display:none}
+  body:not(.printing-leave):not(.printing-payslip) .page{display:none!important}
+  body:not(.printing-leave):not(.printing-payslip) #page-dtr{display:block!important;page:dtr-landscape}
+  body:not(.printing-leave):not(.printing-payslip) #dtrFill,body:not(.printing-leave):not(.printing-payslip) .dtr-tabs,body:not(.printing-leave):not(.printing-payslip) .dtr-actions,body:not(.printing-leave):not(.printing-payslip) #dtrExportHint,body:not(.printing-leave):not(.printing-payslip) #dtrPreview>.row{display:none!important}
+  body:not(.printing-leave):not(.printing-payslip) #dtrPreview{display:block!important}
+  body:not(.printing-leave):not(.printing-payslip) .dtr-paper-scroll{overflow:visible!important;padding:0!important;margin:0!important}
+  body:not(.printing-leave):not(.printing-payslip) .dtr-paper{width:100%!important;min-width:0!important;max-width:10.4in!important;height:auto!important;overflow:visible!important;box-shadow:none!important;border:0!important;padding:6px 8px!important;margin:0 auto!important}
+  body:not(.printing-leave):not(.printing-payslip) .dp-table{min-width:0!important;width:100%!important}
+  body:not(.printing-leave):not(.printing-payslip) #page-dtr .site-header,body:not(.printing-leave):not(.printing-payslip) #page-dtr .title{display:none!important}
   body.printing-leave #app{display:none!important}
   body.printing-leave #leaveSheetPreviewOverlay{position:static!important;background:#fff!important;padding:0!important;display:block!important}
   body.printing-leave #leaveSheetPreviewOverlay .card{box-shadow:none!important;border:0!important;background:#fff!important;width:100%!important;max-width:none!important;padding:0!important}
   body.printing-leave .leave-sheet-scroll{overflow:visible!important;padding:0!important}
   body.printing-leave .leave-sheet{width:100%!important;min-width:0!important;padding:12px 16px!important}
   body.printing-leave .leave-preview-actions{display:none!important}
+  body.printing-payslip .page{display:none!important}
+  body.printing-payslip #page-payroll{display:block!important}
+  body.printing-payslip #page-payroll .site-header,body.printing-payslip #payrollEditorCard,body.printing-payslip #savedPayslipsCard,body.printing-payslip .payslip-actions{display:none!important}
+  body.printing-payslip #payslipPreviewCard{box-shadow:none!important;border:0!important;padding:0!important;background:#fff!important}
+  body.printing-payslip .payslip-scroll{overflow:visible!important}
+  body.printing-payslip .payslip-paper{box-shadow:none!important;border:0!important;width:100%!important;max-width:7.6in!important;margin:0 auto!important}
 }
 @media(display-mode:standalone){
   header{padding-top:calc(12px + env(safe-area-inset-top))}
@@ -690,26 +693,58 @@ body.light .add-site-pin-map{background:#e6ecf5;border-color:rgba(30,108,242,.28
 body.light .timemark-dist-warn{background:#fef2f2;border-color:#dc2626;color:#991b1b}
 
 /* ===== FONT FAMILY, WEIGHT & ALL FONT STYLES ===== */
-*:not(svg):not(svg *){font-family:inherit!important}
-body.fw-light *:not(svg):not(svg *){font-weight:300!important}
-body.fw-regular *:not(svg):not(svg *){font-weight:400!important}
+html,body{font-family:var(--app-font,'Inter',system-ui,-apple-system,'Segoe UI',sans-serif)!important}
+body *:not(svg):not(svg *){font-family:inherit!important}
+body.fw-light,body.fw-light *:not(svg):not(svg *){font-weight:300!important}
+body.fw-regular,body.fw-regular *:not(svg):not(svg *){font-weight:400!important}
 body.fw-regular h1,body.fw-regular h2,body.fw-regular h3,body.fw-regular .title,body.fw-regular b,body.fw-regular strong{font-weight:600!important}
-body.fw-semibold *:not(svg):not(svg *){font-weight:600!important}
-body.fw-bold *:not(svg):not(svg *){font-weight:700!important}
+body.fw-semibold,body.fw-semibold *:not(svg):not(svg *){font-weight:600!important}
+body.fw-bold,body.fw-bold *:not(svg):not(svg *){font-weight:700!important}
 
-body.fs-regular *:not(svg):not(svg *){font-style:normal!important}
-body.fs-italic *:not(svg):not(svg *){font-style:italic!important}
-body.fs-oblique *:not(svg):not(svg *){font-style:oblique 12deg!important}
-body.fs-uppercase *:not(svg):not(svg *):not(input):not(textarea){text-transform:uppercase!important}
-body.fs-capitalize *:not(svg):not(svg *):not(input):not(textarea){text-transform:capitalize!important}
-body.fs-wide *:not(svg):not(svg *){letter-spacing:.07em!important}
-body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
+body.fs-regular,body.fs-regular *:not(svg):not(svg *){font-style:normal!important;font-variant:normal!important;font-variant-caps:normal!important;letter-spacing:normal!important}
+body.fs-italic,body.fs-italic *:not(svg):not(svg *){font-style:italic!important;font-synthesis:style weight!important}
+body.fs-oblique,body.fs-oblique *:not(svg):not(svg *){font-style:oblique!important;font-style:oblique 12deg!important;font-synthesis:style weight!important}
+body.fs-uppercase,body.fs-uppercase *:not(svg):not(svg *):not(input):not(textarea){text-transform:uppercase!important}
+body.fs-capitalize,body.fs-capitalize *:not(svg):not(svg *):not(input):not(textarea){text-transform:capitalize!important}
+body.fs-wide,body.fs-wide *:not(svg):not(svg *){letter-spacing:.07em!important}
+body.fs-smallcaps,body.fs-smallcaps *:not(svg):not(svg *):not(input):not(textarea){font-variant:small-caps!important;font-variant-caps:small-caps!important;text-transform:none!important}
+
+/* Fill DTR Daily & Working Days OT summary rows */
+.dtr-day-total-row td{background:rgba(47,140,255,.10)!important;border-top:1px solid rgba(47,140,255,.35);font-size:12.5px}
+.dtr-all-ot-row td{background:rgba(245,166,35,.14)!important;border-top:2px solid rgba(245,166,35,.45);font-size:13px}
+.dtr-all-total-row td{background:rgba(34,197,94,.14)!important;border-top:1px solid rgba(34,197,94,.45);font-size:13.5px}
+body.light .dtr-day-total-row td{background:rgba(30,108,242,.08)!important;color:#0f1f3d!important}
+body.light .dtr-all-ot-row td{background:rgba(245,166,35,.16)!important;color:#0f1f3d!important}
+body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:#0f1f3d!important}
+.dtr-actions button:disabled{opacity:.62;cursor:not-allowed;filter:grayscale(.25);transform:none!important;box-shadow:none!important}
 
 /* DTR Half-Sheet always Times New Roman, black-on-white */
-.dtr-paper,.dtr-paper *{font-family:"Times New Roman",Times,serif!important;font-style:normal!important;text-transform:none!important;font-variant:normal!important;letter-spacing:normal!important}
-.dp-col-head th,.dp-employee-caption{font-style:italic!important}
-.dp-employee-name,.dp-employee-caption{font-family:Arial,sans-serif!important}
-.dp-table th,.dp-table td,body.light .dp-table th,body.light .dp-table td{color:#000!important;background:#fff!important;font-size:11px!important}
+.dtr-paper,.dtr-paper *{font-family:"Times New Roman",Times,serif!important;font-style:normal!important;text-transform:none!important;font-variant:normal!important;font-variant-caps:normal!important;letter-spacing:normal!important}
+.dp-table th,.dp-table td,body.light .dp-table th,body.light .dp-table td{color:#000!important;background:#fff!important;font-size:12px!important}
+.dp-table .dp-sheet-title,body.light .dp-table .dp-sheet-title{font-size:21px!important;font-weight:700!important;font-style:normal!important}
+.dp-col-head th,body.light .dp-col-head th{font-style:italic!important;font-weight:700!important;font-size:12px!important}
+.dp-employee-name,.dp-employee-caption{font-family:Arial,Helvetica,sans-serif!important}
+.dp-employee-name{text-transform:uppercase!important;font-weight:700!important}
+.dp-employee-caption{font-style:italic!important;font-weight:700!important}
+
+/* Official Excel-Style Payslip Sheet (isolated from global font/theme overrides) */
+.payslip-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;padding:4px 0}
+.payslip-paper{width:100%;min-width:620px;max-width:760px;margin:0 auto;background:#ffffff!important;color:#000000!important;border:1px solid #cbd5e1;border-radius:6px;padding:16px 18px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
+.payslip-paper,.payslip-paper *{font-family:Calibri,Arial,Helvetica,sans-serif!important;font-style:normal!important;text-transform:none!important;font-variant:normal!important;font-variant-caps:normal!important;letter-spacing:normal!important;color:#000000!important}
+.payslip-table{width:100%;border-collapse:collapse;table-layout:fixed;background:#ffffff!important}
+.payslip-table td{border:1px solid #d4d4d8!important;padding:4px 8px!important;font-size:13px!important;line-height:1.25!important;background:#ffffff!important;color:#000000!important;vertical-align:middle!important;height:23px;box-shadow:none!important}
+.payslip-table td.ps-title{font-weight:700!important;font-size:14px!important;text-align:center!important;padding:5px 8px!important}
+.payslip-table td.ps-sub{font-weight:700!important;font-size:13.5px!important;text-align:center!important;padding:4px 8px!important}
+.payslip-table td.ps-val-left{text-align:left!important;padding-left:10px!important}
+.payslip-table td.ps-amt-head{text-align:center!important;font-weight:400!important}
+.payslip-table td.ps-qty{text-align:right!important;padding-right:6px!important}
+.payslip-table td.ps-unit{text-align:left!important;padding-left:6px!important}
+.payslip-table td.ps-num{text-align:right!important;font-variant-numeric:tabular-nums!important;padding-right:10px!important}
+.payslip-table td.ps-total-cell{border-top:1.5px solid #000000!important}
+.payslip-table td.ps-net-label{border-top:1.5px solid #000000!important;border-bottom:3px double #000000!important;font-weight:600!important}
+.payslip-table td.ps-net-amt{border-top:1.5px solid #000000!important;border-bottom:3px double #000000!important;font-weight:700!important}
+.payslip-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.payslip-actions button{flex:1 1 140px}
 </style>
 </head>
 <body>
@@ -973,6 +1008,7 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
         <div class="tile clickable manager-only hidden" onclick="go('live-map')"><span class="ic">🗺️</span>Live Map</div>
         <div class="tile clickable" onclick="go('sites')"><span class="ic">📍</span>Sites</div>
         <div class="tile clickable" onclick="go('dtr')"><span class="ic">⏰</span>DTR</div>
+        <div class="tile clickable" onclick="openPayrollPage()"><span class="ic">💵</span>Payroll / Payslip</div>
         <div class="tile clickable" onclick="go('dtr');dtrTab('time_log')"><span class="ic">📸</span>Time In / Out</div>
         <div class="tile clickable" onclick="go('notes')"><span class="ic">📌</span>Notes &amp; Recs</div>
         <div class="tile clickable" onclick="go('reports');setTimeout(function(){var b=document.getElementById('reportSearchTab');if(b)b.click();},80)"><span class="ic">🔍</span>Search</div>
@@ -1243,6 +1279,7 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
         <button id="dtrFillTab" class="chip active" type="button" onclick="dtrTab('fill')">✏️ Fill DTR</button>
         <button id="dtrTimeLogTab" class="chip" type="button" onclick="dtrTab('time_log')">📸 Time In / Out</button>
         <button id="dtrPrevTab" class="chip" type="button" onclick="dtrTab('preview')">📄 Preview Half-Sheet</button>
+        <button id="dtrPayrollBtn" class="chip" type="button" onclick="openPayrollPage()">💵 Payroll / Payslip</button>
       </div>
       <div id="dtrFill">
         <div class="card">
@@ -1256,9 +1293,15 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
             <div class="field"><label for="dtrIn">Time in</label><input id="dtrIn" type="time"></div>
             <div class="field"><label for="dtrOut">Time out</label><input id="dtrOut" type="time"></div>
           </div>
+          <div id="dtrFormDurationHint" class="muted" style="font-size:12px;margin:-4px 0 8px;"></div>
+          <div class="field" style="margin-bottom:6px;">
+            <label class="check-row" style="margin:0;">
+              <input type="checkbox" id="dtrNightshiftOrRepair"> 🌙 Requested Nightshift / Operations to Repair (Count O.T. past 7:00 PM / Sunday exceeding hours)
+            </label>
+          </div>
           <div class="field">
             <label style="display:flex;align-items:center;gap:8px;cursor:default;">
-              <input type="checkbox" id="dtrOvertimeApproved" checked disabled style="width:auto;"> Overtime Approved by Manager/Admin (Always Approved)
+              <input type="checkbox" id="dtrOvertimeApproved" checked disabled style="width:auto;"> Overtime Approved (Mon–Sat Reg: 8AM–5PM · Max 7PM | Sun Reg: 10AM–7PM)
             </label>
           </div>
           <div class="inline-actions">
@@ -1275,9 +1318,11 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
           </div>
           <span id="dtrCutoffSummary" class="badge" style="margin-left:0;margin-bottom:4px;"></span>
         </div>
+        <div id="dtrLiveStatusCard" class="card hidden" style="padding:10px 12px;margin-bottom:10px;"></div>
         <div style="overflow:auto"><table>
           <thead><tr><th>Date</th><th>Employee</th><th>Site / job</th><th>Time In</th><th>Time Out</th><th>Hrs</th><th></th></tr></thead>
           <tbody id="dtrRows"></tbody>
+          <tfoot id="dtrRowsFoot"></tfoot>
         </table></div>
         <h2>Signature</h2>
         <canvas id="signature" class="dtr-sign" width="500" height="130"></canvas>
@@ -1297,10 +1342,14 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
             <button type="button" class="active" style="flex:1" data-time-mode="time_in" onclick="setTimeLogMode('time_in')">🟢 Time In</button>
             <button type="button" style="flex:1" data-time-mode="time_out" onclick="setTimeLogMode('time_out')">🔴 Time Out</button>
           </div>
+          <div id="timeLogLiveCard" class="hidden" style="margin-bottom:10px;padding:9px 12px;border-radius:10px;background:rgba(30,108,242,.08);border:1px solid rgba(30,108,242,.22);font-size:12.5px;"></div>
           <div class="row">
             <div class="field"><label for="timeLogSite">Work site (auto from schedule or select)</label><select id="timeLogSite"><option value="">Auto-detect or select site</option></select></div>
             <div class="field"><label for="timeLogUnit">Unit (optional)</label><select id="timeLogUnit"><option value="">Unit (optional)</option></select></div>
           </div>
+          <label class="check-row" style="margin:0 0 8px;">
+            <input type="checkbox" id="timeLogNightshiftOrRepair"> 🌙 Requested Nightshift / Operations to Repair (Count O.T. past 7:00 PM / Sunday exceeding hours)
+          </label>
           <div id="timeLogMessages" class="time-chat-log"></div>
           <div class="inline-actions" style="margin-top:8px;">
             <button class="btn small-btn" type="button" onclick="openTimemarkCamera()">📷 Timemark Camera</button>
@@ -1326,13 +1375,105 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
             <select id="dtrPreviewEmployee"></select>
           </div>
         </div>
-        <div id="dtrPaper" class="dtr-paper"></div>
+        <div class="dtr-paper-scroll"><div id="dtrPaper" class="dtr-paper"></div></div>
         <div class="dtr-actions">
-          <button class="green" type="button" onclick="downloadDtr()">📷 Download &amp; Share JPEG</button>
-          <button class="btn" type="button" onclick="printDtr()">🖨️ Print DTR</button>
-          <button class="gray" type="button" onclick="exportData('dtr',{format:'pdf',clearAfter:true})">📑 Full History PDF</button>
+          <button id="dtrBtnJpeg" class="green" type="button" onclick="downloadDtr()">📷 Download &amp; Share JPEG</button>
+          <button id="dtrBtnPrint" class="btn" type="button" onclick="printDtr()">🖨️ Print DTR</button>
+          <button id="dtrBtnPdf" class="gray" type="button" onclick="exportData('dtr',{format:'pdf',clearAfter:true})">📑 Full History PDF</button>
         </div>
         <p class="muted" id="dtrExportHint"></p>
+      </div>
+    </div></section>
+
+    <section class="page hidden" id="page-payroll"><div class="ct">
+      <div class="site-header" style="margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <button class="gray small-btn" type="button" onclick="go('dtr')">← Back to DTR</button>
+          <h1 class="title" style="margin:0;">💵 Payroll / Payslip</h1>
+        </div>
+        <button class="btn small-btn" type="button" onclick="syncPayrollFromDtr(true)">🔄 Sync Hours &amp; OT from DTR</button>
+      </div>
+
+      <div id="payrollEditorCard" class="card">
+        <div class="row">
+          <div class="field"><label for="payEmployee">Employee</label><select id="payEmployee"></select></div>
+          <div class="field">
+            <label for="payPeriodPreset">Pay Period</label>
+            <select id="payPeriodPreset">
+              <option value="1-15">1st – 15th of Month</option>
+              <option value="16-end">16th – End of Month</option>
+              <option value="dtr-11-25">DTR Cutoff (11 – 25)</option>
+              <option value="dtr-26-10">DTR Cutoff (26 – 10)</option>
+              <option value="custom">Custom Dates</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field"><label for="payStartDate">Period Start</label><input id="payStartDate" type="date"></div>
+          <div class="field"><label for="payEndDate">Period End</label><input id="payEndDate" type="date"></div>
+        </div>
+        <div id="payDtrSummary" class="muted" style="font-size:12px;margin:-4px 0 10px;">Select an employee and pay period to sync DTR hours (9h regular / excess OT).</div>
+
+        <div class="row">
+          <div class="card" style="margin:0;padding:10px 12px;">
+            <h3 style="margin:0 0 8px;font-size:14px;">Earnings</h3>
+            <div class="field"><label for="payBasicPay">Basic Pay (PHP)</label><input id="payBasicPay" type="number" step="0.01" min="0" placeholder="e.g. 9815.00"></div>
+            <div class="row">
+              <div class="field"><label for="payOtHrs">Overtime (hrs)</label><input id="payOtHrs" type="number" step="0.01" min="0" value="0"></div>
+              <div class="field"><label for="payOtAmt">Overtime Pay (PHP)</label><input id="payOtAmt" type="number" step="0.01" min="0" value="0"></div>
+            </div>
+            <div class="row">
+              <div class="field"><label for="payNightHrs">Night Diff (hrs)</label><input id="payNightHrs" type="number" step="0.01" min="0" value="0"></div>
+              <div class="field"><label for="payNightAmt">Night Diff Pay (PHP)</label><input id="payNightAmt" type="number" step="0.01" min="0" value="0"></div>
+            </div>
+            <div class="field" style="margin-bottom:4px;"><label for="payAllow">Transpo Allow / Food Allow. (PHP)</label><input id="payAllow" type="number" step="0.01" min="0" value="0"></div>
+            <label class="check-row" style="margin-top:6px;margin-bottom:0;font-size:12px;"><input id="payAutoCalcOt" type="checkbox" checked> Auto-compute OT (1.25×) &amp; Night Diff (10%) from Basic Pay when syncing</label>
+          </div>
+
+          <div class="card" style="margin:0;padding:10px 12px;">
+            <h3 style="margin:0 0 8px;font-size:14px;">Deductions</h3>
+            <div class="row">
+              <div class="field"><label for="paySss">SSS (PHP)</label><input id="paySss" type="number" step="0.01" min="0" value="0"></div>
+              <div class="field"><label for="payPhilhealth">PhilHealth (PHP)</label><input id="payPhilhealth" type="number" step="0.01" min="0" value="0"></div>
+            </div>
+            <div class="row">
+              <div class="field"><label for="payPagibig">Pag-IBIG (PHP)</label><input id="payPagibig" type="number" step="0.01" min="0" value="0"></div>
+              <div class="field"><label for="payCashAdvance">Cash Advance (PHP)</label><input id="payCashAdvance" type="number" step="0.01" min="0" value="0"></div>
+            </div>
+            <div class="row">
+              <div class="field" style="margin-bottom:0;"><label for="payAbsent">Absent (PHP)</label><input id="payAbsent" type="number" step="0.01" min="0" value="0"></div>
+              <div class="field" style="margin-bottom:0;"><label for="payAbuloy">Abuloy (PHP)</label><input id="payAbuloy" type="number" step="0.01" min="0" value="0"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="inline-actions" style="margin-top:12px;">
+          <button id="savePayslipBtn" class="btn" type="button" onclick="savePayslipRecord()">💾 Save Payslip</button>
+          <button class="gray" type="button" onclick="resetPayrollInputs()">🧹 Clear Values</button>
+          <span id="payNetBadge" class="badge" style="margin-left:auto;">Net Pay: ₱0.00</span>
+        </div>
+        <p id="payrollStatus" class="muted" role="status" style="margin-bottom:0;"></p>
+      </div>
+
+      <div id="payslipPreviewCard" class="card">
+        <div class="site-header" style="margin-bottom:8px;">
+          <h2 style="margin:0;">Official Pay Slip Preview</h2>
+          <span class="muted" style="font-size:12px;">Excel Accounting Format</span>
+        </div>
+        <div class="payslip-scroll">
+          <div id="payslipPaper" class="payslip-paper"></div>
+        </div>
+        <div class="payslip-actions">
+          <button class="green" type="button" onclick="downloadPayslipJpeg()">📷 Download &amp; Share JPEG</button>
+          <button class="btn" type="button" onclick="printPayslip()">🖨️ Print Payslip</button>
+          <button class="gray" type="button" onclick="downloadPayslipPdf()">📑 Download PDF</button>
+          <button class="gray" type="button" onclick="exportPayslipXlsx()">📊 Export Excel</button>
+        </div>
+      </div>
+
+      <div id="savedPayslipsCard" class="card">
+        <h2 style="margin-top:0;">Saved Payslips</h2>
+        <div id="savedPayslipList"><p class="muted">No saved payslips yet.</p></div>
       </div>
     </div></section>
 
@@ -1832,6 +1973,9 @@ body.fs-smallcaps *:not(svg):not(svg *){font-variant:small-caps!important}
     <div class="row">
       <div class="field"><label for="editDtrIn">Time Start</label><input id="editDtrIn" type="time"></div>
       <div class="field"><label for="editDtrOut">Time End</label><input id="editDtrOut" type="time"></div>
+    </div>
+    <div class="field" style="margin-bottom:6px;">
+      <label class="check-row" style="margin:0;"><input id="editDtrNightshiftOrRepair" type="checkbox"> 🌙 Requested Nightshift / Operations to Repair (Count O.T. past 7:00 PM / Sunday exceeding hours)</label>
     </div>
     <div id="editDtrOvertimeWrap" class="field">
       <label class="check-row" style="cursor:default;"><input id="editDtrOvertimeApproved" type="checkbox" checked disabled> Overtime Approved (Always Approved)</label>

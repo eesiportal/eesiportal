@@ -162,9 +162,11 @@ CREATE TABLE IF NOT EXISTS public.dtr_entries (
   time_out TEXT,
   overtime_approved BOOLEAN NOT NULL DEFAULT TRUE,
   approved_by TEXT,
+  nightshift_repair BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE public.dtr_entries ADD COLUMN IF NOT EXISTS approved_by TEXT;
+ALTER TABLE public.dtr_entries ADD COLUMN IF NOT EXISTS nightshift_repair BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE public.dtr_entries ALTER COLUMN overtime_approved SET DEFAULT TRUE;
 ALTER TABLE public.dtr_entries ALTER COLUMN location DROP NOT NULL;
 ALTER TABLE public.dtr_entries ALTER COLUMN job DROP NOT NULL;
@@ -189,6 +191,32 @@ CREATE TABLE IF NOT EXISTS public.dtr_time_logs (
 );
 ALTER TABLE public.dtr_time_logs ADD COLUMN IF NOT EXISTS sender_name TEXT;
 ALTER TABLE public.dtr_time_logs ADD COLUMN IF NOT EXISTS dtr_entry_id TEXT;
+
+CREATE TABLE IF NOT EXISTS public.payslips (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  employee_name TEXT NOT NULL,
+  period_start DATE NOT NULL,
+  period_end DATE NOT NULL,
+  basic_pay NUMERIC(12,2) NOT NULL DEFAULT 0,
+  overtime_hours NUMERIC(8,2) NOT NULL DEFAULT 0,
+  overtime_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+  night_diff_hours NUMERIC(8,2) NOT NULL DEFAULT 0,
+  night_diff_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+  allowance NUMERIC(12,2) NOT NULL DEFAULT 0,
+  sss NUMERIC(12,2) NOT NULL DEFAULT 0,
+  philhealth NUMERIC(12,2) NOT NULL DEFAULT 0,
+  pagibig NUMERIC(12,2) NOT NULL DEFAULT 0,
+  cash_advance NUMERIC(12,2) NOT NULL DEFAULT 0,
+  absent NUMERIC(12,2) NOT NULL DEFAULT 0,
+  abuloy NUMERIC(12,2) NOT NULL DEFAULT 0,
+  total_earnings NUMERIC(12,2) NOT NULL DEFAULT 0,
+  total_deductions NUMERIC(12,2) NOT NULL DEFAULT 0,
+  net_pay NUMERIC(12,2) NOT NULL DEFAULT 0,
+  created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE public.payslips ENABLE ROW LEVEL SECURITY;
 
 CREATE TABLE IF NOT EXISTS public.notes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -827,6 +855,16 @@ CREATE POLICY dtr_time_logs_insert ON public.dtr_time_logs FOR INSERT WITH CHECK
 DROP POLICY IF EXISTS dtr_time_logs_delete ON public.dtr_time_logs;
 CREATE POLICY dtr_time_logs_delete ON public.dtr_time_logs FOR DELETE USING (auth.uid() = user_id OR public.is_manager());
 
+/* Payslips */
+DROP POLICY IF EXISTS payslips_select ON public.payslips;
+CREATE POLICY payslips_select ON public.payslips FOR SELECT USING (public.is_manager() OR auth.uid() = user_id);
+DROP POLICY IF EXISTS payslips_insert ON public.payslips;
+CREATE POLICY payslips_insert ON public.payslips FOR INSERT WITH CHECK (public.is_approved_user() AND (public.is_manager() OR auth.uid() = user_id));
+DROP POLICY IF EXISTS payslips_update ON public.payslips;
+CREATE POLICY payslips_update ON public.payslips FOR UPDATE USING (public.is_manager() OR auth.uid() = user_id) WITH CHECK (public.is_manager() OR auth.uid() = user_id);
+DROP POLICY IF EXISTS payslips_delete ON public.payslips;
+CREATE POLICY payslips_delete ON public.payslips FOR DELETE USING (public.is_manager() OR auth.uid() = user_id);
+
 /* Notes */
 DROP POLICY IF EXISTS notes_select ON public.notes;
 CREATE POLICY notes_select ON public.notes FOR SELECT USING (auth.uid() = user_id OR public.is_manager());
@@ -961,7 +999,8 @@ DECLARE
     'approval_notifications',
     'notification_dismissals',
     'employee_locations',
-    'stories'
+    'stories',
+    'payslips'
   ];
 BEGIN
   FOREACH t IN ARRAY tables LOOP
@@ -989,6 +1028,7 @@ CREATE INDEX IF NOT EXISTS idx_app_notifications_created ON public.app_notificat
 CREATE INDEX IF NOT EXISTS idx_reports_date_created ON public.service_delivery_reports (report_date DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pms_date_created ON public.pms_checklist_records (checklist_date DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notif_dismissals_user ON public.notification_dismissals (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payslips_user_period ON public.payslips (user_id, period_end DESC, created_at DESC);
 
 /* 10. SEED AYALA MALLS CENTRAL BLOC (AMCB) & 34 UNITS */
 DO $$

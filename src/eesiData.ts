@@ -12,6 +12,7 @@ import {
   isMissingTableError,
   isSiteMetaNotice,
   isWithinSelfActionWindow,
+  parsePayslipFromAppNotice,
   parseSiteMetaFromAppNotice,
   parseStoryFromAppNotice,
   parseTimeLogFromAppNotice,
@@ -569,6 +570,9 @@ export async function loadAppNotifications(): Promise<void> {
   if (runtime.storiesTableMissing) {
     syncStoriesFromAppNotices();
   }
+  if (runtime.payslipsTableMissing) {
+    syncPayslipsFromAppNotices();
+  }
   hooks.renderNotices();
   hooks.renderHome();
   const visibleNew = newItems.filter((it: any) => !isHiddenSystemNotice(it));
@@ -752,6 +756,73 @@ export async function loadTimeLogs(): Promise<void> {
     await loadAppNotifications();
   } else {
     syncTimeLogsFromAppNotices();
+  }
+}
+
+export function getLocalPayslipsKey(): string {
+  return "eesi-payslips:" + (state.userId || "anon");
+}
+
+function readLocalPayslips(): any[] {
+  try {
+    const raw = localStorage.getItem(getLocalPayslipsKey());
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function applyPayslipRows(remoteRows: any[]): void {
+  const seen = new Set<string>();
+  const merged: any[] = [];
+  const push = (r: any) => {
+    if (!r || !r.id) return;
+    if (!isManager() && String(r.user_id) !== String(state.userId)) return;
+    const key = String(r.id);
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(r);
+  };
+  (remoteRows || []).forEach(push);
+  readLocalPayslips().forEach(push);
+  merged.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+  state.payslips = merged;
+  hooks.renderPayroll?.();
+}
+
+function syncPayslipsFromAppNotices(): void {
+  const rows = (state.appNotifications || [])
+    .map((n: any) => parsePayslipFromAppNotice(n))
+    .filter(Boolean);
+  applyPayslipRows(rows);
+}
+
+export async function loadPayslips(): Promise<void> {
+  if (!state.userId) return;
+  if (!runtime.payslipsTableMissing) {
+    const q = runtime.client
+      .from("payslips")
+      .select("id,user_id,employee_name,period_start,period_end,basic_pay,overtime_hours,overtime_amount,night_diff_hours,night_diff_amount,allowance,sss,philhealth,pagibig,cash_advance,absent,abuloy,total_earnings,total_deductions,net_pay,created_by,created_at")
+      .order("created_at", { ascending: false })
+      .limit(200);
+    const { data, error } = isManager() ? await q : await q.eq("user_id", state.userId);
+    if (!error) {
+      runtime.payslipsTableMissing = false;
+      applyPayslipRows(data || []);
+      return;
+    }
+    if (!isMissingTableError(error)) {
+      console.warn("Could not load payslips:", error?.message || error);
+      applyPayslipRows([]);
+      return;
+    }
+    runtime.payslipsTableMissing = true;
+  }
+  if (!appNotificationsLoaded) {
+    await loadAppNotifications();
+  } else {
+    syncPayslipsFromAppNotices();
   }
 }
 
@@ -1030,6 +1101,7 @@ const RELOADERS: Record<string, () => Promise<any> | any> = {
   notification_dismissals: () => loadNotificationDismissals(),
   user_blocks: () => loadBlockedUsers(),
   stories: () => loadStories(),
+  payslips: () => loadPayslips(),
 };
 const LIVE_TABLES = Object.keys(RELOADERS);
 
@@ -1144,6 +1216,7 @@ export async function reloadEverything(): Promise<void> {
     loadReports(),
     loadPmsRecords(),
     loadStories(),
+    loadPayslips(),
   ]);
   await loadUnread();
   await loadRecentChatNotices();

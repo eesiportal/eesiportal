@@ -1,21 +1,25 @@
+import * as XLSX from "xlsx";
 import {
   $,
   PMS_ITEMS,
-  calculateDtrHours,
+  PayslipRecord,
+  calculateDtrMinutes,
   calculateOtMinutes,
+  calculateShiftBreakdown,
+  capDtrTimeOut,
   esc,
   filterDtrRowsByCutoff,
   fmtDate,
   fmtDay,
-  fmtTableDate,
+  fmtHalfSheetDate,
   hooks,
   isManager,
+  isSundayDate,
   parseDtrJobMeta,
   parseRecMeta,
   parseReportUnit,
   profileName,
   profileOf,
-  roleLabel,
   sortDtrEntriesAscending,
   state,
   stripReportPhotos,
@@ -421,11 +425,12 @@ export function exportRecommendations(format: "xls" | "doc"): void {
   else downloadDoc(fname + ".doc", "Parts & Maintenance Recommendations", `${list.length} recommendation(s)`, cols, rows);
 }
 
-/* ==================== FULL DTR HISTORY PROFESSIONAL PDF EXPORT ==================== */
-function formatPdfTime(t: string | null | undefined): string {
+function formatPdfTime12h(t: string | null | undefined): string {
   const s = String(t || "").trim();
+  if (!s) return "";
+  if (/[ap]\.?m\.?$/i.test(s)) return s.replace(/\./g, "").toUpperCase();
   const m = s.match(/^(\d{1,2}):(\d{2})/);
-  if (!m) return s || "—";
+  if (!m) return s;
   let h = Number(m[1]);
   const min = m[2];
   const suffix = h >= 12 ? "PM" : "AM";
@@ -434,6 +439,10 @@ function formatPdfTime(t: string | null | undefined): string {
 }
 
 export async function exportDtrHistoryPdf(opts: { clearAfter?: boolean } = {}): Promise<void> {
+  if (opts?.clearAfter && hooks.canRunDtrThreeStepPdf && !hooks.canRunDtrThreeStepPdf()) {
+    toast("Full History PDF already used (1 click per button).");
+    return;
+  }
   const pickedUid = isManager() && val("dtrPreviewEmployee") ? val("dtrPreviewEmployee") : String(state.userId || "");
   const rawList = isManager() && !opts?.clearAfter
     ? [...(state.dtrs || [])]
@@ -445,13 +454,15 @@ export async function exportDtrHistoryPdf(opts: { clearAfter?: boolean } = {}): 
   }
 
   const cutoffResult = filterDtrRowsByCutoff(rawList, runtime.dtrCutoffKey || undefined);
-  const list = cutoffResult.rows.length ? cutoffResult.rows : sortDtrEntriesAscending(rawList);
+  const list = opts?.clearAfter
+    ? cutoffResult.rows
+    : (cutoffResult.rows.length ? cutoffResult.rows : sortDtrEntriesAscending(rawList));
   if (!list.length) {
-    toast("No DTR history entries available to export.");
+    toast("No DTR history entries available for this cutoff period.");
     return;
   }
 
-  toast("Generating DTR audit PDF…");
+  toast("Generating official DTR PDF…");
   try {
     const { jsPDF } = await import("jspdf");
     const { default: autoTable } = await import("jspdf-autotable");
@@ -465,283 +476,155 @@ export async function exportDtrHistoryPdf(opts: { clearAfter?: boolean } = {}): 
 
     const pageW = doc.internal.pageSize.getWidth();
     const pageH = doc.internal.pageSize.getHeight();
-    const marginX = 12;
-    const contentW = pageW - marginX * 2;
+    const marginX = 11;
+    const contentW = pageW - marginX * 2; // 275mm
 
-    const sortedDates = list
-      .map(d => String(d.work_date || ""))
-      .filter(Boolean)
-      .sort();
-    const oldestDate = sortedDates[0] ? fmtDay(sortedDates[0]) : "—";
-    const newestDate = sortedDates[sortedDates.length - 1] ? fmtDay(sortedDates[sortedDates.length - 1]) : "—";
-    const dateRange = oldestDate === newestDate ? newestDate : `${oldestDate} to ${newestDate}`;
+    const groups = new Map<string, any[]>();
+    list.forEach(d => {
+      const uid = String(d.user_id || state.userId || "unknown");
+      if (!groups.has(uid)) groups.set(uid, []);
+      groups.get(uid)!.push(d);
+    });
 
-    const staffIds = new Set(list.map(d => String(d.user_id || "")).filter(Boolean));
-    let totalHours = 0;
-    let totalRegularHours = 0;
-    let totalApprovedOtHours = 0;
-    let approvedOtCount = 0;
-    const pendingOtCount = 0;
+    let pageIdx = 0;
+    for (const [uid, empRows] of groups.entries()) {
+      if (pageIdx > 0) doc.addPage();
+      pageIdx++;
 
-    const tableRows = list.map((d, idx) => {
-      const p = profileOf(d.user_id);
-      const jobMeta = parseDtrJobMeta(d.job, d.approved_by);
-      const isSunday = d.work_date ? new Date(String(d.work_date) + "T00:00:00").getDay() === 0 : false;
-      const hrs = calculateDtrHours(d.time_in, d.time_out, true);
-      const otMins = calculateOtMinutes(d.time_in, d.time_out);
-      const otHrs = otMins / 60;
-      totalHours += hrs;
-      if (otMins > 0) {
-        approvedOtCount++;
-        totalApprovedOtHours += otHrs;
-        totalRegularHours += Math.max(0, hrs - otHrs);
-      } else {
-        totalRegularHours += hrs;
+      const dayMetaMap = new Map<string, { firstIn: string | null; lastOut: string | null; mins: number; nsRepair: boolean }>();
+      empRows.forEach(d => {
+        const meta = parseDtrJobMeta(d.job, d.approved_by);
+        const dayKey = `${String(d.work_date || "")}::${String(d.user_id || "")}`;
+        const ruleOpts = { workDate: d.work_date, nightshiftRepair: meta.nightshiftRepair };
+        const mins = calculateDtrMinutes(d.time_in, d.time_out, null, ruleOpts);
+        const capped = capDtrTimeOut(d.time_in, d.time_out, ruleOpts);
+        const cur = dayMetaMap.get(dayKey) || { firstIn: null, lastOut: null, mins: 0, nsRepair: false };
+        if (!cur.firstIn && d.time_in) cur.firstIn = d.time_in;
+        if (capped && capped !== d.time_in) cur.lastOut = capped;
+        cur.mins += mins;
+        if (meta.nightshiftRepair) cur.nsRepair = true;
+        dayMetaMap.set(dayKey, cur);
+      });
+
+      const tableRows = empRows.map(d => {
+        const meta = parseDtrJobMeta(d.job, d.approved_by);
+        const isSunday = isSundayDate(d.work_date);
+        const ruleOpts = { workDate: d.work_date, nightshiftRepair: meta.nightshiftRepair };
+        const dayKey = `${String(d.work_date || "")}::${String(d.user_id || "")}`;
+        const dayInfo = dayMetaMap.get(dayKey);
+        const dayBd = dayInfo
+          ? calculateShiftBreakdown(dayInfo.firstIn, dayInfo.lastOut, dayInfo.mins, {
+              workDate: d.work_date,
+              nightshiftRepair: dayInfo.nsRepair,
+            })
+          : null;
+        const hasDailyOt = Boolean(dayBd && dayBd.finalOtMins > 0);
+
+        const tIn = formatPdfTime12h(d.time_in);
+        const tOut = formatPdfTime12h(capDtrTimeOut(d.time_in, d.time_out, ruleOpts));
+        const timeRange = (tIn && tOut) ? `${tIn} - ${tOut}` : (tIn || tOut || "—");
+        const desc = [meta.cleanJob, meta.unitName ? `(${meta.unitName})` : ""].filter(Boolean).join(" ") || meta.unitName || "";
+        const approvedTxt = meta.approvedBy ||
+          (isSunday ? "SUNDAY DUTY" : ((hasDailyOt || calculateOtMinutes(d.time_in, d.time_out, ruleOpts) > 0) ? "EXTEND" : ""));
+
+        return [
+          fmtHalfSheetDate(d.work_date) || "",
+          String(d.location || ""),
+          desc,
+          timeRange,
+          approvedTxt,
+        ];
+      });
+
+      autoTable(doc, {
+        startY: 14,
+        margin: { left: marginX, right: marginX, bottom: 26 },
+        head: [
+          [{ content: "DAILY TIME RECORD & AUTHORITY TO CONDUCT OVERTIME", colSpan: 5, styles: { font: "times", fontStyle: "bold", fontSize: 15, halign: "center", valign: "middle", cellPadding: { top: 2.5, bottom: 2.5, left: 2, right: 2 } } }],
+          [
+            { content: "DATE", styles: { font: "times", fontStyle: "bolditalic", fontSize: 9.5 } },
+            { content: "LOCATION", styles: { font: "times", fontStyle: "bolditalic", fontSize: 9.5 } },
+            { content: "WORK DESCRIPTION", styles: { font: "times", fontStyle: "bolditalic", fontSize: 9.5 } },
+            { content: "TIME START/END", styles: { font: "times", fontStyle: "bolditalic", fontSize: 9.5 } },
+            { content: "APPROVED BY:", styles: { font: "times", fontStyle: "bolditalic", fontSize: 9.5 } },
+          ],
+        ],
+        body: tableRows,
+        showHead: "everyPage",
+        theme: "grid",
+        styles: {
+          font: "times",
+          fontStyle: "bold",
+          fontSize: 9.5,
+          cellPadding: { top: 1.7, bottom: 1.7, left: 2.2, right: 2.2 },
+          textColor: [0, 0, 0],
+          fillColor: [255, 255, 255],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.35,
+          halign: "center",
+          valign: "middle",
+          overflow: "linebreak",
+        },
+        headStyles: {
+          fillColor: [255, 255, 255],
+          textColor: [0, 0, 0],
+          lineColor: [0, 0, 0],
+          lineWidth: 0.35,
+          halign: "center",
+          valign: "middle",
+        },
+        columnStyles: {
+          0: { cellWidth: contentW * 0.11 },
+          1: { cellWidth: contentW * 0.20 },
+          2: { cellWidth: contentW * 0.37, fontSize: 9 },
+          3: { cellWidth: contentW * 0.19 },
+          4: { cellWidth: contentW * 0.13 },
+        },
+      });
+
+      let sigY = Number((doc as any).lastAutoTable?.finalY || 120) + 12;
+      if (sigY + 18 > pageH - 8) {
+        doc.addPage();
+        sigY = 28;
       }
 
-      const otLabel =
-        jobMeta.approvedBy ||
-        (isSunday
-          ? "SUNDAY DUTY"
-          : otMins > 0
-            ? `EXTEND (+${otHrs.toFixed(1)}h)`
-            : "Standard");
+      const sigW = 88;
+      const sigX = marginX;
+      const isOwn = String(uid) === String(state.userId || "");
+      const sigUrl = isOwn ? String(runtime.activeDtrSigDataUrl || "") : "";
+      if (sigUrl && sigUrl.startsWith("data:image/")) {
+        try {
+          const fmt = sigUrl.startsWith("data:image/png") ? "PNG" : "JPEG";
+          doc.addImage(sigUrl, fmt, sigX + (sigW - 46) / 2, sigY - 12.5, 46, 15.5);
+        } catch {}
+      }
 
-      const displayJob = [jobMeta.unitName ? `[${jobMeta.unitName}]` : "", jobMeta.cleanJob].filter(Boolean).join(" ") || "—";
-
-      return [
-        String(idx + 1),
-        fmtTableDate(d.work_date) || "—",
-        profileName(d.user_id) || "Member",
-        [p?.team, p?.area].filter(Boolean).join(" / ") || "—",
-        d.location || "—",
-        displayJob,
-        formatPdfTime(d.time_in),
-        formatPdfTime(d.time_out),
-        hrs.toFixed(2),
-        otLabel,
-      ];
-    });
-
-    // Header Banner
-    doc.setFillColor(11, 27, 56);
-    doc.rect(0, 0, pageW, 24, "F");
-    doc.setFillColor(30, 108, 242);
-    doc.rect(0, 24, pageW, 1.5, "F");
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(15);
-    doc.text("EESI ELEVATORS INC.", marginX, 10.5);
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9.5);
-    doc.setTextColor(191, 219, 254);
-    doc.text("DAILY TIME RECORD (DTR) — FULL AUDIT & MANAGEMENT HISTORY", marginX, 17);
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(8.5);
-    doc.setTextColor(255, 255, 255);
-    doc.text(`DOC ID: EESI-DTR-${stamp()}`, pageW - marginX, 9.5, { align: "right" });
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8);
-    doc.setTextColor(203, 213, 225);
-    doc.text(`Generated: ${new Date().toLocaleString()}`, pageW - marginX, 14.5, { align: "right" });
-    doc.text(
-      isManager() ? "SCOPE: ALL PERSONNEL AUDIT" : "SCOPE: PERSONAL ATTENDANCE RECORD",
-      pageW - marginX,
-      19.5,
-      { align: "right" }
-    );
-
-    // Metadata & KPI Card
-    const metaY = 29;
-    doc.setFillColor(248, 250, 252);
-    doc.setDrawColor(203, 213, 225);
-    doc.roundedRect(marginX, metaY, contentW, 20, 2, 2, "FD");
-
-    doc.setTextColor(15, 23, 42);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(8.5);
-    doc.text("PREPARED BY:", marginX + 4, metaY + 6.5);
-    doc.text("AUDIT PERIOD:", marginX + 4, metaY + 12.2);
-    doc.text("OVERTIME SUMMARY:", marginX + 4, metaY + 17.5);
-
-    doc.setFont("helvetica", "normal");
-    const preparedName = state.profile?.full_name || state.email || "Authorized Member";
-    doc.text(`${preparedName} (${roleLabel(state.role)})`, marginX + 34, metaY + 6.5);
-    doc.text(dateRange, marginX + 34, metaY + 12.2);
-    doc.text(
-      `${approvedOtCount} approved OT entry(ies) · ${pendingOtCount} pending OT entry(ies)`,
-      marginX + 42,
-      metaY + 17.5
-    );
-
-    // KPI Mini-Boxes on right half of summary strip
-    const kpis = [
-      { label: "TOTAL LOGS", value: String(list.length) },
-      { label: "PERSONNEL", value: String(staffIds.size) },
-      { label: "REGULAR HRS", value: totalRegularHours.toFixed(2) },
-      { label: "APPROVED OT", value: totalApprovedOtHours.toFixed(2) },
-      { label: "TOTAL HOURS", value: totalHours.toFixed(2) },
-    ];
-    const kpiW = 28;
-    const kpiGap = 2.5;
-    const kpiStartX = pageW - marginX - (kpis.length * kpiW + (kpis.length - 1) * kpiGap) - 3;
-
-    kpis.forEach((k, i) => {
-      const kx = kpiStartX + i * (kpiW + kpiGap);
-      const isLast = i === kpis.length - 1;
-      doc.setFillColor(isLast ? 11 : 255, isLast ? 27 : 255, isLast ? 56 : 255);
-      doc.setDrawColor(isLast ? 11 : 203, isLast ? 27 : 213, isLast ? 56 : 225);
-      doc.roundedRect(kx, metaY + 2.8, kpiW, 14.4, 1.5, 1.5, "FD");
+      const empName = (profileName(uid) || state.profile?.full_name || state.email || "EMPLOYEE").toUpperCase();
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(6.5);
-      doc.setTextColor(isLast ? 147 : 100, isLast ? 197 : 116, isLast ? 253 : 139);
-      doc.text(k.label, kx + kpiW / 2, metaY + 7.2, { align: "center" });
-      doc.setFontSize(10.5);
-      doc.setTextColor(isLast ? 255 : 15, isLast ? 255 : 23, isLast ? 255 : 42);
-      doc.text(k.value, kx + kpiW / 2, metaY + 13.8, { align: "center" });
-    });
+      doc.setFontSize(10);
+      doc.setTextColor(0, 0, 0);
+      doc.text(empName, sigX + sigW / 2, sigY + 1.5, { align: "center" });
 
-    // Main DTR Audit Table
-    autoTable(doc, {
-      startY: 53,
-      margin: { left: marginX, right: marginX, bottom: 18 },
-      head: [[
-        "#",
-        "Work Date",
-        "Employee",
-        "Team / Area",
-        "Work Site / Location",
-        "Work Description / Unit",
-        "Time In",
-        "Time Out",
-        "Hours",
-        "OT Status",
-      ]],
-      body: tableRows,
-      foot: [[
-        "",
-        "TOTAL",
-        `${staffIds.size} Staff`,
-        "",
-        "",
-        `${list.length} Recorded DTR Entries`,
-        "",
-        "",
-        totalHours.toFixed(2),
-        `${totalApprovedOtHours.toFixed(2)}h OT`,
-      ]],
-      showHead: "everyPage",
-      showFoot: "lastPage",
-      theme: "grid",
-      styles: {
-        font: "helvetica",
-        fontSize: 7.8,
-        cellPadding: 2.1,
-        textColor: [15, 23, 42],
-        lineColor: [203, 213, 225],
-        lineWidth: 0.2,
-        overflow: "linebreak",
-        valign: "middle",
-      },
-      headStyles: {
-        fillColor: [11, 27, 56],
-        textColor: [255, 255, 255],
-        fontStyle: "bold",
-        fontSize: 7.8,
-        halign: "left",
-      },
-      footStyles: {
-        fillColor: [226, 232, 240],
-        textColor: [11, 27, 56],
-        fontStyle: "bold",
-        fontSize: 8,
-      },
-      alternateRowStyles: {
-        fillColor: [248, 250, 252],
-      },
-      columnStyles: {
-        0: { cellWidth: 9, halign: "center" },
-        1: { cellWidth: 23, halign: "center" },
-        2: { cellWidth: 36 },
-        3: { cellWidth: 26 },
-        4: { cellWidth: 42 },
-        5: { cellWidth: 59 },
-        6: { cellWidth: 18, halign: "center" },
-        7: { cellWidth: 18, halign: "center" },
-        8: { cellWidth: 16, halign: "right", fontStyle: "bold" },
-        9: { cellWidth: 26, halign: "center" },
-      },
-      didParseCell: (data) => {
-        if (data.section === "body" && data.column.index === 9) {
-          const txt = String(data.cell.raw || "");
-          if (txt.startsWith("OT Approved")) {
-            data.cell.styles.textColor = [21, 128, 61];
-            data.cell.styles.fontStyle = "bold";
-          } else if (txt.startsWith("OT Pending")) {
-            data.cell.styles.textColor = [180, 83, 9];
-            data.cell.styles.fontStyle = "bold";
-          } else {
-            data.cell.styles.textColor = [71, 85, 105];
-          }
-        }
-      },
-    });
+      doc.setDrawColor(0, 0, 0);
+      doc.setLineWidth(0.42);
+      doc.line(sigX, sigY + 3.2, sigX + sigW, sigY + 3.2);
+      doc.line(sigX, sigY + 4.2, sigX + sigW, sigY + 4.2);
 
-    // Audit Sign-Off Block
-    const finalY = Number((doc as any).lastAutoTable?.finalY || 140);
-    let signY = finalY + 10;
-    if (signY + 26 > pageH - 16) {
-      doc.addPage();
-      signY = 22;
+      doc.setFont("helvetica", "bolditalic");
+      doc.setFontSize(8.5);
+      doc.text("Signature Over Printed Name of Employee", sigX + sigW / 2, sigY + 8.4, { align: "center" });
     }
 
-    doc.setFont("helvetica", "italic");
-    doc.setFontSize(8);
-    doc.setTextColor(71, 85, 105);
-    doc.text(
-      "Certification: I certify that the Daily Time Record entries listed above accurately reflect verified field attendance and approved overtime.",
-      marginX,
-      signY
-    );
-
-    const sigBoxY = signY + 14;
-    doc.setDrawColor(100, 116, 139);
-    doc.line(marginX, sigBoxY, marginX + 82, sigBoxY);
-    doc.line(pageW - marginX - 82, sigBoxY, pageW - marginX, sigBoxY);
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(8.5);
-    doc.setTextColor(15, 23, 42);
-    doc.text(preparedName.toUpperCase(), marginX, sigBoxY + 4.5);
-    doc.text("OPERATIONS / HR AUDIT APPROVAL", pageW - marginX - 82, sigBoxY + 4.5);
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(7.5);
-    doc.setTextColor(100, 116, 139);
-    doc.text(`Prepared By (${roleLabel(state.role)})`, marginX, sigBoxY + 8.5);
-    doc.text("Authorized Signature & Date", pageW - marginX - 82, sigBoxY + 8.5);
-
-    // Per-page confidential footer
-    const totalPages = doc.getNumberOfPages();
-    for (let p = 1; p <= totalPages; p++) {
-      doc.setPage(p);
-      doc.setDrawColor(203, 213, 225);
-      doc.line(marginX, pageH - 11, pageW - marginX, pageH - 11);
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(7.5);
-      doc.setTextColor(100, 116, 139);
-      doc.text("EESI Elevators Inc. · Confidential DTR Audit Report", marginX, pageH - 6.5);
-      doc.text(`Page ${p} of ${totalPages}`, pageW - marginX, pageH - 6.5, { align: "right" });
-    }
-
-    const filename = `eesi-dtr-audit-history-${stamp()}.pdf`;
+    const filename = `eesi-dtr-${stamp()}.pdf`;
     doc.save(filename);
     if (opts?.clearAfter) {
-      await hooks.clearDtrAfterExport?.(list.map(d => String(d.id)));
-      toast("Exported " + filename + " and cleared DTR");
+      const exportedIds = list.map(d => String(d.id));
+      if (hooks.completeDtrExportStep) {
+        await hooks.completeDtrExportStep("pdf", exportedIds);
+      } else {
+        await hooks.clearDtrAfterExport?.(exportedIds);
+        toast("Exported " + filename + " and cleared DTR");
+      }
     } else {
       toast("Exported " + filename);
     }
@@ -750,3 +633,166 @@ export async function exportDtrHistoryPdf(opts: { clearAfter?: boolean } = {}): 
     toast("PDF export failed: " + (err?.message || err));
   }
 }
+
+/* ==================== PAYSLIP PDF & EXCEL (.XLSX) EXPORTS ==================== */
+function fmtPayslipPeriodDate(iso: string): string {
+  const m = String(iso || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[2]}-${m[3]}-${m[1]}` : String(iso || "");
+}
+
+function fmtPayslipAmt(n: number, zeroAsDash = true): string {
+  const v = Number(n || 0);
+  if (!Number.isFinite(v) || (zeroAsDash && Math.abs(v) < 0.005)) return "-";
+  return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtPayslipHrs(n: number): string {
+  const v = Number(n || 0);
+  if (!Number.isFinite(v) || v <= 0) return "0";
+  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+}
+
+export async function exportPayslipPdf(rec: PayslipRecord): Promise<void> {
+  toast("Generating Payslip PDF…");
+  try {
+    const { jsPDF } = await import("jspdf");
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
+    const left = 14;
+    const colW = [50, 12, 12, 34, 42, 32]; // Total 182mm across A4 (210mm)
+    const totalW = colW.reduce((s, w) => s + w, 0);
+    const colX: number[] = [];
+    let curX = left;
+    colW.forEach(w => { colX.push(curX); curX += w; });
+    const rowH = 7.2;
+    let y = 20;
+
+    const drawGridRow = (
+      cells: Array<{ text: string; span?: number; align?: "left" | "center" | "right"; bold?: boolean; topBorder?: boolean; doubleBottom?: boolean }>
+    ) => {
+      let idx = 0;
+      cells.forEach(c => {
+        const span = c.span || 1;
+        const x = colX[idx];
+        const w = colW.slice(idx, idx + span).reduce((s, v) => s + v, 0);
+        doc.setDrawColor(212, 212, 216);
+        doc.setLineWidth(0.2);
+        doc.rect(x, y, w, rowH);
+        if (c.topBorder) {
+          doc.setDrawColor(0, 0, 0);
+          doc.setLineWidth(0.45);
+          doc.line(x, y, x + w, y);
+        }
+        if (c.doubleBottom) {
+          doc.setDrawColor(0, 0, 0);
+          doc.setLineWidth(0.38);
+          doc.line(x, y + rowH - 0.85, x + w, y + rowH - 0.85);
+          doc.line(x, y + rowH, x + w, y + rowH);
+        }
+        if (c.text) {
+          doc.setFont("helvetica", c.bold ? "bold" : "normal");
+          doc.setFontSize(c.bold ? 10 : 9.5);
+          doc.setTextColor(0, 0, 0);
+          const pad = 2.2;
+          const tx = c.align === "center" ? x + w / 2 : c.align === "right" ? x + w - pad : x + pad;
+          doc.text(c.text, tx, y + rowH * 0.67, { align: c.align || "left" });
+        }
+        idx += span;
+      });
+      y += rowH;
+    };
+
+    const periodText = `${fmtPayslipPeriodDate(rec.period_start)} to ${fmtPayslipPeriodDate(rec.period_end)}`;
+    drawGridRow([{ text: "EESI ELEVATORS, INC.", span: 4, align: "center", bold: true }, { text: "", span: 2 }]);
+    drawGridRow([{ text: "PAY SLIP", span: 4, align: "center", bold: true }, { text: "", span: 2 }]);
+    drawGridRow([{ text: "Employee" }, { text: rec.employee_name || "Employee", span: 3 }, { text: "" }, { text: "" }]);
+    drawGridRow([{ text: "Pay Period" }, { text: periodText, span: 3 }, { text: "" }, { text: "" }]);
+    drawGridRow([{ text: "Earnings" }, { text: "" }, { text: "" }, { text: "Amount", align: "center" }, { text: "" }, { text: "" }]);
+    drawGridRow([
+      { text: "Basic Pay" }, { text: "" }, { text: "" }, { text: fmtPayslipAmt(rec.basic_pay), align: "right" },
+      { text: "Deductions" }, { text: "Amount", align: "center" },
+    ]);
+    drawGridRow([
+      { text: "overtime" }, { text: fmtPayslipHrs(rec.overtime_hours), align: "right" }, { text: "hrs" }, { text: fmtPayslipAmt(rec.overtime_amount), align: "right" },
+      { text: "sss" }, { text: fmtPayslipAmt(rec.sss), align: "right" },
+    ]);
+    drawGridRow([
+      { text: "night diff" }, { text: fmtPayslipHrs(rec.night_diff_hours), align: "right" }, { text: "hrs" }, { text: fmtPayslipAmt(rec.night_diff_amount), align: "right" },
+      { text: "philhealth" }, { text: fmtPayslipAmt(rec.philhealth), align: "right" },
+    ]);
+    drawGridRow([
+      { text: "" }, { text: "" }, { text: "" }, { text: "-", align: "right" },
+      { text: "pag-ibig" }, { text: fmtPayslipAmt(rec.pagibig), align: "right" },
+    ]);
+    drawGridRow([
+      { text: "" }, { text: "" }, { text: "" }, { text: "-", align: "right" },
+      { text: "cash advance" }, { text: fmtPayslipAmt(rec.cash_advance), align: "right" },
+    ]);
+    drawGridRow([
+      { text: "" }, { text: "" }, { text: "" }, { text: "-", align: "right" },
+      { text: "absent" }, { text: fmtPayslipAmt(rec.absent), align: "right" },
+    ]);
+    drawGridRow([
+      { text: "transpo allow/food allow." }, { text: "" }, { text: "" }, { text: fmtPayslipAmt(rec.allowance), align: "right" },
+      { text: "abuloy" }, { text: fmtPayslipAmt(rec.abuloy), align: "right" },
+    ]);
+    drawGridRow([
+      { text: "Total Earnings" }, { text: "" }, { text: "" }, { text: fmtPayslipAmt(rec.total_earnings), align: "right", topBorder: true },
+      { text: "Total Deductions" }, { text: fmtPayslipAmt(rec.total_deductions), align: "right", topBorder: true },
+    ]);
+    drawGridRow([
+      { text: "" }, { text: "" }, { text: "" }, { text: "" },
+      { text: "Net Pay", bold: true, topBorder: true, doubleBottom: true },
+      { text: fmtPayslipAmt(rec.net_pay, false), align: "right", bold: true, topBorder: true, doubleBottom: true },
+    ]);
+
+    doc.setDrawColor(180, 185, 195);
+    doc.setLineWidth(0.25);
+    doc.rect(left, 20, totalW, y - 20);
+
+    const filename = `eesi-payslip-${safeFileSlug(rec.employee_name)}-${rec.period_start || stamp()}.pdf`;
+    doc.save(filename);
+    toast("Exported " + filename);
+  } catch (err: any) {
+    console.error("Payslip PDF export failed:", err);
+    toast("PDF export failed: " + (err?.message || err));
+  }
+}
+
+export function exportPayslipXlsx(rec: PayslipRecord): void {
+  const periodText = `${fmtPayslipPeriodDate(rec.period_start)} to ${fmtPayslipPeriodDate(rec.period_end)}`;
+  const numOrDash = (v: number, dashWhenZero = true): number | string => {
+    const n = Number(v || 0);
+    if (!Number.isFinite(n) || (dashWhenZero && Math.abs(n) < 0.005)) return "-";
+    return Number(n.toFixed(2));
+  };
+  const aoa: Array<Array<string | number>> = [
+    ["EESI ELEVATORS, INC.", "", "", "", "", ""],
+    ["PAY SLIP", "", "", "", "", ""],
+    ["Employee", rec.employee_name || "", "", "", "", ""],
+    ["Pay Period", periodText, "", "", "", ""],
+    ["Earnings", "", "", "Amount", "", ""],
+    ["Basic Pay", "", "", numOrDash(rec.basic_pay), "Deductions", "Amount"],
+    ["overtime", Number(rec.overtime_hours || 0), "hrs", numOrDash(rec.overtime_amount), "sss", numOrDash(rec.sss)],
+    ["night diff", Number(rec.night_diff_hours || 0), "hrs", numOrDash(rec.night_diff_amount), "philhealth", numOrDash(rec.philhealth)],
+    ["", "", "", "-", "pag-ibig", numOrDash(rec.pagibig)],
+    ["", "", "", "-", "cash advance", numOrDash(rec.cash_advance)],
+    ["", "", "", "-", "absent", numOrDash(rec.absent)],
+    ["transpo allow/food allow.", "", "", numOrDash(rec.allowance), "abuloy", numOrDash(rec.abuloy)],
+    ["Total Earnings", "", "", numOrDash(rec.total_earnings), "Total Deductions", numOrDash(rec.total_deductions)],
+    ["", "", "", "", "Net Pay", numOrDash(rec.net_pay, false)],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!merges"] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: 3 } },
+    { s: { r: 2, c: 1 }, e: { r: 2, c: 3 } },
+    { s: { r: 3, c: 1 }, e: { r: 3, c: 3 } },
+  ];
+  ws["!cols"] = [{ wch: 26 }, { wch: 8 }, { wch: 7 }, { wch: 15 }, { wch: 20 }, { wch: 15 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Pay Slip");
+  const filename = `eesi-payslip-${safeFileSlug(rec.employee_name)}-${rec.period_start || stamp()}.xlsx`;
+  XLSX.writeFile(wb, filename);
+  toast("Exported " + filename);
+}
+
