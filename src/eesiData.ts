@@ -912,12 +912,22 @@ function syncPayslipsFromAppNotices(): void {
 export async function loadPayslips(): Promise<void> {
   if (!state.userId) return;
   if (!runtime.payslipsTableMissing) {
-    const q = runtime.client
-      .from("payslips")
-      .select("id,user_id,employee_name,period_start,period_end,basic_pay,overtime_hours,overtime_amount,night_diff_hours,night_diff_amount,allowance,sss,philhealth,pagibig,cash_advance,absent,abuloy,total_earnings,total_deductions,net_pay,created_by,created_at")
-      .order("created_at", { ascending: false })
-      .limit(200);
-    const { data, error } = isManager() ? await q : await q.eq("user_id", state.userId);
+    const runQuery = async (cols: string) => {
+      const q = runtime.client
+        .from("payslips")
+        .select(cols)
+        .order("created_at", { ascending: false })
+        .limit(200);
+      return isManager() ? q : q.eq("user_id", state.userId);
+    };
+    const fullCols = "id,user_id,employee_name,period_start,period_end,dtr_cutoff_start,dtr_cutoff_end,basic_pay,overtime_hours,overtime_amount,night_diff_hours,night_diff_amount,allowance,sss,philhealth,pagibig,cash_advance,absent,abuloy,total_earnings,total_deductions,net_pay,created_by,created_at";
+    const legacyCols = "id,user_id,employee_name,period_start,period_end,basic_pay,overtime_hours,overtime_amount,night_diff_hours,night_diff_amount,allowance,sss,philhealth,pagibig,cash_advance,absent,abuloy,total_earnings,total_deductions,net_pay,created_by,created_at";
+    let { data, error } = await runQuery(fullCols);
+    if (error && /dtr_cutoff_start|dtr_cutoff_end|42703|schema cache/i.test(String(error.message || ""))) {
+      const retry = await runQuery(legacyCols);
+      data = retry.data;
+      error = retry.error;
+    }
     if (!error) {
       runtime.payslipsTableMissing = false;
       applyPayslipRows(data || []);

@@ -926,6 +926,8 @@ function exposeWindowGlobals(): void {
 }
 
 /* ==================== AUTH UI ==================== */
+let pendingAuthNotice = "";
+
 function setAuthStatus(msg: string): void {
   const el = $("authStatus");
   if (el) el.textContent = msg;
@@ -976,24 +978,92 @@ async function ensureProfile(session: any) {
   return created || { user_id: session.user.id, full_name: fullName, email: session.user.email };
 }
 
-async function ensurePendingRequest(session: any): Promise<void> {
-  const { data: existing } = await runtime.client
-    .from("registration_requests")
-    .select("id")
-    .eq("user_id", session.user.id)
-    .maybeSingle();
-  if (existing) return;
-  const fullName =
-    session.user.user_metadata?.full_name ||
-    session.user.user_metadata?.name ||
-    (session.user.email || "Member").split("@")[0];
-  await runtime.client.from("registration_requests").insert({
-    user_id: session.user.id,
-    full_name: fullName,
-    email: session.user.email,
-    requested_role: "employee",
-    status: "pending",
+async function ensurePendingRequest(
+  session: any,
+  overrides?: { fullName?: string; email?: string; idNo?: string; address?: string; team?: string; phone?: string; area?: string }
+): Promise<{ ok: boolean; error?: string }> {
+  const meta = session?.user?.user_metadata || {};
+  const email = (overrides?.email || session?.user?.email || "").trim();
+  const fullName = (
+    overrides?.fullName ||
+    meta.full_name ||
+    meta.name ||
+    (email || "Member").split("@")[0]
+  ).trim();
+  const idNo = (overrides?.idNo ?? meta.id_no ?? "") || null;
+  const address = (overrides?.address ?? meta.address ?? "") || null;
+  const team = (overrides?.team ?? meta.team ?? "") || null;
+  const phone = (overrides?.phone ?? meta.phone ?? "") || null;
+  const area = (overrides?.area ?? meta.area ?? "") || null;
+
+  const [{ data: existingReq }, { data: existingRole }] = await Promise.all([
+    runtime.client.from("registration_requests").select("id,status").eq("user_id", session.user.id).maybeSingle(),
+    runtime.client.from("user_roles").select("user_id,approval_status").eq("user_id", session.user.id).maybeSingle(),
+  ]);
+  if (existingReq && existingReq.status === "pending" && existingRole) {
+    return { ok: true };
+  }
+
+  const { error: rpcError } = await runtime.client.rpc("submit_registration_request", {
+    p_user_id: session.user.id,
+    p_full_name: fullName,
+    p_email: email,
+    p_requested_role: "employee",
+    p_id_no: idNo,
+    p_address: address,
+    p_team: team,
+    p_phone: phone,
+    p_area: area,
   });
+  if (!rpcError) return { ok: true };
+
+  // Fallback for authenticated sessions if the RPC hits a legacy schema mismatch (e.g. missing updated_at column)
+  const { error: profErr } = await runtime.client
+    .from("profiles")
+    .upsert(
+      { user_id: session.user.id, full_name: fullName, email, id_no: idNo, address, team, phone, area },
+      { onConflict: "user_id" }
+    );
+  if (profErr) {
+    await runtime.client
+      .from("profiles")
+      .upsert({ user_id: session.user.id, full_name: fullName, email }, { onConflict: "user_id" });
+  }
+
+  if (!existingRole) {
+    await runtime.client.from("user_roles").insert({
+      user_id: session.user.id,
+      app_role: "employee",
+      approval_status: "pending",
+      area,
+    });
+  }
+
+  let reqErr: any = null;
+  if (!existingReq) {
+    const res = await runtime.client.from("registration_requests").insert({
+      user_id: session.user.id,
+      full_name: fullName,
+      email,
+      requested_role: "employee",
+      id_no: idNo,
+      address,
+      team,
+      phone,
+      area,
+      status: "pending",
+    });
+    reqErr = res.error;
+  } else if (existingReq.status !== "pending") {
+    const res = await runtime.client
+      .from("registration_requests")
+      .update({ full_name: fullName, email, id_no: idNo, address, team, phone, area, status: "pending" })
+      .eq("id", existingReq.id);
+    reqErr = res.error;
+  }
+
+  if (!reqErr) return { ok: true };
+  return { ok: false, error: rpcError.message || reqErr.message };
 }
 
 async function bootInner(session: any): Promise<void> {
@@ -1007,9 +1077,18 @@ async function bootInner(session: any): Promise<void> {
   if (run !== runtime.authRun) return;
   if (roleError) { showAuth("Role check failed: " + roleError.message); return; }
   if (!roleRow || roleRow.approval_status !== "approved") {
-    if (!roleRow) await ensurePendingRequest(session);
+    if (roleRow?.approval_status === "declined" || roleRow?.approval_status === "rejected") {
+      pendingAuthNotice = "Your registration was declined. Contact an administrator for details.";
+    } else {
+      const reqRes = await ensurePendingRequest(session);
+      pendingAuthNotice = reqRes.ok
+        ? "Your account is awaiting administrator approval. You can sign in once an administrator approves it."
+        : "Account created, but approval request failed (" + (reqRes.error || "database setup needed") + "). Ask an administrator to run the latest SQL.";
+    }
+    const msg = pendingAuthNotice;
     await runtime.client.auth.signOut();
-    showAuth("Your account is awaiting approval. You can sign in once an administrator approves it.");
+    pendingAuthNotice = "";
+    showAuth(msg);
     return;
   }
 
@@ -1185,10 +1264,12 @@ function initAuthWiring(): void {
 
   $("registerForm")?.addEventListener("submit", async e => {
     e.preventDefault();
+    if (!checkNetwork()) return;
     const btn = $("registerButton") as HTMLButtonElement | null;
     if (btn) btn.disabled = true;
     setAuthStatus("Creating account…");
     runtime.isRegistering = true;
+    let activeSession: any = null;
     try {
       const fullName = val("regName").trim();
       const email = val("regEmail").trim();
@@ -1201,14 +1282,36 @@ function initAuthWiring(): void {
       const area = val("regArea");
 
       const { data, error } = await runtime.client.auth.signUp({
-        email, password, options: { data: { full_name: fullName }, emailRedirectTo: runtime.APP_REDIRECT_URL },
+        email,
+        password,
+        options: {
+          data: {
+            full_name: fullName,
+            id_no: idNo || null,
+            address: address || null,
+            team: team || null,
+            phone: phone || null,
+            area: area || null,
+          },
+          emailRedirectTo: runtime.APP_REDIRECT_URL,
+        },
       });
       setVal("regPassword", "");
       if (btn) btn.disabled = false;
-      if (error) { setAuthStatus("Registration failed: " + error.message); return; }
+      activeSession = data?.session || null;
+
+      if (error) {
+        const msg = String(error.message || "");
+        if (/already registered|already exists|user_already_exists/i.test(msg)) {
+          setAuthStatus("This email already has an account. Switch to Log in and sign in with your email & password to submit or check your approval request.");
+        } else {
+          setAuthStatus("Registration failed: " + msg);
+        }
+        return;
+      }
       if (!data.user) { setAuthStatus("Account creation did not return a user."); return; }
       if (data.user.identities && data.user.identities.length === 0) {
-        setAuthStatus("This email is already registered. Wait for approval or sign in.");
+        setAuthStatus("This email is already registered. Log in with your email and password to submit or check your approval request.");
         return;
       }
 
@@ -1223,12 +1326,43 @@ function initAuthWiring(): void {
         p_phone: phone || null,
         p_area: area || null,
       });
-      if (reqError) { setAuthStatus("Account created, but approval request failed: " + reqError.message); return; }
-      if (data.session) await runtime.client.auth.signOut();
+
+      let requestSaved = !reqError;
+      let errMsg = reqError ? reqError.message : "";
+
+      if (!requestSaved && activeSession) {
+        const fallback = await ensurePendingRequest(activeSession, { fullName, email, idNo, address, team, phone, area });
+        requestSaved = fallback.ok;
+        if (!requestSaved && fallback.error) errMsg = fallback.error;
+      }
+
+      if (!requestSaved) {
+        const failNotice =
+          "Account created, but approval request failed (" + errMsg + "). " +
+          "Once the administrator runs the SQL fix, sign in with your email and password to send your approval request automatically.";
+        if (activeSession) {
+          pendingAuthNotice = failNotice;
+          await runtime.client.auth.signOut();
+          pendingAuthNotice = "";
+        }
+        showLoginForm();
+        setAuthStatus(failNotice);
+        return;
+      }
+
+      const okNotice = data.session
+        ? "Registration submitted! Wait for administrator approval before signing in."
+        : "Registration submitted! Check your email if confirmation is enabled, then wait for administrator approval before signing in.";
+      if (activeSession) {
+        pendingAuthNotice = okNotice;
+        await runtime.client.auth.signOut();
+        pendingAuthNotice = "";
+      }
       ($("registerForm") as HTMLFormElement | null)?.reset();
       showLoginForm();
-      setAuthStatus("Registration submitted. Wait for approval before signing in.");
+      setAuthStatus(okNotice);
     } finally {
+      if (btn) btn.disabled = false;
       runtime.isRegistering = false;
     }
   });
@@ -1300,7 +1434,9 @@ export function initEesiApp(): void {
       state.booted = false;
       teardownLive(true);
       resetState();
-      showAuth("Sign in to continue.");
+      const notice = pendingAuthNotice || "Sign in to continue.";
+      pendingAuthNotice = "";
+      showAuth(notice);
       return;
     }
     if (runtime.recoveryMode) return;

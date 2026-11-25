@@ -66,6 +66,7 @@ import {
   profileName,
   profileOf,
   renderUserLeaveBalanceHtml,
+  resolvePayrollDtrWindow,
   roleLabel,
   runtime,
   safeUrl,
@@ -1307,14 +1308,27 @@ async function approveRequest(id: string, approve: boolean): Promise<void> {
     const assignedRole = allowedRoles.includes(pickedRole) ? pickedRole : "employee";
     const { error: roleErr } = await runtime.client
       .from("user_roles")
-      .upsert({ user_id: req.user_id, app_role: assignedRole, approval_status: "approved" }, { onConflict: "user_id" });
+      .upsert(
+        { user_id: req.user_id, app_role: assignedRole, approval_status: "approved", area: req.area || null },
+        { onConflict: "user_id" }
+      );
     if (roleErr) { toast("Could not approve: " + roleErr.message); return; }
-    await runtime.client.from("profiles").upsert({
+    const { error: profErr } = await runtime.client.from("profiles").upsert({
       user_id: req.user_id, full_name: req.full_name, email: req.email,
       id_no: req.id_no, address: req.address, team: req.team, phone: req.phone, area: req.area,
     }, { onConflict: "user_id" });
+    if (profErr) {
+      await runtime.client.from("profiles").upsert({
+        user_id: req.user_id, full_name: req.full_name, email: req.email,
+      }, { onConflict: "user_id" });
+    }
   }
-  const { error } = await runtime.client.from("registration_requests").update({ status: approve ? "approved" : "declined" }).eq("id", id);
+  const reqUpdateQuery = runtime.client
+    .from("registration_requests")
+    .update({ status: approve ? "approved" : "declined" });
+  const { error } = req.user_id
+    ? await reqUpdateQuery.eq("user_id", req.user_id)
+    : await reqUpdateQuery.eq("id", id);
   if (error) { toast("Could not update: " + error.message); return; }
   await runtime.client.from("approval_notifications").insert({
     recipient_user_id: req.user_id,
@@ -6865,10 +6879,11 @@ export function syncPayrollFromDtr(showToast = true): void {
     return;
   }
 
+  const win = resolvePayrollDtrWindow(start, end, val("payPeriodPreset"));
   const rows = (state.dtrs || []).filter(d => {
     if (String(d.user_id) !== String(uid)) return false;
     const wd = String(d.work_date || "");
-    return wd >= start && wd <= end;
+    return wd >= win.dtrStart && wd <= win.dtrEnd;
   });
 
   const dayBuckets = new Map<string, { firstIn: string | null; lastOut: string | null; mins: number; nsRepair: boolean }>();
@@ -6930,13 +6945,15 @@ export function syncPayrollFromDtr(showToast = true): void {
     const lackingNote = uncoveredLackingMins > 0
       ? ` (after −${round2(uncoveredLackingMins / 60)}h lacking deducted)`
       : "";
+    const cutoffRange = `${fmtPayslipDateDisplay(win.dtrStart)} to ${fmtPayslipDateDisplay(win.dtrEnd)}`;
+    const cutoffPrefix = win.mapped ? `${win.ruleLabel} (${cutoffRange})` : `DTR ${cutoffRange}`;
     summaryEl.textContent = rows.length
-      ? `Synced ${rows.length} DTR entry(ies) across ${workedDays} day(s): ${regHrs}h regular, ${otHrs}h final OT${lackingNote}, ${nightHrs}h night diff.`
-      : `No DTR entries found for ${profileName(uid)} between ${fmtPayslipDateDisplay(start)} and ${fmtPayslipDateDisplay(end)} (you can still enter values manually).`;
+      ? `${cutoffPrefix} · Synced ${rows.length} DTR entry(ies) across ${workedDays} day(s): ${regHrs}h regular, ${otHrs}h final OT${lackingNote}, ${nightHrs}h night diff.`
+      : `${cutoffPrefix} · No DTR entries found for ${profileName(uid)} between ${cutoffRange} (you can still enter values manually).`;
   }
 
   updatePayslipPreview();
-  if (showToast) toast(rows.length ? `Synced ${rows.length} DTR entry(ies)` : "No DTR logs in this period — manual values kept");
+  if (showToast) toast(rows.length ? `Synced ${rows.length} DTR entry(ies) from ${fmtPayslipDateDisplay(win.dtrStart)}–${fmtPayslipDateDisplay(win.dtrEnd)}` : "No DTR logs in this cutoff — manual values kept");
 }
 
 function readPayslipDraft(): PayslipRecord {
@@ -6963,12 +6980,18 @@ function readPayslipDraft(): PayslipRecord {
   const total_deductions = round2(sss + philhealth + pagibig + cash_advance + absent + abuloy);
   const net_pay = round2(total_earnings - total_deductions);
 
+  const periodStart = val("payStartDate");
+  const periodEnd = val("payEndDate");
+  const win = resolvePayrollDtrWindow(periodStart, periodEnd, val("payPeriodPreset"));
+
   return {
     id: runtime.editingPayslipId || "",
     user_id: uid,
     employee_name: empName,
-    period_start: val("payStartDate"),
-    period_end: val("payEndDate"),
+    period_start: periodStart,
+    period_end: periodEnd,
+    dtr_cutoff_start: win.dtrStart,
+    dtr_cutoff_end: win.dtrEnd,
     basic_pay,
     overtime_hours,
     overtime_amount,
@@ -6997,6 +7020,15 @@ export function updatePayslipPreview(): void {
     netBadge.textContent = "Net Pay: ₱" + d.net_pay.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
   const periodStr = `${fmtPayslipDateDisplay(d.period_start)} to ${fmtPayslipDateDisplay(d.period_end)}`;
+  const hasMappedCutoff = Boolean(
+    d.dtr_cutoff_start &&
+    d.dtr_cutoff_end &&
+    (d.dtr_cutoff_start !== d.period_start || d.dtr_cutoff_end !== d.period_end)
+  );
+  const dtrLabelCell = hasMappedCutoff ? "DTR Cutoff" : "";
+  const dtrRangeCell = hasMappedCutoff
+    ? `${fmtPayslipDateDisplay(d.dtr_cutoff_start || "")} – ${fmtPayslipDateDisplay(d.dtr_cutoff_end || "")}`
+    : "";
 
   box.innerHTML =
     `<table class="payslip-table">` +
@@ -7012,7 +7044,7 @@ export function updatePayslipPreview(): void {
         `<tr><td colspan="4" class="ps-title">EESI ELEVATORS, INC.</td><td colspan="2"></td></tr>` +
         `<tr><td colspan="4" class="ps-sub">PAY SLIP</td><td colspan="2"></td></tr>` +
         `<tr><td>Employee</td><td colspan="3" class="ps-val-left">${esc(d.employee_name)}</td><td></td><td></td></tr>` +
-        `<tr><td>Pay Period</td><td colspan="3" class="ps-val-left">${esc(periodStr)}</td><td></td><td></td></tr>` +
+        `<tr><td>Pay Period</td><td colspan="3" class="ps-val-left">${esc(periodStr)}</td><td>${esc(dtrLabelCell)}</td><td class="ps-val-left">${esc(dtrRangeCell)}</td></tr>` +
         `<tr><td>Earnings</td><td></td><td></td><td class="ps-amt-head">Amount</td><td></td><td></td></tr>` +
         `<tr><td>Basic Pay</td><td></td><td></td><td class="ps-num">${fmtAccountingAmt(d.basic_pay)}</td><td>Deductions</td><td class="ps-amt-head">Amount</td></tr>` +
         `<tr><td>overtime</td><td class="ps-qty">${fmtHoursShort(d.overtime_hours)}</td><td class="ps-unit">hrs</td><td class="ps-num">${fmtAccountingAmt(d.overtime_amount)}</td><td>sss</td><td class="ps-num">${fmtAccountingAmt(d.sss)}</td></tr>` +
@@ -7070,11 +7102,13 @@ export async function savePayslipRecord(): Promise<void> {
   if (statusEl) statusEl.textContent = "Saving payslip…";
 
   try {
-    const payload = {
+    const payload: Omit<PayslipRecord, "id"> = {
       user_id: draft.user_id || state.userId,
       employee_name: draft.employee_name,
       period_start: draft.period_start,
       period_end: draft.period_end,
+      dtr_cutoff_start: draft.dtr_cutoff_start || null,
+      dtr_cutoff_end: draft.dtr_cutoff_end || null,
       basic_pay: draft.basic_pay,
       overtime_hours: draft.overtime_hours,
       overtime_amount: draft.overtime_amount,
@@ -7094,35 +7128,39 @@ export async function savePayslipRecord(): Promise<void> {
       created_at: new Date().toISOString(),
     };
 
-    let savedRecord: PayslipRecord | null = null;
-    if (!runtime.payslipsTableMissing && runtime.client && navigator.onLine) {
+    const writePayslipToDb = async (body: Record<string, any>) => {
       if (runtime.editingPayslipId && !String(runtime.editingPayslipId).startsWith("notice:") && !String(runtime.editingPayslipId).startsWith("local:")) {
-        const { data, error } = await runtime.client
+        return runtime.client
           .from("payslips")
-          .update(payload)
+          .update(body)
           .eq("id", runtime.editingPayslipId)
           .select("*")
           .maybeSingle();
-        if (!error && data) {
-          savedRecord = data;
-        } else if (error && isMissingTableError(error)) {
-          runtime.payslipsTableMissing = true;
-        } else if (error) {
-          throw error;
-        }
-      } else {
-        const { data, error } = await runtime.client
-          .from("payslips")
-          .insert(payload)
-          .select("*")
-          .maybeSingle();
-        if (!error && data) {
-          savedRecord = data;
-        } else if (error && isMissingTableError(error)) {
-          runtime.payslipsTableMissing = true;
-        } else if (error) {
-          throw error;
-        }
+      }
+      return runtime.client
+        .from("payslips")
+        .insert(body)
+        .select("*")
+        .maybeSingle();
+    };
+
+    let savedRecord: PayslipRecord | null = null;
+    if (!runtime.payslipsTableMissing && runtime.client && navigator.onLine) {
+      let { data, error } = await writePayslipToDb(payload);
+      if (error && /dtr_cutoff_start|dtr_cutoff_end|42703|schema cache/i.test(String(error.message || ""))) {
+        const legacyPayload: Record<string, any> = { ...payload };
+        delete legacyPayload.dtr_cutoff_start;
+        delete legacyPayload.dtr_cutoff_end;
+        const retry = await writePayslipToDb(legacyPayload);
+        data = retry.data;
+        error = retry.error;
+      }
+      if (!error && data) {
+        savedRecord = data;
+      } else if (error && isMissingTableError(error)) {
+        runtime.payslipsTableMissing = true;
+      } else if (error) {
+        throw error;
       }
     }
 
@@ -7234,11 +7272,17 @@ function renderSavedPayslipsList(): void {
   }
   box.innerHTML = rows.map(r => {
     const period = `${fmtPayslipDateDisplay(r.period_start)} to ${fmtPayslipDateDisplay(r.period_end)}`;
+    const win = resolvePayrollDtrWindow(r.period_start, r.period_end);
+    const dtrStart = r.dtr_cutoff_start || (win.mapped ? win.dtrStart : "");
+    const dtrEnd = r.dtr_cutoff_end || (win.mapped ? win.dtrEnd : "");
+    const dtrTag = dtrStart && dtrEnd && (dtrStart !== r.period_start || dtrEnd !== r.period_end)
+      ? ` · DTR counted: ${fmtPayslipDateDisplay(dtrStart)} to ${fmtPayslipDateDisplay(dtrEnd)}`
+      : "";
     const canDelete = isManager() || String(r.user_id) === String(state.userId);
     return (
       `<div class="item">` +
         `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">` +
-          `<div><b>${esc(r.employee_name || profileName(r.user_id))}</b><div class="muted">${esc(period)}</div></div>` +
+          `<div><b>${esc(r.employee_name || profileName(r.user_id))}</b><div class="muted">${esc(period)}${esc(dtrTag)}</div></div>` +
           `<span class="badge">Net Pay: ₱${esc(fmtAccountingAmt(r.net_pay, false))}</span>` +
         `</div>` +
         `<div class="muted" style="font-size:12px;margin-top:4px;">Basic: ₱${esc(fmtAccountingAmt(r.basic_pay, false))} · Earnings: ₱${esc(fmtAccountingAmt(r.total_earnings, false))} · Deductions: ₱${esc(fmtAccountingAmt(r.total_deductions, false))}</div>` +
@@ -8367,9 +8411,10 @@ export function initFeatureWiring(): void {
           const uid = val("payEmployee") || String(state.userId || "");
           const start = val("payStartDate");
           const end = val("payEndDate");
+          const win = resolvePayrollDtrWindow(start, end, val("payPeriodPreset"));
           const daysSet = new Set(
             (state.dtrs || [])
-              .filter(d => String(d.user_id) === String(uid) && String(d.work_date || "") >= start && String(d.work_date || "") <= end)
+              .filter(d => String(d.user_id) === String(uid) && String(d.work_date || "") >= win.dtrStart && String(d.work_date || "") <= win.dtrEnd)
               .map(d => String(d.work_date || ""))
           );
           const denom = Math.max(1, (daysSet.size || 13) * REGULAR_WORKING_HOURS_PER_DAY);

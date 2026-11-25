@@ -1407,10 +1407,10 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
           <div class="field">
             <label for="payPeriodPreset">Pay Period</label>
             <select id="payPeriodPreset">
-              <option value="1-15">1st – 15th of Month</option>
-              <option value="16-end">16th – End of Month</option>
-              <option value="dtr-11-25">DTR Cutoff (11 – 25)</option>
-              <option value="dtr-26-10">DTR Cutoff (26 – 10)</option>
+              <option value="1-15">1st – 15th Pay Period (counts DTR 26 – 10)</option>
+              <option value="16-end">16th – 30th/End Pay Period (counts DTR 11 – 25)</option>
+              <option value="dtr-26-10">Direct DTR Cutoff (26 – 10)</option>
+              <option value="dtr-11-25">Direct DTR Cutoff (11 – 25)</option>
               <option value="custom">Custom Dates</option>
             </select>
           </div>
@@ -1419,7 +1419,7 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
           <div class="field"><label for="payStartDate">Period Start</label><input id="payStartDate" type="date"></div>
           <div class="field"><label for="payEndDate">Period End</label><input id="payEndDate" type="date"></div>
         </div>
-        <div id="payDtrSummary" class="muted" style="font-size:12px;margin:-4px 0 10px;">Select an employee and pay period to sync DTR hours (9h regular / excess OT).</div>
+        <div id="payDtrSummary" class="muted" style="font-size:12px;margin:-4px 0 10px;">Select an employee and pay period (1–15 counts DTR 26–10; 16–30 counts DTR 11–25).</div>
 
         <div class="row">
           <div class="card" style="margin:0;padding:10px 12px;">

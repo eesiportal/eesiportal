@@ -50,6 +50,58 @@ CREATE TABLE IF NOT EXISTS public.registration_requests (
   UNIQUE(user_id)
 );
 
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS full_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS email TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS id_no TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS address TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS team TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS phone TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS area TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS cover_url TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+ALTER TABLE public.user_roles ADD COLUMN IF NOT EXISTS app_role TEXT NOT NULL DEFAULT 'employee';
+ALTER TABLE public.user_roles ADD COLUMN IF NOT EXISTS approval_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE public.user_roles ADD COLUMN IF NOT EXISTS area TEXT;
+ALTER TABLE public.user_roles ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE public.user_roles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+ALTER TABLE public.registration_requests ADD COLUMN IF NOT EXISTS requested_role TEXT NOT NULL DEFAULT 'employee';
+ALTER TABLE public.registration_requests ADD COLUMN IF NOT EXISTS id_no TEXT;
+ALTER TABLE public.registration_requests ADD COLUMN IF NOT EXISTS address TEXT;
+ALTER TABLE public.registration_requests ADD COLUMN IF NOT EXISTS team TEXT;
+ALTER TABLE public.registration_requests ADD COLUMN IF NOT EXISTS phone TEXT;
+ALTER TABLE public.registration_requests ADD COLUMN IF NOT EXISTS area TEXT;
+ALTER TABLE public.registration_requests ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE public.registration_requests ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE public.registration_requests ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+DO $$
+BEGIN
+  DELETE FROM public.registration_requests a
+  USING public.registration_requests b
+  WHERE a.user_id = b.user_id
+    AND a.ctid < b.ctid;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.registration_requests'::regclass
+      AND contype IN ('u', 'p')
+      AND conname = 'registration_requests_user_id_key'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM pg_index i
+    JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+    WHERE i.indrelid = 'public.registration_requests'::regclass
+      AND i.indisunique
+      AND array_length(i.indkey, 1) = 1
+      AND a.attname = 'user_id'
+  ) THEN
+    ALTER TABLE public.registration_requests ADD CONSTRAINT registration_requests_user_id_key UNIQUE (user_id);
+  END IF;
+END $$;
+
 ALTER TABLE public.user_roles DROP CONSTRAINT IF EXISTS user_roles_approval_status_check;
 ALTER TABLE public.user_roles ADD CONSTRAINT user_roles_approval_status_check CHECK (approval_status IN ('pending', 'approved', 'rejected', 'declined'));
 ALTER TABLE public.registration_requests DROP CONSTRAINT IF EXISTS registration_requests_status_check;
@@ -198,6 +250,8 @@ CREATE TABLE IF NOT EXISTS public.payslips (
   employee_name TEXT NOT NULL,
   period_start DATE NOT NULL,
   period_end DATE NOT NULL,
+  dtr_cutoff_start DATE,
+  dtr_cutoff_end DATE,
   basic_pay NUMERIC(12,2) NOT NULL DEFAULT 0,
   overtime_hours NUMERIC(8,2) NOT NULL DEFAULT 0,
   overtime_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
@@ -216,6 +270,8 @@ CREATE TABLE IF NOT EXISTS public.payslips (
   created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE public.payslips ADD COLUMN IF NOT EXISTS dtr_cutoff_start DATE;
+ALTER TABLE public.payslips ADD COLUMN IF NOT EXISTS dtr_cutoff_end DATE;
 ALTER TABLE public.payslips ENABLE ROW LEVEL SECURITY;
 
 CREATE TABLE IF NOT EXISTS public.notes (
@@ -549,38 +605,64 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
+DECLARE
+  v_name TEXT := COALESCE(NULLIF(TRIM(p_full_name), ''), SPLIT_PART(COALESCE(p_email, 'Member'), '@', 1), 'Member');
+  v_email TEXT := NULLIF(TRIM(COALESCE(p_email, '')), '');
+  v_id_no TEXT := NULLIF(TRIM(COALESCE(p_id_no, '')), '');
+  v_address TEXT := NULLIF(TRIM(COALESCE(p_address, '')), '');
+  v_team TEXT := NULLIF(TRIM(COALESCE(p_team, '')), '');
+  v_phone TEXT := NULLIF(TRIM(COALESCE(p_phone, '')), '');
+  v_area TEXT := NULLIF(TRIM(COALESCE(p_area, '')), '');
 BEGIN
-  INSERT INTO public.profiles (user_id, full_name, email, id_no, address, team, phone, area)
-  VALUES (p_user_id, p_full_name, p_email, p_id_no, p_address, p_team, p_phone, p_area)
-  ON CONFLICT (user_id) DO UPDATE SET
-    full_name = EXCLUDED.full_name,
-    email = EXCLUDED.email,
-    id_no = COALESCE(EXCLUDED.id_no, public.profiles.id_no),
-    address = COALESCE(EXCLUDED.address, public.profiles.address),
-    team = COALESCE(EXCLUDED.team, public.profiles.team),
-    phone = COALESCE(EXCLUDED.phone, public.profiles.phone),
-    area = COALESCE(EXCLUDED.area, public.profiles.area),
-    updated_at = NOW();
+  IF p_user_id IS NULL OR NOT EXISTS (SELECT 1 FROM auth.users WHERE id = p_user_id) THEN
+    RAISE EXCEPTION 'User account not found';
+  END IF;
+
+  UPDATE public.profiles
+  SET
+    full_name = v_name,
+    email = COALESCE(v_email, email),
+    id_no = COALESCE(v_id_no, id_no),
+    address = COALESCE(v_address, address),
+    team = COALESCE(v_team, team),
+    phone = COALESCE(v_phone, phone),
+    area = COALESCE(v_area, area),
+    updated_at = NOW()
+  WHERE user_id = p_user_id;
+
+  IF NOT FOUND THEN
+    INSERT INTO public.profiles (user_id, full_name, email, id_no, address, team, phone, area)
+    VALUES (p_user_id, v_name, v_email, v_id_no, v_address, v_team, v_phone, v_area)
+    ON CONFLICT (user_id) DO NOTHING;
+  END IF;
 
   -- New registrations always start as Employee; Admin/Representative assigns final designation after approval
   INSERT INTO public.user_roles (user_id, app_role, approval_status, area)
-  VALUES (p_user_id, 'employee', 'pending', p_area)
+  VALUES (p_user_id, 'employee', 'pending', v_area)
   ON CONFLICT (user_id) DO NOTHING;
 
-  INSERT INTO public.registration_requests (user_id, full_name, email, requested_role, id_no, address, team, phone, area, status)
-  VALUES (p_user_id, p_full_name, p_email, 'employee', p_id_no, p_address, p_team, p_phone, p_area, 'pending')
-  ON CONFLICT (user_id) DO UPDATE SET
-    full_name = EXCLUDED.full_name,
-    email = EXCLUDED.email,
+  UPDATE public.registration_requests
+  SET
+    full_name = v_name,
+    email = COALESCE(v_email, email, ''),
     requested_role = 'employee',
-    id_no = EXCLUDED.id_no,
-    address = EXCLUDED.address,
-    team = EXCLUDED.team,
-    phone = EXCLUDED.phone,
-    area = EXCLUDED.area,
-    status = 'pending';
+    id_no = COALESCE(v_id_no, id_no),
+    address = COALESCE(v_address, address),
+    team = COALESCE(v_team, team),
+    phone = COALESCE(v_phone, phone),
+    area = COALESCE(v_area, area),
+    status = 'pending',
+    updated_at = NOW()
+  WHERE user_id = p_user_id;
+
+  IF NOT FOUND THEN
+    INSERT INTO public.registration_requests (user_id, full_name, email, requested_role, id_no, address, team, phone, area, status)
+    VALUES (p_user_id, v_name, COALESCE(v_email, ''), 'employee', v_id_no, v_address, v_team, v_phone, v_area, 'pending');
+  END IF;
 END;
 $$;
+
+GRANT EXECUTE ON FUNCTION public.submit_registration_request(UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;
 
 DROP FUNCTION IF EXISTS public.save_push_subscription(TEXT, TEXT, TEXT, TEXT);
 CREATE OR REPLACE FUNCTION public.save_push_subscription(
@@ -732,6 +814,75 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS public.get_payroll_dtr_cutoff(DATE, DATE);
+CREATE OR REPLACE FUNCTION public.get_payroll_dtr_cutoff(
+  p_period_start DATE,
+  p_period_end DATE
+)
+RETURNS TABLE(dtr_start DATE, dtr_end DATE, rule_label TEXT)
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+  v_month_start DATE;
+BEGIN
+  IF p_period_start IS NULL OR p_period_end IS NULL THEN
+    RETURN QUERY SELECT p_period_start, p_period_end, 'Direct range'::TEXT;
+    RETURN;
+  END IF;
+
+  v_month_start := DATE_TRUNC('month', p_period_start)::DATE;
+
+  -- Pay period 1 to 15 counts DTR from 26 of previous month to 10 of same month
+  IF EXTRACT(DAY FROM p_period_start) = 1
+     AND EXTRACT(DAY FROM p_period_end) = 15
+     AND v_month_start = DATE_TRUNC('month', p_period_end)::DATE THEN
+    RETURN QUERY SELECT
+      (v_month_start - INTERVAL '1 month' + INTERVAL '25 days')::DATE,
+      (v_month_start + INTERVAL '9 days')::DATE,
+      '1-15 Pay Period -> DTR 26-10'::TEXT;
+    RETURN;
+  END IF;
+
+  -- Pay period 16 to 30/end of month counts DTR from 11 to 25 of same month
+  IF EXTRACT(DAY FROM p_period_start) = 16
+     AND EXTRACT(DAY FROM p_period_end) BETWEEN 28 AND 31
+     AND v_month_start = DATE_TRUNC('month', p_period_end)::DATE THEN
+    RETURN QUERY SELECT
+      (v_month_start + INTERVAL '10 days')::DATE,
+      (v_month_start + INTERVAL '24 days')::DATE,
+      '16-30 Pay Period -> DTR 11-25'::TEXT;
+    RETURN;
+  END IF;
+
+  RETURN QUERY SELECT p_period_start, p_period_end, 'Direct range'::TEXT;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_payroll_dtr_cutoff(DATE, DATE) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.set_payslip_dtr_cutoff()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_cut RECORD;
+BEGIN
+  IF NEW.dtr_cutoff_start IS NULL OR NEW.dtr_cutoff_end IS NULL THEN
+    SELECT * INTO v_cut FROM public.get_payroll_dtr_cutoff(NEW.period_start, NEW.period_end);
+    NEW.dtr_cutoff_start := COALESCE(NEW.dtr_cutoff_start, v_cut.dtr_start);
+    NEW.dtr_cutoff_end := COALESCE(NEW.dtr_cutoff_end, v_cut.dtr_end);
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_payslips_dtr_cutoff ON public.payslips;
+CREATE TRIGGER trg_payslips_dtr_cutoff
+  BEFORE INSERT OR UPDATE ON public.payslips
+  FOR EACH ROW
+  EXECUTE FUNCTION public.set_payslip_dtr_cutoff();
+
 /* 6. ENABLE ROW LEVEL SECURITY & POLICIES */
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_roles ENABLE ROW LEVEL SECURITY;
@@ -789,10 +940,19 @@ DROP POLICY IF EXISTS user_roles_manager_update ON public.user_roles;
 CREATE POLICY user_roles_manager_update ON public.user_roles FOR UPDATE
   USING (public.is_manager() AND app_role IN ('employee', 'technician'))
   WITH CHECK (public.is_manager() AND app_role IN ('employee', 'technician'));
+DROP POLICY IF EXISTS user_roles_own_pending_insert ON public.user_roles;
+CREATE POLICY user_roles_own_pending_insert ON public.user_roles FOR INSERT
+  WITH CHECK (auth.uid() = user_id AND app_role = 'employee' AND approval_status = 'pending');
 
 /* Registration requests */
 DROP POLICY IF EXISTS reg_req_select ON public.registration_requests;
 CREATE POLICY reg_req_select ON public.registration_requests FOR SELECT USING (auth.uid() = user_id OR public.is_admin() OR public.is_manager());
+DROP POLICY IF EXISTS reg_req_own_insert ON public.registration_requests;
+CREATE POLICY reg_req_own_insert ON public.registration_requests FOR INSERT WITH CHECK (auth.uid() = user_id AND status = 'pending');
+DROP POLICY IF EXISTS reg_req_own_update ON public.registration_requests;
+CREATE POLICY reg_req_own_update ON public.registration_requests FOR UPDATE
+  USING (auth.uid() = user_id AND status = 'pending')
+  WITH CHECK (auth.uid() = user_id AND status = 'pending');
 DROP POLICY IF EXISTS reg_req_admin ON public.registration_requests;
 CREATE POLICY reg_req_admin ON public.registration_requests FOR ALL USING (public.is_manager()) WITH CHECK (public.is_manager());
 

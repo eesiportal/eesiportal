@@ -1572,6 +1572,8 @@ export interface PayslipRecord {
   employee_name: string;
   period_start: string;
   period_end: string;
+  dtr_cutoff_start?: string | null;
+  dtr_cutoff_end?: string | null;
   basic_pay: number;
   overtime_hours: number;
   overtime_amount: number;
@@ -1590,6 +1592,55 @@ export interface PayslipRecord {
   created_by?: string | null;
   created_at?: string;
   app_notification_id?: string | null;
+}
+
+export function resolvePayrollDtrWindow(
+  periodStart: string,
+  periodEnd: string,
+  preset?: string
+): { dtrStart: string; dtrEnd: string; ruleLabel: string; mapped: boolean } {
+  const sMatch = String(periodStart || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const eMatch = String(periodEnd || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const pad = (x: number) => String(x).padStart(2, "0");
+
+  if (sMatch && eMatch) {
+    const sy = Number(sMatch[1]);
+    const sm = Number(sMatch[2]);
+    const sd = Number(sMatch[3]);
+    const ey = Number(eMatch[1]);
+    const em = Number(eMatch[2]);
+    const ed = Number(eMatch[3]);
+    const sameMonth = sy === ey && sm === em;
+
+    // Rule 1: Pay period 1 to 15 counts DTR from 26 of previous month to 10 of current month
+    if ((sameMonth && sd === 1 && ed === 15) || (preset === "1-15" && sd === 1 && ed === 15)) {
+      const prevMo = sm === 1 ? 12 : sm - 1;
+      const prevYr = sm === 1 ? sy - 1 : sy;
+      return {
+        dtrStart: `${prevYr}-${pad(prevMo)}-26`,
+        dtrEnd: `${sy}-${pad(sm)}-10`,
+        ruleLabel: "1–15 Pay Period → DTR 26–10",
+        mapped: true,
+      };
+    }
+
+    // Rule 2: Pay period 16 to 30/end counts DTR from 11 to 25 of current month
+    if ((sameMonth && sd === 16 && ed >= 28 && ed <= 31) || (preset === "16-end" && sd === 16 && ed >= 28)) {
+      return {
+        dtrStart: `${sy}-${pad(sm)}-11`,
+        dtrEnd: `${sy}-${pad(sm)}-25`,
+        ruleLabel: "16–30 Pay Period → DTR 11–25",
+        mapped: true,
+      };
+    }
+  }
+
+  return {
+    dtrStart: periodStart,
+    dtrEnd: periodEnd,
+    ruleLabel: "Selected date range",
+    mapped: false,
+  };
 }
 
 export function isPayslipNotice(n: any): boolean {
