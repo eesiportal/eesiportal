@@ -7,6 +7,7 @@ import {
   SITE_STATUS_OPTIONS,
   TimeLogNoticeMeta,
   UNIT_MANUAL_DEFAULTS,
+  avatarHtml,
   buildDtrJobWithApproval,
   buildLeaveReasonWithMeta,
   buildPayslipAppNoticeBody,
@@ -133,7 +134,7 @@ import {
   threadTitle,
 } from "./eesiChat";
 import { exportPayslipPdf, exportPayslipXlsx } from "./eesiExport";
-import { phHolidays, triggerShiftAlert } from "./eesiSettings";
+import { phHolidays, PhHolidayItem, triggerAlert, triggerShiftAlert } from "./eesiSettings";
 
 const SYSTEM_ANNOUNCEMENTS = [
   { title: "✨ GOOD VIBES", body: "Great teamwork builds great results. Stay positive, stay sharp, and have a safe, productive shift!" },
@@ -174,7 +175,6 @@ export function go(p: string, opts: { skipScrollReset?: boolean } = {}): void {
   if (["members", "pending"].includes(p) && !isManager()) { toast("Admin or Representative access only"); return; }
   if (p === "admin" && !isAdmin()) { toast("Administrator only"); return; }
   if (p === "live-map" && !isManager()) { toast("Admin or Representative access only"); return; }
-  if (p === "live-map") setTimeout(() => { hooks.renderLiveOnlineMembers?.(); loadLiveMap(); }, 50);
   const pageEl = $("page-" + p);
   if (!pageEl) { toast("Page not found"); return; }
   document.querySelectorAll(".page").forEach(el => el.classList.add("hidden"));
@@ -182,20 +182,24 @@ export function go(p: string, opts: { skipScrollReset?: boolean } = {}): void {
   runtime.currentPage = p;
   $("settingsMenu")?.classList.add("hidden");
   document.querySelectorAll<HTMLElement>("nav.bottom button").forEach(btn => btn.classList.toggle("active", btn.dataset.page === p));
-  if (p === "profile") renderProfile();
-  if (p === "units") { void ensureAmcbUnitsSeeded(); renderUnitSiteOptions(); renderUnits(); }
-  if (p === "reports") { renderReportSites(); renderReports(); if (runtime.reportsViewMode === "search") runSearch(); }
-  if (p === "chat") { renderChatList(); renderMessages(); }
-  if (p === "notices") { loadAppNotifications(); loadApprovalNotifications(); loadRecentChatNotices(); }
-  if (p === "admin") renderAdmin();
-  if (p === "schedule") { renderScheduleSiteOptions(); renderAssigneesPicker(); }
-  if (p === "sites") {
-    scheduleSiteMapLazyInit();
-  }
-  if (p === "notes") { renderConnectedPickers(); }
-  if (p === "dtr") { renderConnectedPickers(); autoFillDtrFromSchedule(false); renderTimeLog(); }
-  if (p === "payroll") { renderPayroll(); }
-  renderAll();
+  renderHome();
+  if (p === "members") renderMembers();
+  else if (p === "online") renderOnline();
+  else if (p === "pending") renderPending();
+  else if (p === "announcements") renderAnnouncements();
+  else if (p === "schedule") { renderScheduleSiteOptions(); renderAssigneesPicker(); renderSchedules(); }
+  else if (p === "sites") { renderSites(); scheduleSiteMapLazyInit(); }
+  else if (p === "units") { void ensureAmcbUnitsSeeded(); renderUnitSiteOptions(); renderUnits(); }
+  else if (p === "reports") { renderReportSites(); renderReports(); if (runtime.reportsViewMode === "search") runSearch(); }
+  else if (p === "dtr") { renderConnectedPickers(); renderDtr(); autoFillDtrFromSchedule(false); renderTimeLog(); }
+  else if (p === "payroll") { renderPayroll(); }
+  else if (p === "notes") { renderConnectedPickers(); renderNotes(); renderRecs(); }
+  else if (p === "leave") { renderLeave(); renderLeaveBalances(); }
+  else if (p === "notices") { renderNotices(); loadAppNotifications(); loadApprovalNotifications(); loadRecentChatNotices(); }
+  else if (p === "chat") { renderChatList(); renderMessages(); }
+  else if (p === "live-map") { setTimeout(() => { hooks.renderLiveOnlineMembers?.(); loadLiveMap({ fit: true }); }, 40); }
+  else if (p === "profile") renderProfile();
+  else if (p === "admin") renderAdmin();
   if (!opts.skipScrollReset) window.scrollTo(0, 0);
   saveLastView(opts.skipScrollReset ? undefined : 0);
 }
@@ -594,7 +598,7 @@ export function updateAnnouncementTicker(): void {
     if (!latestQueue.length) return;
     if (runtime.tickerIndex >= latestQueue.length) runtime.tickerIndex = 0;
     const stmt = latestQueue[runtime.tickerIndex];
-    const secs = Math.max(9, Math.min(24, Math.round(stmt.length * 0.13)));
+    const secs = Math.max(28, Math.min(72, Math.round(stmt.length * 0.34) + 14));
     text.style.animation = "none";
     text.textContent = stmt;
     void text.offsetWidth;
@@ -686,7 +690,7 @@ export function renderDtrLiveStatus(): void {
       const bd = calculateShiftBreakdown(inVal, cappedOutVal, null, formRuleOpts);
       const capNote = wasCapped ? " (7:00 PM max without Nightshift/Repair)" : "";
       const sundayNoOtNote = bd.isSunday && !bd.nightshiftRepair && bd.workedMins > bd.regularMins && bd.finalOtMins === 0
-        ? " (Sunday O.T. needs <9:00 AM start or Nightshift/Repair)"
+        ? " (Sunday O.T. needs <10:00 AM start or Operations Fix/Install/Repair)"
         : "";
       if (bd.lackingMins > 0 && bd.grossOtMins > 0 && bd.finalOtMins >= 0 && (!bd.isSunday || bd.nightshiftRepair || bd.finalOtMins > 0)) {
         formHint.innerHTML =
@@ -716,8 +720,8 @@ export function renderDtrLiveStatus(): void {
         (cappedAt7Pm ? " · <b>Stopped at 7:00 PM Time Out</b>" : "");
     } else {
       formHint.textContent = isSundayDate(dateVal)
-        ? `📅 Sunday rule: Regular 10:00 AM–7:00 PM (9h). O.T. applies if starting before 9:00 AM or with Nightshift/Repair.`
-        : `📅 Mon–Sat rule: Regular 8:00 AM–5:00 PM (9h). O.T. 5:01–7:00 PM (7:01 PM+ requires Nightshift/Repair).`;
+        ? `📅 Sunday rule: Regular 10:00 AM–7:00 PM (9h). O.T. applies if starting before 10:00 AM or past 7:00 PM with Operations Fix/Install/Repair.`
+        : `📅 Mon–Sat rule: Regular 8:00 AM–5:00 PM (9h). O.T. 5:01–7:00 PM (7:01 PM+ requires Nightshift/Operations Repair).`;
     }
   }
 
@@ -837,6 +841,162 @@ function isScheduleWithinTimelineDuration(s: any, nowMs: number, todayStr: strin
   return false;
 }
 
+let lastGeofenceAlertKey = "";
+let lastGeofenceAlertAt = 0;
+
+export async function evaluateDailySiteGeofence(): Promise<void> {
+  const alertEl = $("homeGeofenceAlert");
+  if (!alertEl) return;
+  if (!state.userId) {
+    alertEl.classList.add("hidden");
+    alertEl.innerHTML = "";
+    return;
+  }
+  const todayStr = todayIso();
+  const sched = findScheduledWorkForUser(todayStr);
+  const userCoords = getCachedUserGpsCoords();
+  if (!sched || !sched.siteName || !userCoords) {
+    alertEl.classList.add("hidden");
+    alertEl.innerHTML = "";
+    return;
+  }
+  const siteCoords = await resolveSiteCoordinatesByName(sched.siteName);
+  if (!siteCoords) {
+    alertEl.classList.add("hidden");
+    alertEl.innerHTML = "";
+    return;
+  }
+  const rawMeters = haversineMeters(userCoords.lat, userCoords.lng, siteCoords.lat, siteCoords.lng);
+  const accMargin = Math.min(Math.max(0, userCoords.acc || 0), 200);
+  const effectiveMeters = Math.max(0, rawMeters - accMargin);
+  const distLabel = formatProximityDist(rawMeters);
+  const matchedSite = state.sites.find(s => String(s.name || "").trim().toLowerCase() === siteCoords.name.toLowerCase());
+  const viewBtn = matchedSite
+    ? `<button class="gray small-btn" type="button" onclick="openSiteOnMap('${esc(matchedSite.id)}')">📍 View Site Map</button>`
+    : `<button class="gray small-btn" type="button" onclick="go('sites')">📍 Sites</button>`;
+
+  if (effectiveMeters > TIMEMARK_FAR_SITE_THRESHOLD_METERS) {
+    alertEl.classList.remove("hidden");
+    alertEl.style.borderColor = "rgba(239,68,68,.55)";
+    alertEl.style.background = "linear-gradient(180deg,rgba(127,29,29,.32),rgba(9,21,44,.95))";
+    alertEl.innerHTML =
+      `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">` +
+      `<div style="min-width:0;flex:1;">` +
+      `<div style="font-weight:800;color:#fca5a5;">⚠️ GPS Far From Today's Assigned Site</div>` +
+      `<div style="font-size:12.5px;margin-top:3px;">You are currently <b>~${esc(distLabel)}</b> away from <b>${esc(siteCoords.name)}</b> (outside ${TIMEMARK_FAR_SITE_THRESHOLD_METERS} m work-site radius).</div>` +
+      `</div>` +
+      `<div style="flex:0 0 auto;">${viewBtn}</div>` +
+      `</div>`;
+
+    const key = `${todayStr}:${siteCoords.name}`;
+    if (key !== lastGeofenceAlertKey || Date.now() - lastGeofenceAlertAt > 15 * 60 * 1000) {
+      lastGeofenceAlertKey = key;
+      lastGeofenceAlertAt = Date.now();
+      triggerAlert(
+        "⚠️ Far From Assigned Site",
+        `You are ~${distLabel} away from ${siteCoords.name}.`,
+        [300, 120, 300]
+      );
+    }
+  } else {
+    alertEl.classList.remove("hidden");
+    alertEl.style.borderColor = "rgba(34,197,94,.42)";
+    alertEl.style.background = "";
+    alertEl.innerHTML =
+      `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">` +
+      `<div style="font-size:12.5px;">✅ <b>On-Site GPS Verified:</b> ${esc(siteCoords.name)} <span class="muted">(~${esc(distLabel)} from pin)</span></div>` +
+      `<div>${viewBtn}</div>` +
+      `</div>`;
+  }
+}
+
+export function renderHomeShareFeed(): void {
+  const box = $("homeShareFeed");
+  if (!box) return;
+  const logs = [...(state.dtrTimeLogs || [])]
+    .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+    .slice(0, 8);
+  if (!logs.length) {
+    box.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
+      '<span class="muted">No Time In / Out uploads yet. Upload a photo so the team sees who timed in or out.</span>' +
+      '<div class="inline-actions" style="margin-top:0;">' +
+      '<button class="green small-btn" type="button" onclick="openQuickTimeAction(\'time_in\')">🟢 Time In</button>' +
+      '<button class="red small-btn" type="button" onclick="openQuickTimeAction(\'time_out\')">🔴 Time Out</button>' +
+      "</div></div>";
+    return;
+  }
+  box.innerHTML = logs.map((l: any) => {
+    const isOut = l.mode === "time_out";
+    const modeBadge = isOut ? '<span class="badge" style="border-color:rgba(239,68,68,.5);color:#fca5a5;">🔴 Time Out</span>' : '<span class="sess-badge now" style="margin-left:0;">🟢 Time In</span>';
+    const who = l.sender_name || profileName(l.user_id);
+    const safeImg = safeUrl(l.image_url);
+    const timeTxt = l.time_12 || l.time_24 || "";
+    const metaStr = [
+      timeTxt ? "⏰ " + timeTxt : "",
+      l.work_date ? fmtDay(l.work_date) : "",
+      l.location ? "📍 " + l.location : "",
+      l.unit ? "🛗 " + l.unit : "",
+    ].filter(Boolean).join(" · ");
+    return (
+      '<div class="item" style="display:flex;gap:10px;align-items:center;margin-bottom:8px;">' +
+      avatarHtml(l.user_id, who) +
+      '<div style="flex:1;min-width:0;">' +
+      '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
+      "<b>" + esc(who) + "</b> " + modeBadge +
+      "</div>" +
+      '<div class="muted" style="font-size:12px;margin-top:2px;">' + esc(metaStr || fmtDate(l.created_at)) + "</div>" +
+      (l.note ? '<div style="font-size:12.5px;margin-top:2px;">' + esc(l.note) + "</div>" : "") +
+      "</div>" +
+      (safeImg
+        ? '<img src="' + esc(safeImg) + '" alt="Time photo" data-preview-url="' + esc(safeImg) + '" data-preview-label="' + esc(who + " — " + (isOut ? "Time Out" : "Time In")) + '" style="width:52px;height:52px;border-radius:10px;object-fit:cover;flex:0 0 52px;cursor:pointer;border:1px solid rgba(47,140,255,.35);">'
+        : "") +
+      "</div>"
+    );
+  }).join("");
+}
+
+export function openHolidayCalendarSheet(filter: "all" | "National" | "Christian" | "Regional" = "all"): void {
+  const now = new Date();
+  const year = now.getFullYear();
+  const todayStr = localDateKey(now);
+  const all = [...phHolidays(year), ...phHolidays(year + 1)].filter(h => h.date >= `${year}-01-01`);
+  const filtered = filter === "all" ? all : all.filter(h => h.category === filter);
+  const tabs: Array<{ id: "all" | "National" | "Christian" | "Regional"; label: string }> = [
+    { id: "all", label: "All (" + all.length + ")" },
+    { id: "National", label: "🇵🇭 National" },
+    { id: "Christian", label: "✝️ Christian" },
+    { id: "Regional", label: "🏝️ Regional" },
+  ];
+  const tabsHtml =
+    `<div class="tabs" style="margin-bottom:10px;">` +
+    tabs.map(t => `<button type="button" class="tab${filter === t.id ? " active" : ""}" onclick="openHolidayCalendarSheet('${t.id}')">${esc(t.label)}</button>`).join("") +
+    `</div>`;
+  const rowsHtml = filtered.map((h: PhHolidayItem) => {
+    const isToday = h.date === todayStr;
+    const isPast = h.date < todayStr;
+    const catIcon = h.category === "Christian" ? "✝️" : (h.category === "Regional" ? "🏝️" : "🇵🇭");
+    return (
+      `<div class="item" style="margin-bottom:8px;opacity:${isPast ? "0.62" : "1"};">` +
+      `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">` +
+      `<div><b>${catIcon} ${esc(h.name)}</b>` +
+      (isToday ? ` <span class="sess-badge now">TODAY</span>` : "") +
+      `<div class="muted" style="font-size:12px;">${esc(fmtDay(h.date))} · ${esc(h.kind)}${h.region ? " · " + esc(h.region) : ""}</div></div>` +
+      `<span class="badge">${esc(h.category)}</span>` +
+      `</div></div>`
+    );
+  }).join("") || '<p class="muted">No holidays in this category.</p>';
+
+  openSheet(
+    `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;">` +
+    `<h2 style="margin:0;">📅 Philippine National, Christian &amp; Regional Holidays</h2>` +
+    `<button class="gray small-btn" type="button" onclick="closeSheet()">✕ Close</button>` +
+    `</div>` +
+    tabsHtml +
+    `<div style="max-height:60dvh;overflow-y:auto;">${rowsHtml}</div>`
+  );
+}
+
 export function renderHome(): void {
   if (!state.userId) return;
   const online = onlineIds().size;
@@ -854,6 +1014,8 @@ export function renderHome(): void {
   setTxt("roleLabel", roleLabel(state.role));
   updateAnnouncementTicker();
   renderHomeDtrStatus();
+  renderHomeShareFeed();
+  void evaluateDailySiteGeofence();
 
   const box = $("homeTimeline");
   if (!box) return;
@@ -861,7 +1023,7 @@ export function renderHome(): void {
   const nowMs = now.getTime();
   const year = now.getFullYear();
   const todayStr = localDateKey(now);
-  const upcomingHolidays = [...phHolidays(year), ...phHolidays(year + 1)].filter(h => h.date >= todayStr).slice(0, 4);
+  const upcomingHolidays = [...phHolidays(year), ...phHolidays(year + 1)].filter(h => h.date >= todayStr).slice(0, 6);
 
   const recentItems = [
     ...state.announcements.map(a => ({
@@ -901,7 +1063,9 @@ export function renderHome(): void {
   const upcomingHtml = upcomingHolidays.map(h => {
     const diffDays = Math.round((new Date(h.date + "T00:00:00").getTime() - new Date(todayStr + "T00:00:00").getTime()) / 86400000);
     const badge = diffDays === 0 ? '<span class="sess-badge now">TODAY</span>' : '<span class="sess-badge soon">In ' + diffDays + " day(s)</span>";
-    return '<div class="pv-row"><span><b>' + esc(fmtDay(h.date)) + "</b> — " + esc(h.name) + " " + badge + '</span><span class="muted">' + esc(h.kind) + "</span></div>";
+    const catIcon = h.category === "Christian" ? "✝️" : (h.category === "Regional" ? "🏝️" : "🇵🇭");
+    const catMeta = [h.category, h.region].filter(Boolean).join(" · ");
+    return '<div class="pv-row"><span>' + catIcon + " <b>" + esc(fmtDay(h.date)) + "</b> — " + esc(h.name) + " " + badge + '</span><span class="muted">' + esc(h.kind + " · " + catMeta) + "</span></div>";
   }).join("") || '<p class="muted">No upcoming holidays.</p>';
 
   const recentHtml = recentItems.map(item =>
@@ -909,7 +1073,12 @@ export function renderHome(): void {
   ).join("") || '<p class="muted">No recent timeline items yet.</p>';
 
   const nextHtml =
-    '<div style="margin-bottom:14px;"><h3 style="margin:0 0 8px;">🇵🇭 Upcoming Philippine Holidays</h3><div class="item sess-soon">' + upcomingHtml + "</div></div>" +
+    '<div style="margin-bottom:14px;">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">' +
+    '<h3 style="margin:0;">🇵🇭 Upcoming Holidays (National, Christian &amp; Regional)</h3>' +
+    '<button class="gray small-btn" type="button" onclick="openHolidayCalendarSheet(\'all\')">📅 Full Calendar</button>' +
+    "</div>" +
+    '<div class="item sess-soon">' + upcomingHtml + "</div></div>" +
     '<div><h3 style="margin:0 0 8px;">🕒 Recent Timeline</h3>' + recentHtml + "</div>";
   if (box.innerHTML !== nextHtml) box.innerHTML = nextHtml;
 }
@@ -3726,7 +3895,7 @@ export function renderDtr(): void {
       ? (dayBd.nightshiftRepair ? " · Sun 10AM–7PM + 🌙 NS/Repair" : " · Sun 10AM–7PM")
       : (dayBd.nightshiftRepair ? " · 🌙 NS/Repair" : "");
     const dayBreakdownSub = dayBd.isSunday && !dayBd.nightshiftRepair && dayBd.workedMins > dayBd.regularMins && dayOtMins === 0
-      ? `(Sun 10AM–7PM: ${esc(formatDtrDuration(dayRegMins))} Reg · Final O.T.: 0 mins [Needs <9AM start or NS/Repair])`
+      ? `(Sun 10AM–7PM: ${esc(formatDtrDuration(dayRegMins))} Reg · Final O.T.: 0 mins [Needs <10AM start or Ops Fix/Install/Repair])`
       : dayBd.lackingMins > 0 && dayBd.grossOtMins > 0 && dayUncoveredLackingMins === 0
         ? `(Std 9h${dayRuleBadge}: ${esc(formatDtrDuration(dayBd.inShiftWorkedMins))} [Lacking ${esc(formatDtrDuration(dayBd.lackingMins))}] · OT: ${esc(formatDtrDuration(dayBd.grossOtMins))} − ${esc(formatDtrDuration(dayBd.lackingMins))} = Final O.T.: ${esc(formatDtrDuration(dayOtMins))})`
         : dayUncoveredLackingMins > 0

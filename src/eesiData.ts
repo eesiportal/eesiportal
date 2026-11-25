@@ -29,7 +29,7 @@ import {
   val,
 } from "./eesiTypes";
 import { setOptions, importLibrary } from "@googlemaps/js-api-loader";
-import { triggerAlert, updateLiveWeather } from "./eesiSettings";
+import { triggerAlert, triggerMentionAlert, updateLiveWeather } from "./eesiSettings";
 
 /* ==================== NETWORK STATUS (STRICT ONLINE MODE) ==================== */
 export function updateNetworkStatus(): void {
@@ -515,6 +515,70 @@ export async function loadPmsRecords(): Promise<void> {
   hooks.renderUnits();
 }
 
+function mentionSeenKey(): string {
+  return "eesi-mentions-seen:" + (state.userId || "anon");
+}
+
+function getSeenMentionsMap(): Record<string, number> {
+  try {
+    return JSON.parse(localStorage.getItem(mentionSeenKey()) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function markMentionSeen(key: string): boolean {
+  const map = getSeenMentionsMap();
+  if (map[key]) return false;
+  map[key] = Date.now();
+  const cutoff = Date.now() - 14 * 86400000;
+  const pruned = Object.fromEntries(
+    Object.entries(map).filter(([, ts]) => typeof ts === "number" && ts >= cutoff)
+  );
+  try {
+    localStorage.setItem(mentionSeenKey(), JSON.stringify(pruned));
+  } catch {}
+  return true;
+}
+
+export function isCurrentUserMentioned(text: unknown): boolean {
+  const hay = String(text || "").trim();
+  if (!hay || !state.userId) return false;
+  const low = hay.toLowerCase();
+  const myEmail = String(state.email || "").trim().toLowerCase();
+  if (myEmail && low.includes(myEmail)) return true;
+
+  const fullName = String(state.profile?.full_name || "").trim();
+  if (fullName) {
+    const escapedFull = fullName.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp("(^|[^a-z0-9])@?" + escapedFull + "([^a-z0-9]|$)", "i").test(hay)) {
+      return true;
+    }
+    const tokens = fullName.toLowerCase().split(/\s+/).filter(t => t.length >= 3);
+    for (const tok of tokens) {
+      const escTok = tok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp("(^|[^a-z0-9])@" + escTok + "([^a-z0-9]|$)", "i").test(hay)) {
+        return true;
+      }
+      if (tok.length >= 4 && new RegExp("(^|[^a-z0-9])" + escTok + "([^a-z0-9]|$)", "i").test(hay)) {
+        return true;
+      }
+    }
+  }
+  const idNo = String(state.profile?.id_no || "").trim();
+  if (idNo && idNo.length >= 3) {
+    const escId = idNo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp("(^|[^a-z0-9])" + escId + "([^a-z0-9]|$)", "i").test(hay)) return true;
+  }
+  return false;
+}
+
+function isRecentItem(isoDate: unknown, maxAgeMs = 24 * 3600 * 1000): boolean {
+  if (!isoDate) return false;
+  const ts = new Date(String(isoDate)).getTime();
+  return Number.isFinite(ts) && Date.now() - ts <= maxAgeMs;
+}
+
 export async function loadAppNotifications(): Promise<void> {
   if (!dismissalsLoaded && !runtime.notificationDismissalsTableMissing) {
     await loadNotificationDismissals();
@@ -577,10 +641,25 @@ export async function loadAppNotifications(): Promise<void> {
   hooks.renderHome();
   const visibleNew = newItems.filter((it: any) => !isHiddenSystemNotice(it));
   if (visibleNew.length && !isWithinSelfActionWindow()) {
-    const firstTitle = visibleNew[0].title || "Report";
-    const cleanBody = stripTimeLogMeta(visibleNew[0].body);
+    const first = visibleNew[0];
+    const firstTitle = first.title || "Report";
+    const cleanBody = stripTimeLogMeta(first.body);
     const alertTitle = /^[📄🟢🔴📅🌴📢💬🔔⚠️]/.test(firstTitle) ? firstTitle : "📄 " + firstTitle;
-    triggerAlert(alertTitle, cleanBody);
+    if (isCurrentUserMentioned(`${firstTitle} ${cleanBody}`) && markMentionSeen("app:" + first.id)) {
+      triggerMentionAlert("🔔 Mentioned: " + alertTitle, cleanBody);
+      toast("🔔 Mentioned in notification: " + firstTitle);
+    } else {
+      triggerAlert(alertTitle, cleanBody);
+    }
+  } else {
+    const recentMention = (state.appNotifications || []).find(
+      (it: any) => !isHiddenSystemNotice(it) && !it.is_read && isRecentItem(it.created_at) && isCurrentUserMentioned(`${it.title} ${stripTimeLogMeta(it.body)}`)
+    );
+    if (recentMention && !isWithinSelfActionWindow() && markMentionSeen("app:" + recentMention.id)) {
+      const cleanBody = stripTimeLogMeta(recentMention.body);
+      triggerMentionAlert("🔔 You were mentioned: " + (recentMention.title || "Notification"), cleanBody);
+      toast("🔔 Mentioned: " + (recentMention.title || "Notification"));
+    }
   }
 }
 
@@ -600,7 +679,20 @@ export async function loadApprovalNotifications(): Promise<void> {
   hooks.renderNotices();
   hooks.renderHome();
   if (newItems.length && !isWithinSelfActionWindow()) {
-    triggerAlert("🔔 " + (newItems[0].title || "Notification"), newItems[0].body || "");
+    const first = newItems[0];
+    const text = `${first.title || ""} ${first.body || ""}`;
+    if (isCurrentUserMentioned(text) && markMentionSeen("appr:" + first.id)) {
+      triggerMentionAlert("🔔 Mentioned: " + (first.title || "Notification"), first.body || "");
+    } else {
+      triggerAlert("🔔 " + (first.title || "Notification"), first.body || "");
+    }
+  } else {
+    const recentMention = (state.approvalNotifications || []).find(
+      (n: any) => !n.is_read && isRecentItem(n.created_at) && isCurrentUserMentioned(`${n.title || ""} ${n.body || ""}`)
+    );
+    if (recentMention && !isWithinSelfActionWindow() && markMentionSeen("appr:" + recentMention.id)) {
+      triggerMentionAlert("🔔 " + (recentMention.title || "Notification"), recentMention.body || "");
+    }
   }
 }
 
@@ -612,7 +704,8 @@ export async function loadSchedules(): Promise<void> {
   if (error) { setupError("Could not load schedules", error); return; }
   const prevIds = new Set((hooks.visibleSchedules() || []).map((s: any) => String(s.id)));
   state.schedules = data || [];
-  const newlyVisible = schedulesLoaded ? (hooks.visibleSchedules() || []).filter((s: any) => !prevIds.has(String(s.id))) : [];
+  const vis = hooks.visibleSchedules() || [];
+  const newlyVisible = schedulesLoaded ? vis.filter((s: any) => !prevIds.has(String(s.id))) : [];
   schedulesLoaded = true;
   hooks.renderSchedules();
   hooks.renderNotices();
@@ -620,10 +713,27 @@ export async function loadSchedules(): Promise<void> {
   hooks.renderHome();
   hooks.checkShiftReminders?.();
   hooks.autoFillDtrFromSchedule?.();
+  hooks.evaluateDailySiteGeofence?.();
   if (newlyVisible.length > 0 && !isWithinSelfActionWindow()) {
     const s = newlyVisible[0];
-    triggerAlert("📅 New Schedule", (s.title || "Schedule") + (s.scheduled_date ? " · " + fmtDay(s.scheduled_date) : ""), [300, 100, 300]);
+    const mentionTxt = `${s.title || ""} ${s.notes || ""}`;
+    const body = (s.title || "Schedule") + (s.scheduled_date ? " · " + fmtDay(s.scheduled_date) : "");
+    if (isCurrentUserMentioned(mentionTxt)) {
+      markMentionSeen("sched:" + s.id);
+      triggerMentionAlert("📅 You are Scheduled / Mentioned", body);
+    } else {
+      triggerAlert("📅 New Schedule", body, [300, 100, 300]);
+    }
     toast("📅 New Schedule: " + (s.title || ""));
+  } else if (!isWithinSelfActionWindow()) {
+    const recentMentionedSched = vis.find(
+      (s: any) => isRecentItem(s.created_at) && isCurrentUserMentioned(`${s.title || ""} ${s.notes || ""}`)
+    );
+    if (recentMentionedSched && markMentionSeen("sched:" + recentMentionedSched.id)) {
+      const body = (recentMentionedSched.title || "Schedule") + (recentMentionedSched.scheduled_date ? " · " + fmtDay(recentMentionedSched.scheduled_date) : "");
+      triggerMentionAlert("📅 You are Scheduled / Mentioned", body);
+      toast("📅 Scheduled: " + (recentMentionedSched.title || ""));
+    }
   }
 }
 
@@ -714,6 +824,7 @@ function applyTimeLogRows(rows: any[]): void {
   state.dtrTimeLogs = rows;
   dtrTimeLogsLoaded = true;
   hooks.renderTimeLog?.();
+  hooks.renderHome?.();
   if (incoming.length > 0 && !isWithinSelfActionWindow()) {
     const r = incoming[0];
     const lbl = r.mode === "time_out" ? "Time Out" : "Time In";
@@ -845,6 +956,21 @@ export async function loadRecs(): Promise<void> {
   state.recs = data || [];
   hooks.renderRecs();
   hooks.renderUnits();
+  if (!isWithinSelfActionWindow()) {
+    const mentionedRec = state.recs.find(
+      (r: any) =>
+        String(r.user_id) !== String(state.userId) &&
+        isRecentItem(r.created_at) &&
+        isCurrentUserMentioned(`${r.part || ""} ${r.reason || ""} ${r.site || ""}`)
+    );
+    if (mentionedRec && markMentionSeen("rec:" + mentionedRec.id)) {
+      triggerMentionAlert(
+        "📌 Mentioned in Recommendation",
+        `${mentionedRec.part || "Item"} (${mentionedRec.site || "Site"})`
+      );
+      toast("📌 Mentioned in recommendation: " + (mentionedRec.part || ""));
+    }
+  }
 }
 
 export async function loadAnnouncements(): Promise<void> {
@@ -861,9 +987,28 @@ export async function loadAnnouncements(): Promise<void> {
   hooks.renderNotices();
   hooks.renderHome();
   if (newAnnouncements.length > 0 && !isWithinSelfActionWindow()) {
-    triggerAlert("📢 New Announcement", newAnnouncements[0].title + ": " + newAnnouncements[0].body, [300, 100, 300, 100, 300]);
-    toast("📢 New Announcement: " + newAnnouncements[0].title);
+    const first = newAnnouncements[0];
+    const mentionTxt = `${first.title || ""} ${first.body || ""}`;
+    if (String(first.author_id) !== String(state.userId) && isCurrentUserMentioned(mentionTxt)) {
+      markMentionSeen("ann:" + first.id);
+      triggerMentionAlert("📢 Mentioned in Announcement", (first.title || "") + ": " + (first.body || ""));
+      toast("🔔 Mentioned in Announcement: " + (first.title || ""));
+    } else {
+      triggerAlert("📢 New Announcement", (first.title || "") + ": " + (first.body || ""), [300, 100, 300, 100, 300]);
+      toast("📢 New Announcement: " + (first.title || ""));
+    }
     hooks.updateAnnouncementTicker();
+  } else if (!isWithinSelfActionWindow()) {
+    const recentMentionedAnn = state.announcements.find(
+      (a: any) =>
+        String(a.author_id) !== String(state.userId) &&
+        isRecentItem(a.created_at) &&
+        isCurrentUserMentioned(`${a.title || ""} ${a.body || ""}`)
+    );
+    if (recentMentionedAnn && markMentionSeen("ann:" + recentMentionedAnn.id)) {
+      triggerMentionAlert("📢 Mentioned in Announcement", (recentMentionedAnn.title || "") + ": " + (recentMentionedAnn.body || ""));
+      toast("🔔 Mentioned in Announcement: " + (recentMentionedAnn.title || ""));
+    }
   }
 }
 
@@ -1008,6 +1153,9 @@ export function onlineIds(): Set<string> {
   Object.values(state.presence).forEach((metas: any) =>
     (metas || []).forEach((m: any) => { if (m.user_id) ids.add(String(m.user_id)); })
   );
+  if (state.booted && state.userId) {
+    ids.add(String(state.userId));
+  }
   return ids;
 }
 
@@ -1254,8 +1402,13 @@ function setGpsUiStatus(text: string): void {
     if (!el) return;
     el.classList.remove("hidden");
     el.textContent = text;
-    el.style.cursor = "";
-    el.onclick = null;
+    if (/allow|blocked|waiting|retry/i.test(text)) {
+      el.style.cursor = "pointer";
+      el.onclick = () => { void refreshOwnGpsNow(); };
+    } else {
+      el.style.cursor = "";
+      el.onclick = null;
+    }
   });
 }
 
@@ -1294,6 +1447,7 @@ function recordLocalPosition(pos: GeolocationPosition): void {
   if (Math.abs(lat - runtime.lastWeatherLat) > 0.02 || Math.abs(lng - runtime.lastWeatherLon) > 0.02) {
     updateLiveWeather(lat, lng);
   }
+  hooks.evaluateDailySiteGeofence?.();
 }
 
 async function upsertCoordsToSupabase(lat: number, lng: number, acc: number, force = false): Promise<boolean> {
@@ -1365,13 +1519,13 @@ function ensureCoarseWatchFallback(): void {
   locationCoarseWatchId = navigator.geolocation.watchPosition(
     pos => {
       handleGeoFix(pos, lastLocationUploadAt === 0);
-      if (Math.round(pos.coords.accuracy || 0) <= 150 && locationCoarseWatchId != null) {
+      if (Math.round(pos.coords.accuracy || 0) <= 80 && locationCoarseWatchId != null) {
         try { navigator.geolocation.clearWatch(locationCoarseWatchId); } catch {}
         locationCoarseWatchId = null;
       }
     },
     () => {},
-    { enableHighAccuracy: false, maximumAge: 10000, timeout: 10000 }
+    { enableHighAccuracy: false, maximumAge: 10000, timeout: 15000 }
   );
 }
 
@@ -1382,7 +1536,7 @@ function requestInstantGeoFix(isInitial: boolean): void {
     err => {
       lastGeoErrorCode = err?.code ?? null;
       if (err?.code === 1 && !lastKnownCoords) {
-        setGpsUiStatus("📍 Waiting for Location permission in browser/device settings…");
+        setGpsUiStatus("📍 Waiting for Location permission in browser/device settings (tap to retry)…");
       } else if (!lastKnownCoords) {
         ensureCoarseWatchFallback();
       }
@@ -1390,7 +1544,7 @@ function requestInstantGeoFix(isInitial: boolean): void {
         void upsertCoordsToSupabase(lastKnownCoords.lat, lastKnownCoords.lng, lastKnownCoords.acc, true);
       }
     },
-    { enableHighAccuracy: true, maximumAge: 4000, timeout: 4500 }
+    { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
   );
 
   navigator.geolocation.getCurrentPosition(
@@ -1398,10 +1552,10 @@ function requestInstantGeoFix(isInitial: boolean): void {
     err => {
       if (err?.code === 1 && !lastKnownCoords) {
         lastGeoErrorCode = 1;
-        setGpsUiStatus("📍 Waiting for Location permission in browser/device settings…");
+        setGpsUiStatus("📍 Waiting for Location permission in browser/device settings (tap to retry)…");
       }
     },
-    { enableHighAccuracy: false, maximumAge: 15000, timeout: 4500 }
+    { enableHighAccuracy: false, maximumAge: 15000, timeout: 10000 }
   );
 }
 
@@ -1426,16 +1580,16 @@ function startLocationWatch(forceRestart = false): void {
       err => {
         lastGeoErrorCode = err?.code ?? null;
         if (err?.code === 1 && !lastKnownCoords) {
-          setGpsUiStatus("📍 Allow Location permission in browser/phone settings for automatic GPS.");
+          setGpsUiStatus("📍 Allow Location permission in browser/phone settings for automatic GPS (tap to retry).");
         } else if (err?.code === 2 || err?.code === 3) {
           ensureCoarseWatchFallback();
         }
       },
-      { enableHighAccuracy: true, maximumAge: 4000, timeout: 10000 }
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
     );
   }
 
-  if (!lastKnownCoords) {
+  if (!lastKnownCoords || lastKnownCoords.acc > 150) {
     ensureCoarseWatchFallback();
   }
 
@@ -1470,10 +1624,10 @@ async function refreshOwnGpsNow(): Promise<boolean> {
             lastGeoErrorCode = err?.code ?? null;
             finish(null);
           },
-          { enableHighAccuracy: false, maximumAge: 15000, timeout: 4500 }
+          { enableHighAccuracy: false, maximumAge: 15000, timeout: 10000 }
         );
       },
-      { enableHighAccuracy: true, maximumAge: 4000, timeout: 4500 }
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
     );
   });
 
@@ -1514,7 +1668,7 @@ export function initAlwaysOnLocation(): void {
       navigator.permissions.query({ name: "geolocation" as PermissionName }).then(perm => {
         if (perm.state === "denied") {
           lastGeoErrorCode = 1;
-          setGpsUiStatus("📍 Location permission blocked — allow Location in browser/phone settings.");
+          setGpsUiStatus("📍 Location permission blocked — allow Location in browser/phone settings (tap to retry).");
         }
         perm.onchange = () => {
           if (perm.state === "granted") {
@@ -1523,7 +1677,7 @@ export function initAlwaysOnLocation(): void {
             startLocationWatch(true);
           } else if (perm.state === "denied") {
             lastGeoErrorCode = 1;
-            setGpsUiStatus("📍 Location permission blocked — allow Location in browser/phone settings.");
+            setGpsUiStatus("📍 Location permission blocked — allow Location in browser/phone settings (tap to retry).");
           }
         };
       }).catch(() => {});
@@ -1533,10 +1687,14 @@ export function initAlwaysOnLocation(): void {
 
 export function startEmployeeLocationSharing(): void {
   initAlwaysOnLocation();
-  if (state.userId && runtime.client && lastKnownCoords) {
-    const hasRecentUpload = lastLocationUploadAt > 0 && Date.now() - lastLocationUploadAt < GPS_REFRESH_INTERVAL_MS - 400;
-    if (!hasRecentUpload) {
-      void upsertCoordsToSupabase(lastKnownCoords.lat, lastKnownCoords.lng, lastKnownCoords.acc, true);
+  if (state.userId && runtime.client) {
+    if (lastKnownCoords) {
+      const hasRecentUpload = lastLocationUploadAt > 0 && Date.now() - lastLocationUploadAt < GPS_REFRESH_INTERVAL_MS - 400;
+      if (!hasRecentUpload) {
+        void upsertCoordsToSupabase(lastKnownCoords.lat, lastKnownCoords.lng, lastKnownCoords.acc, true);
+      }
+    } else {
+      void refreshOwnGpsNow();
     }
   }
 }
@@ -1600,7 +1758,7 @@ let liveLastPoints: Array<{ lat: number; lng: number }> = [];
 let liveAllLocationRows: any[] = [];
 const liveMarkers = new Map<
   string,
-  { marker: google.maps.marker.AdvancedMarkerElement; infoHtml: string; position: { lat: number; lng: number } }
+  { marker: any; isAdvanced: boolean; infoHtml: string; position: { lat: number; lng: number } }
 >();
 const LIVE_REFRESH_MS = 5000;
 const LIVE_STALE_MS = 5 * 60 * 1000;
@@ -1621,6 +1779,65 @@ function buildEmployeePinElement(name: string, fresh: boolean): HTMLElement {
     `border:2px solid #ffffff;box-shadow:0 3px 10px rgba(0,0,0,.45);` +
     `background:${fresh ? "#22c55e" : "#64748b"};`;
   return el;
+}
+
+function createLiveEmployeeMarker(
+  map: google.maps.Map,
+  position: { lat: number; lng: number },
+  name: string,
+  fresh: boolean,
+  AdvancedMarkerElement?: typeof google.maps.marker.AdvancedMarkerElement
+): { marker: any; isAdvanced: boolean } {
+  if (AdvancedMarkerElement) {
+    try {
+      const adv = new AdvancedMarkerElement({
+        map,
+        position,
+        title: name,
+        content: buildEmployeePinElement(name, fresh),
+      });
+      return { marker: adv, isAdvanced: true };
+    } catch {}
+  }
+  const classic = new google.maps.Marker({
+    map,
+    position,
+    title: name,
+    label: { text: (name.trim()[0] || "M").toUpperCase(), color: "#ffffff", fontWeight: "700" },
+  });
+  return { marker: classic, isAdvanced: false };
+}
+
+function updateLiveEmployeeMarker(
+  entry: { marker: any; isAdvanced: boolean; infoHtml: string; position: { lat: number; lng: number } },
+  position: { lat: number; lng: number },
+  name: string,
+  fresh: boolean,
+  infoHtml: string
+): void {
+  if (entry.isAdvanced) {
+    entry.marker.position = position;
+    entry.marker.title = name;
+    entry.marker.content = buildEmployeePinElement(name, fresh);
+  } else {
+    entry.marker.setPosition?.(position);
+    entry.marker.setTitle?.(name);
+  }
+  entry.infoHtml = infoHtml;
+  entry.position = position;
+}
+
+function openLiveMarkerInfoWindow(
+  map: google.maps.Map,
+  entry: { marker: any; isAdvanced: boolean; infoHtml: string }
+): void {
+  if (!liveInfoWindow) return;
+  liveInfoWindow.setContent(entry.infoHtml);
+  if (entry.isAdvanced) {
+    liveInfoWindow.open({ map, anchor: entry.marker });
+  } else {
+    liveInfoWindow.open(map, entry.marker);
+  }
 }
 
 export function setBasemap(name: string): void {
@@ -1699,6 +1916,14 @@ export function renderLiveOnlineMembersList(): void {
   liveAllLocationRows.forEach((r: any) => {
     if (r?.user_id) locByUser.set(String(r.user_id), r);
   });
+  if (state.userId && lastKnownCoords && !locByUser.has(String(state.userId))) {
+    locByUser.set(String(state.userId), {
+      user_id: String(state.userId),
+      latitude: lastKnownCoords.lat,
+      longitude: lastKnownCoords.lng,
+      updated_at: new Date(lastKnownCoords.updatedAt).toISOString(),
+    });
+  }
 
   const onlineMembers = (state.profiles || []).filter(p => {
     const uid = String(p.user_id || "");
@@ -1735,9 +1960,10 @@ export function renderLiveOnlineMembersList(): void {
       const hasCoords = !!loc && Number.isFinite(+loc.latitude) && Number.isFinite(+loc.longitude);
       const fresh = hasCoords && now - new Date(loc.updated_at).getTime() <= LIVE_STALE_MS;
       const age = hasCoords ? formatAgeLabel(loc.updated_at) : "";
+      const isMe = uid === String(state.userId || "");
       const gpsLabel = hasCoords
-        ? `${fresh ? "🟢 GPS Live" : "🟡 Last GPS"} (${age})`
-        : "⚪ Waiting for GPS";
+        ? `${fresh ? "🟢 GPS Live" : "🟡 Last GPS"} (${age}) · ${Number(loc.latitude).toFixed(4)}, ${Number(loc.longitude).toFixed(4)}`
+        : (isMe ? "📡 Locating GPS… (tap Locate)" : "⚪ Waiting for GPS");
 
       return (
         `<div class="person clickable" style="margin-bottom:6px;" onclick="focusLiveEmployee('${esc(uid)}')">` +
@@ -1765,6 +1991,14 @@ export async function focusLiveEmployee(userId: string): Promise<void> {
     if (!locRow && uid === String(state.userId || "")) {
       await refreshOwnGpsNow();
       locRow = liveAllLocationRows.find((r: any) => String(r.user_id) === uid);
+      if (!locRow && lastKnownCoords) {
+        locRow = {
+          user_id: uid,
+          latitude: lastKnownCoords.lat,
+          longitude: lastKnownCoords.lng,
+          updated_at: new Date(lastKnownCoords.updatedAt).toISOString(),
+        };
+      }
     }
     if (!locRow && runtime.client) {
       const { data } = await runtime.client
@@ -1779,8 +2013,8 @@ export async function focusLiveEmployee(userId: string): Promise<void> {
     if (!locRow) {
       toast(
         uid === String(state.userId || "")
-          ? "Turn on GPS / allow Location permission on your device so your position appears here."
-          : `${profileName(uid)} is online, but GPS location is not shared yet.`
+          ? "Allow Location permission in browser/phone settings so your position appears here."
+          : `${profileName(uid)} is online, but their device has not uploaded a GPS location yet.`
       );
       return;
     }
@@ -1801,18 +2035,11 @@ export async function focusLiveEmployee(userId: string): Promise<void> {
       `<span>${position.lat.toFixed(5)}, ${position.lng.toFixed(5)}</span><br>` +
       `<small>${esc(fmtDate(locRow.updated_at))} (${esc(age)}${fresh ? " · LIVE" : " · stale"})</small>` +
       `</div>`;
-    const marker = new AdvancedMarkerElement({
-      map,
-      position,
-      title: name,
-      content: buildEmployeePinElement(name, fresh),
-    });
-    entry = { marker, infoHtml, position };
-    marker.addListener("click", () => {
-      if (liveInfoWindow && liveMapInstance) {
-        liveInfoWindow.setContent(entry!.infoHtml);
-        liveInfoWindow.open({ map: liveMapInstance, anchor: entry!.marker });
-      }
+    const created = createLiveEmployeeMarker(map, position, name, fresh, AdvancedMarkerElement);
+    entry = { marker: created.marker, isAdvanced: created.isAdvanced, infoHtml, position };
+    const targetEntry = entry;
+    created.marker.addListener("click", () => {
+      if (liveMapInstance) openLiveMarkerInfoWindow(liveMapInstance, targetEntry);
     });
     liveMarkers.set(uid, entry);
   }
@@ -1821,10 +2048,7 @@ export async function focusLiveEmployee(userId: string): Promise<void> {
   map.setCenter(entry.position);
   map.panTo(entry.position);
   map.setZoom(17);
-  if (liveInfoWindow) {
-    liveInfoWindow.setContent(entry.infoHtml);
-    liveInfoWindow.open({ map, anchor: entry.marker });
-  }
+  openLiveMarkerInfoWindow(map, entry);
   $("liveMap")?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
@@ -1846,17 +2070,45 @@ export async function loadLiveMap(opts: { fit?: boolean } = {}): Promise<void> {
   try {
     const { data, error } = await runtime.client.from("employee_locations").select("user_id,latitude,longitude,updated_at");
     if (error) throw error;
+
+    const allRows = (data || []).filter((r: any) => Number.isFinite(+r.latitude) && Number.isFinite(+r.longitude));
+    if (state.userId && lastKnownCoords) {
+      const uid = String(state.userId);
+      const existingIdx = allRows.findIndex((r: any) => String(r.user_id) === uid);
+      const localRow = {
+        user_id: uid,
+        latitude: lastKnownCoords.lat,
+        longitude: lastKnownCoords.lng,
+        updated_at: new Date(lastKnownCoords.updatedAt).toISOString(),
+      };
+      if (existingIdx < 0) {
+        allRows.push(localRow);
+        void upsertCoordsToSupabase(lastKnownCoords.lat, lastKnownCoords.lng, lastKnownCoords.acc, true);
+      } else {
+        const dbTs = new Date(allRows[existingIdx].updated_at || 0).getTime();
+        if (!Number.isFinite(dbTs) || lastKnownCoords.updatedAt > dbTs) {
+          allRows[existingIdx] = localRow;
+        }
+      }
+    } else if (state.userId && !lastKnownCoords) {
+      void refreshOwnGpsNow();
+    }
+
+    liveAllLocationRows = allRows;
+    renderLiveOnlineMembersList();
+
     const [{ AdvancedMarkerElement }, map] = await Promise.all([
       loadGoogleMapsLibraries(),
       ensureLiveMap(),
     ]);
     if (!map) return;
 
+    if (!$("page-live-map")?.classList.contains("hidden")) {
+      try { google.maps.event.trigger(map, "resize"); } catch {}
+    }
+
     const filter = runtime.liveMapFilter || "all";
     const now = Date.now();
-    const allRows = (data || []).filter((r: any) => Number.isFinite(+r.latitude) && Number.isFinite(+r.longitude));
-    liveAllLocationRows = allRows;
-    renderLiveOnlineMembersList();
     const filteredRows = allRows.filter((row: any) => {
       const userRole = state.roles[row.user_id]?.app_role || "employee";
       const fresh = now - new Date(row.updated_at).getTime() <= LIVE_STALE_MS;
@@ -1895,40 +2147,29 @@ export async function loadLiveMap(opts: { fit?: boolean } = {}): Promise<void> {
 
       const existing = liveMarkers.get(row.user_id);
       if (!existing) {
-        const marker = new AdvancedMarkerElement({
-          map,
-          position,
-          title: name,
-          content: buildEmployeePinElement(name, fresh),
-        });
-        const entry = { marker, infoHtml, position };
-        marker.addListener("click", () => {
-          if (liveInfoWindow && liveMapInstance) {
-            liveInfoWindow.setContent(entry.infoHtml);
-            liveInfoWindow.open({ map: liveMapInstance, anchor: entry.marker });
-          }
+        const created = createLiveEmployeeMarker(map, position, name, fresh, AdvancedMarkerElement);
+        const entry = { marker: created.marker, isAdvanced: created.isAdvanced, infoHtml, position };
+        created.marker.addListener("click", () => {
+          if (liveMapInstance) openLiveMarkerInfoWindow(liveMapInstance, entry);
         });
         liveMarkers.set(row.user_id, entry);
       } else {
-        existing.marker.position = position;
-        existing.marker.title = name;
-        existing.marker.content = buildEmployeePinElement(name, fresh);
-        existing.infoHtml = infoHtml;
-        existing.position = position;
+        updateLiveEmployeeMarker(existing, position, name, fresh, infoHtml);
       }
     });
 
     for (const [id, entry] of liveMarkers) {
       if (!seen.has(id)) {
-        entry.marker.map = null;
+        if (entry.isAdvanced) entry.marker.map = null;
+        else entry.marker.setMap?.(null);
         liveMarkers.delete(id);
       }
     }
 
     liveLastPoints = points;
-    if (opts.fit || !liveFitted) {
+    if ((opts.fit || !liveFitted) && points.length > 0) {
       await fitLiveMap(points);
-      liveFitted = points.length > 0;
+      liveFitted = true;
     }
 
     const freshCount = items.filter(i => i.fresh).length;

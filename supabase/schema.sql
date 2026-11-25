@@ -1018,11 +1018,13 @@ CREATE INDEX IF NOT EXISTS idx_schedules_date ON public.schedules (scheduled_dat
 CREATE INDEX IF NOT EXISTS idx_site_units_site_id ON public.site_units (site_id);
 CREATE INDEX IF NOT EXISTS idx_dtr_entries_user_date ON public.dtr_entries (user_id, work_date DESC);
 CREATE INDEX IF NOT EXISTS idx_dtr_time_logs_created_at ON public.dtr_time_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dtr_time_logs_user_date ON public.dtr_time_logs (user_id, work_date DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_recommendations_created_at ON public.recommendations (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_stories_expires_at ON public.stories (expires_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_thread_created ON public.messages (thread_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_thread_members_user ON public.thread_members (user_id, thread_id);
 CREATE INDEX IF NOT EXISTS idx_leave_requests_user ON public.leave_requests (user_id, created_at DESC);
+ALTER TABLE public.employee_locations ADD COLUMN IF NOT EXISTS accuracy DOUBLE PRECISION;
 CREATE INDEX IF NOT EXISTS idx_employee_locations_updated ON public.employee_locations (updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_notifications_created ON public.app_notifications (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_reports_date_created ON public.service_delivery_reports (report_date DESC, created_at DESC);

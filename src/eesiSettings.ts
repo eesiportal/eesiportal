@@ -55,39 +55,104 @@ export function easterSunday(y: number): Date {
   return new Date(y, month - 1, day);
 }
 
-export function phHolidays(year: number): Array<{ date: string; name: string; kind: string }> {
+function nthWeekdayOfMonth(year: number, monthIndex: number, weekday: number, nth: number): Date {
+  const first = new Date(year, monthIndex, 1);
+  const offset = (weekday - first.getDay() + 7) % 7;
+  return new Date(year, monthIndex, 1 + offset + (nth - 1) * 7);
+}
+
+function lastWeekdayOfMonth(year: number, monthIndex: number, weekday: number): Date {
+  const last = new Date(year, monthIndex + 1, 0);
+  const back = (last.getDay() - weekday + 7) % 7;
+  return new Date(year, monthIndex + 1, 0 - back);
+}
+
+export interface PhHolidayItem {
+  date: string;
+  name: string;
+  kind: string;
+  category: "National" | "Christian" | "Regional";
+  region?: string;
+}
+
+export function phHolidays(year: number): PhHolidayItem[] {
   const iso = (d: Date) =>
     d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-  const easter = easterSunday(year);
-  const maundy = new Date(easter.getTime() - 3 * 864e5);
-  const goodFri = new Date(easter.getTime() - 2 * 864e5);
-  const blackSat = new Date(easter.getTime() - 1 * 864e5);
-  const aug31 = new Date(year, 7, 31);
-  const heroesDay = new Date(year, 7, 31 - ((aug31.getDay() + 6) % 7));
+  const shiftDays = (d: Date, days: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + days);
 
-  return [
-    { date: `${year}-01-01`, name: "New Year's Day", kind: "Regular Holiday" },
-    { date: `${year}-02-25`, name: "EDSA People Power Revolution Anniversary", kind: "Special Holiday" },
-    { date: iso(maundy), name: "Maundy Thursday", kind: "Regular Holiday" },
-    { date: iso(goodFri), name: "Good Friday", kind: "Regular Holiday" },
-    { date: iso(blackSat), name: "Black Saturday", kind: "Special Non-Working Holiday" },
-    { date: `${year}-04-09`, name: "Araw ng Kagitingan (Day of Valor)", kind: "Regular Holiday" },
-    { date: `${year}-05-01`, name: "Labor Day", kind: "Regular Holiday" },
-    { date: `${year}-06-12`, name: "Independence Day", kind: "Regular Holiday" },
-    { date: `${year}-07-27`, name: "Iglesia ni Cristo Founding Anniversary", kind: "Special National Working Holiday" },
-    { date: `${year}-08-21`, name: "Ninoy Aquino Day", kind: "Special Non-Working Holiday" },
-    { date: iso(heroesDay), name: "National Heroes Day", kind: "Regular Holiday" },
-    { date: `${year}-09-08`, name: "Feast of the Nativity of the Blessed Virgin Mary", kind: "Special Working Holiday" },
-    { date: `${year}-10-31`, name: "All Saints' Day Eve", kind: "Special Non-Working Holiday" },
-    { date: `${year}-11-01`, name: "All Saints' Day", kind: "Special Non-Working Holiday" },
-    { date: `${year}-11-02`, name: "All Souls' Day", kind: "Special Non-Working Holiday" },
-    { date: `${year}-11-30`, name: "Bonifacio Day", kind: "Regular Holiday" },
-    { date: `${year}-12-08`, name: "Feast of the Immaculate Conception of Mary", kind: "Special Non-Working Holiday" },
-    { date: `${year}-12-24`, name: "Christmas Eve", kind: "Special Non-Working Holiday" },
-    { date: `${year}-12-25`, name: "Christmas Day", kind: "Regular Holiday" },
-    { date: `${year}-12-30`, name: "Rizal Day", kind: "Regular Holiday" },
-    { date: `${year}-12-31`, name: "Last Day of the Year", kind: "Special Non-Working Holiday" },
-  ].sort((a, b) => a.date.localeCompare(b.date));
+  const easter = easterSunday(year);
+  const ashWed = shiftDays(easter, -46);
+  const palmSun = shiftDays(easter, -7);
+  const holyWed = shiftDays(easter, -4);
+  const maundy = shiftDays(easter, -3);
+  const goodFri = shiftDays(easter, -2);
+  const blackSat = shiftDays(easter, -1);
+  const ascension = shiftDays(easter, 39);
+  const pentecost = shiftDays(easter, 49);
+  const heroesDay = lastWeekdayOfMonth(year, 7, 1); // Last Monday of August
+
+  // Feast of Christ the King: Sunday before 1st Sunday of Advent (last Sunday between Nov 20 and Nov 26)
+  const nov26 = new Date(year, 10, 26);
+  const christKing = new Date(year, 10, 26 - nov26.getDay());
+
+  // Major Philippine Regional Festivities & Charter Holidays
+  const sinulogSun = nthWeekdayOfMonth(year, 0, 0, 3); // 3rd Sunday of January
+  const dinagyangSun = nthWeekdayOfMonth(year, 0, 0, 4); // 4th Sunday of January
+  const panagbengaSun = lastWeekdayOfMonth(year, 1, 0); // Last Sunday of February
+  const kadayawanSun = nthWeekdayOfMonth(year, 7, 0, 3); // 3rd Sunday of August
+  const penafranciaSun = nthWeekdayOfMonth(year, 8, 0, 3); // 3rd Sunday of September
+  const masskaraSun = nthWeekdayOfMonth(year, 9, 0, 4); // 4th Sunday of October
+
+  const holidays: PhHolidayItem[] = [
+    // National & Regular / Special Holidays
+    { date: `${year}-01-01`, name: "New Year's Day", kind: "Regular Holiday", category: "National" },
+    { date: `${year}-02-25`, name: "EDSA People Power Revolution Anniversary", kind: "Special Holiday", category: "National" },
+    { date: `${year}-04-09`, name: "Araw ng Kagitingan (Day of Valor)", kind: "Regular Holiday", category: "National" },
+    { date: `${year}-05-01`, name: "Labor Day", kind: "Regular Holiday", category: "National" },
+    { date: `${year}-06-12`, name: "Independence Day", kind: "Regular Holiday", category: "National" },
+    { date: `${year}-07-27`, name: "Iglesia ni Cristo Founding Anniversary", kind: "Special National Working Holiday", category: "National" },
+    { date: `${year}-08-21`, name: "Ninoy Aquino Day", kind: "Special Non-Working Holiday", category: "National" },
+    { date: iso(heroesDay), name: "National Heroes Day", kind: "Regular Holiday", category: "National" },
+    { date: `${year}-11-30`, name: "Bonifacio Day", kind: "Regular Holiday", category: "National" },
+    { date: `${year}-12-30`, name: "Rizal Day", kind: "Regular Holiday", category: "National" },
+    { date: `${year}-12-31`, name: "Last Day of the Year", kind: "Special Non-Working Holiday", category: "National" },
+
+    // Christian Holidays
+    { date: `${year}-01-06`, name: "Epiphany (Three Kings)", kind: "Christian Observance", category: "Christian" },
+    { date: iso(ashWed), name: "Ash Wednesday", kind: "Christian Observance", category: "Christian" },
+    { date: iso(palmSun), name: "Palm Sunday", kind: "Christian Observance", category: "Christian" },
+    { date: iso(holyWed), name: "Holy Wednesday", kind: "Christian Observance", category: "Christian" },
+    { date: iso(maundy), name: "Maundy Thursday", kind: "Regular Holiday · Christian", category: "Christian" },
+    { date: iso(goodFri), name: "Good Friday", kind: "Regular Holiday · Christian", category: "Christian" },
+    { date: iso(blackSat), name: "Black Saturday", kind: "Special Non-Working · Christian", category: "Christian" },
+    { date: iso(easter), name: "Easter Sunday", kind: "Christian Solemnity", category: "Christian" },
+    { date: iso(ascension), name: "Ascension of Jesus", kind: "Christian Observance", category: "Christian" },
+    { date: iso(pentecost), name: "Pentecost Sunday", kind: "Christian Solemnity", category: "Christian" },
+    { date: `${year}-08-15`, name: "Assumption of the Blessed Virgin Mary", kind: "Christian Solemnity", category: "Christian" },
+    { date: `${year}-09-08`, name: "Feast of the Nativity of the Blessed Virgin Mary", kind: "Special Working · Christian", category: "Christian" },
+    { date: `${year}-10-31`, name: "All Saints' Day Eve", kind: "Special Non-Working · Christian", category: "Christian" },
+    { date: `${year}-11-01`, name: "All Saints' Day", kind: "Special Non-Working · Christian", category: "Christian" },
+    { date: `${year}-11-02`, name: "All Souls' Day", kind: "Special Non-Working · Christian", category: "Christian" },
+    { date: iso(christKing), name: "Feast of Christ the King", kind: "Christian Solemnity", category: "Christian" },
+    { date: `${year}-12-08`, name: "Feast of the Immaculate Conception of Mary", kind: "Special Non-Working · Christian", category: "Christian" },
+    { date: `${year}-12-16`, name: "Start of Simbang Gabi (Misa de Gallo)", kind: "Christian Tradition", category: "Christian" },
+    { date: `${year}-12-24`, name: "Christmas Eve", kind: "Special Non-Working · Christian", category: "Christian" },
+    { date: `${year}-12-25`, name: "Christmas Day", kind: "Regular Holiday · Christian", category: "Christian" },
+
+    // Philippine Regional Holidays
+    { date: iso(sinulogSun), name: "Sinulog Festival (Santo Niño de Cebu)", kind: "Regional Holiday · Cebu", category: "Regional", region: "Visayas · Cebu" },
+    { date: iso(dinagyangSun), name: "Dinagyang Festival", kind: "Regional Holiday · Iloilo", category: "Regional", region: "Visayas · Iloilo" },
+    { date: `${year}-02-24`, name: "Cebu City Charter Day", kind: "Regional Charter Holiday", category: "Regional", region: "Visayas · Cebu City" },
+    { date: iso(panagbengaSun), name: "Panagbenga Flower Festival", kind: "Regional Holiday · Baguio", category: "Regional", region: "Luzon · Baguio City" },
+    { date: `${year}-03-01`, name: "Araw ng Dabaw (Davao Day)", kind: "Regional Holiday · Davao", category: "Regional", region: "Mindanao · Davao City" },
+    { date: `${year}-04-27`, name: "Kadaugan sa Mactan", kind: "Regional Holiday · Lapu-Lapu", category: "Regional", region: "Visayas · Cebu" },
+    { date: `${year}-06-24`, name: "Araw ng Maynila / Feast of St. John the Baptist", kind: "Regional Holiday · Manila", category: "Regional", region: "Luzon · Manila" },
+    { date: `${year}-08-06`, name: "Cebu Province Founding Day", kind: "Regional Holiday · Cebu Province", category: "Regional", region: "Visayas · Cebu" },
+    { date: iso(kadayawanSun), name: "Kadayawan Festival", kind: "Regional Holiday · Davao", category: "Regional", region: "Mindanao · Davao" },
+    { date: iso(penafranciaSun), name: "Peñafrancia Festival", kind: "Regional Holiday · Bicol", category: "Regional", region: "Luzon · Naga City" },
+    { date: iso(masskaraSun), name: "MassKara Festival", kind: "Regional Holiday · Bacolod", category: "Regional", region: "Visayas · Bacolod" },
+  ];
+  return holidays.sort((a, b) => a.date.localeCompare(b.date));
 }
 
 function autoDecorKey(now: Date): string {
@@ -279,23 +344,77 @@ async function savePushSubscription(sub: PushSubscription): Promise<void> {
   if (error) throw error;
 }
 
-export async function enablePush(silent: boolean): Promise<void> {
-  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
-    if (!silent) toast("Push is not supported here. On iPhone, add the app to the Home Screen first.");
-    return;
-  }
-  if (!PUSH_READY) {
-    if (!silent) toast("Push key is not set in the app yet.");
-    return;
-  }
-  if (!state.userId) return;
+async function ensurePushSwRegistration(): Promise<ServiceWorkerRegistration | null> {
+  if (!("serviceWorker" in navigator)) return null;
   try {
-    if (silent && Notification.permission !== "granted") return;
-    if (!silent) {
-      const perm = await Notification.requestPermission();
-      if (perm !== "granted") { toast("Notifications were blocked in browser settings."); return; }
+    let reg = await navigator.serviceWorker.getRegistration("/");
+    if (!reg) {
+      reg = await navigator.serviceWorker.register("/push-sw.js");
     }
-    const reg = await navigator.serviceWorker.ready;
+    const readyPromise = navigator.serviceWorker.ready.catch(() => null);
+    const timeoutPromise = new Promise<null>(res => setTimeout(() => res(null), 2800));
+    const readyReg = await Promise.race([readyPromise, timeoutPromise]);
+    return readyReg || reg || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function enablePush(silent: boolean): Promise<void> {
+  if (!state.userId) return;
+  unlockSharedAudio();
+
+  const activateLocalAlertsFallback = (msg: string) => {
+    localStorage.setItem("eesi-notifications", "on");
+    const sn = $("settingNotifications") as HTMLInputElement | null;
+    if (sn) sn.checked = true;
+    if (!silent) {
+      playSettingSound(true);
+      if ("vibrate" in navigator) navigator.vibrate([180, 80, 180]);
+      toast(msg);
+    }
+  };
+
+  if (!("Notification" in window)) {
+    activateLocalAlertsFallback("In-app sound & vibration alerts enabled.");
+    return;
+  }
+
+  let perm: NotificationPermission = Notification.permission;
+  if (perm !== "granted") {
+    if (silent) return;
+    try {
+      perm = await Notification.requestPermission();
+    } catch {
+      perm = Notification.permission;
+    }
+  }
+
+  if (perm === "denied") {
+    activateLocalAlertsFallback("Browser blocked pop-ups — in-app sound & vibration alerts stay active.");
+    return;
+  }
+
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    activateLocalAlertsFallback(
+      window.self !== window.top
+        ? "Notifications, sound & vibration enabled! (Open outside preview for lock-screen Web Push.)"
+        : "Notifications, sound & vibration enabled! (Add to Home Screen on iOS for lock-screen Push.)"
+    );
+    return;
+  }
+
+  if (!PUSH_READY) {
+    activateLocalAlertsFallback("Notifications, sound & vibration enabled!");
+    return;
+  }
+
+  try {
+    const reg = await ensurePushSwRegistration();
+    if (!reg || !reg.pushManager) {
+      activateLocalAlertsFallback("Browser notifications, sound & vibration enabled!");
+      return;
+    }
     let sub = await reg.pushManager.getSubscription();
     if (!sub) {
       sub = await reg.pushManager.subscribe({
@@ -304,9 +423,12 @@ export async function enablePush(silent: boolean): Promise<void> {
       });
     }
     await savePushSubscription(sub);
-    if (!silent) toast("Background notifications on");
-  } catch (e: any) {
-    if (!silent) toast("Could not turn on notifications: " + (e?.message || e));
+    localStorage.setItem("eesi-notifications", "on");
+    const sn = $("settingNotifications") as HTMLInputElement | null;
+    if (sn) sn.checked = true;
+    if (!silent) toast("Background Push, sound & vibration notifications enabled!");
+  } catch {
+    activateLocalAlertsFallback("Notifications, sound & vibration enabled!");
   }
 }
 
@@ -615,6 +737,19 @@ export function triggerAlert(title: string, body: string, vibratePattern: number
     playSettingSound(true);
   }
   showBackgroundNotification(title, body, vibratePattern);
+}
+
+export function triggerMentionAlert(title: string, body: string): void {
+  const mentionPattern = [350, 120, 350, 120, 450];
+  const s = notificationSettings();
+  lastAlertAt = Date.now();
+  if ("vibrate" in navigator) {
+    try { navigator.vibrate(mentionPattern); } catch {}
+  }
+  if (s.enabled) {
+    playSettingSound(true);
+  }
+  showBackgroundNotification(title, body, mentionPattern);
 }
 
 export function triggerShiftAlert(

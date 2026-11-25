@@ -214,6 +214,7 @@ import {
   editTimemarkNotesText,
   editUnit,
   ensureAmcbUnitsSeeded,
+  evaluateDailySiteGeofence,
   exportPayslipXlsxAction,
   flipTimemarkCamera,
   focusTimemarkAt,
@@ -228,6 +229,7 @@ import {
   openAddUnitForSite,
   openEditDtr,
   openEditSiteOverlay,
+  openHolidayCalendarSheet,
   openLastTimemarkPreview,
   openLeaveSheetPreview,
   openPayrollPage,
@@ -712,6 +714,7 @@ function registerHooks(): void {
     renderLiveOnlineMembers: renderLiveOnlineMembersList,
     closeSiteUnitsOverlay,
     renderPayroll,
+    evaluateDailySiteGeofence,
   });
 }
 
@@ -918,6 +921,7 @@ function exposeWindowGlobals(): void {
     printPayslip,
     downloadPayslipPdf,
     exportPayslipXlsx: exportPayslipXlsxAction,
+    openHolidayCalendarSheet,
   });
 }
 

@@ -90,8 +90,9 @@ header{
 .live-dot[data-live="0"]{background:var(--red)}
 @keyframes pulseDot{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.25);opacity:.7}}
 
-.ticker{overflow:hidden;white-space:nowrap;padding:8px 10px;font-size:12px;background:#0b1b38;color:#cfe0ff;border-bottom:1px solid rgba(47,140,255,.2)}
+.ticker{overflow:hidden;white-space:nowrap;padding:8px 10px;font-size:12.5px;letter-spacing:.01em;background:#0b1b38;color:#cfe0ff;border-bottom:1px solid rgba(47,140,255,.2)}
 .ticker span{display:inline-block;padding-left:0;will-change:transform;color:#cfe0ff}
+.ticker:hover span,.ticker:active span{animation-play-state:paused!important}
 @keyframes marqueeSingle{0%{transform:translateX(100vw)}100%{transform:translateX(-100%)}}
 
 main{max-width:860px;margin:auto;position:relative}
@@ -924,7 +925,7 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
       <button id="disableBiometricBtn" class="red hidden" type="button" style="width:100%" onclick="disableBiometricLock()">Turn off Biometric Unlock</button>
 
       <h3>Notifications</h3>
-      <button id="enablePushBtn" class="btn" type="button" style="width:100%;margin:8px 0">Enable background notifications</button>
+      <button id="enablePushBtn" class="btn" type="button" style="width:100%;margin:8px 0">🔔 Enable Notifications, Sound &amp; Push</button>
       <label><input id="settingNotifications" type="checkbox" checked> In-app notifications</label>
       <label><input id="settingVibration" type="checkbox"> Vibration (with or without sound)</label>
       <div style="display:flex;gap:8px;margin:8px 0">
@@ -988,6 +989,7 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
         <p id="locationStatus" class="muted hidden"></p>
       </div>
       <div id="homeDtrStatusCard" class="card hidden"></div>
+      <div id="homeGeofenceAlert" class="card hidden"></div>
       <div id="setupWarn" class="card warn hidden">
         <b>Database setup needed</b>
         <div id="setupWarnText" class="muted"></div>
@@ -1000,6 +1002,11 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
         <div class="stat clickable" onclick="go('dtr')"><strong id="dtrCount">0</strong><span>⏰ DTR</span></div>
         <div class="stat clickable" onclick="go('notices')"><strong id="noticeCount">0</strong><span>🔔 Notifications</span></div>
       </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;">
+        <h2 style="margin:0;">📸 Time In / Out Share Feed</h2>
+        <button class="gray small-btn" type="button" onclick="go('dtr');dtrTab('time_log')">Open feed</button>
+      </div>
+      <div id="homeShareFeed" class="card"><p class="muted" style="margin:0;">No Time In / Out uploads yet.</p></div>
       <h2>Timeline</h2>
       <div id="homeTimeline" class="card"><p class="muted">Timeline items will appear here.</p></div>
       <h2>Quick access</h2>
@@ -1296,7 +1303,7 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
           <div id="dtrFormDurationHint" class="muted" style="font-size:12px;margin:-4px 0 8px;"></div>
           <div class="field" style="margin-bottom:6px;">
             <label class="check-row" style="margin:0;">
-              <input type="checkbox" id="dtrNightshiftOrRepair"> 🌙 Requested Nightshift / Operations to Repair (Count O.T. past 7:00 PM / Sunday exceeding hours)
+              <input type="checkbox" id="dtrNightshiftOrRepair"> 🌙 Requested Nightshift / Operations to Fix, Install or Repair (Count O.T. past 7:00 PM / Sunday exceeding hours)
             </label>
           </div>
           <div class="field">
@@ -1348,7 +1355,7 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
             <div class="field"><label for="timeLogUnit">Unit (optional)</label><select id="timeLogUnit"><option value="">Unit (optional)</option></select></div>
           </div>
           <label class="check-row" style="margin:0 0 8px;">
-            <input type="checkbox" id="timeLogNightshiftOrRepair"> 🌙 Requested Nightshift / Operations to Repair (Count O.T. past 7:00 PM / Sunday exceeding hours)
+            <input type="checkbox" id="timeLogNightshiftOrRepair"> 🌙 Requested Nightshift / Operations to Fix, Install or Repair (Count O.T. past 7:00 PM / Sunday exceeding hours)
           </label>
           <div id="timeLogMessages" class="time-chat-log"></div>
           <div class="inline-actions" style="margin-top:8px;">
@@ -1976,7 +1983,7 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
       <div class="field"><label for="editDtrOut">Time End</label><input id="editDtrOut" type="time"></div>
     </div>
     <div class="field" style="margin-bottom:6px;">
-      <label class="check-row" style="margin:0;"><input id="editDtrNightshiftOrRepair" type="checkbox"> 🌙 Requested Nightshift / Operations to Repair (Count O.T. past 7:00 PM / Sunday exceeding hours)</label>
+      <label class="check-row" style="margin:0;"><input id="editDtrNightshiftOrRepair" type="checkbox"> 🌙 Requested Nightshift / Operations to Fix, Install or Repair (Count O.T. past 7:00 PM / Sunday exceeding hours)</label>
     </div>
     <div id="editDtrOvertimeWrap" class="field">
       <label class="check-row" style="cursor:default;"><input id="editDtrOvertimeApproved" type="checkbox" checked disabled> Overtime Approved (Always Approved)</label>

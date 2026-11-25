@@ -305,6 +305,7 @@ export const hooks: Record<string, (...args: any[]) => any> = {
   renderLiveOnlineMembers: () => {},
   closeSiteUnitsOverlay: () => {},
   renderPayroll: () => {},
+  evaluateDailySiteGeofence: () => {},
 };
 
 export const $ = (id: string): HTMLElement | null => document.getElementById(id);
@@ -812,26 +813,20 @@ export function calculateShiftBreakdown(
       : calculateDtrMinutes(firstTimeIn, cappedOut, null, opts);
 
   const regularMins = Math.min(standardMins, computedWorked);
-  let finalOtMins = Math.max(0, computedWorked - standardMins);
 
-  // Sunday regular hours: 10:00 AM–7:00 PM (9h); O.T. only if started before 9:00 AM or Nightshift/Repair Op requested (after 8pm/exceeding)
-  if (isSun && !nightshiftRepair) {
-    const startedBefore9Am = inMins !== null && inMins < 9 * 60;
-    if (!startedBefore9Am) {
-      finalOtMins = 0;
-    }
-  }
-
-  // Standard 9h shift anchor
+  // Standard 9h shift anchor:
+  // Mon–Sat: 8:00 AM–5:00 PM (or 7:00 AM–4:00 PM shift) | Sunday: 10:00 AM–7:00 PM
   const isSevenShift = !isSun && inMins !== null && inMins >= 6 * 60 + 30 && inMins < 7 * 60 + 45;
   const shiftStart = isSun ? 10 * 60 : (isSevenShift ? 7 * 60 : 8 * 60);
-  const shiftEnd = shiftStart + standardMins;
+  const shiftEnd = shiftStart + standardMins; // 1140 (7:00 PM) on Sunday
   const shiftStartLabel = isSun ? "10:00 AM" : (isSevenShift ? "7:00 AM" : "8:00 AM");
   const shiftEndLabel = isSun ? "7:00 PM" : (isSevenShift ? "4:00 PM" : "5:00 PM");
 
   let lateMins = 0;
   let inShiftWorkedMins = regularMins;
-  let grossOtMins = finalOtMins;
+  let grossOtMins = Math.max(0, computedWorked - standardMins);
+  let finalOtMins = grossOtMins;
+
   if (inMins !== null && outMins !== null) {
     let effOut = outMins;
     if (effOut < inMins) effOut += 1440;
@@ -840,14 +835,29 @@ export function calculateShiftBreakdown(
     inShiftWorkedMins = Math.max(0, Math.min(computedWorked, windowOut - effIn));
     lateMins = Math.max(0, standardMins - inShiftWorkedMins);
     if (isSun) {
-      const earlyBefore10 = inMins < shiftStart ? Math.max(0, shiftStart - inMins) : 0;
+      // Sunday O.T.: any hours worked before 10:00 AM OR beyond 7:00 PM when Operations Fix/Install/Repair/Nightshift is requested
+      const earlyBefore10 = inMins < shiftStart ? Math.max(0, Math.min(effOut, shiftStart) - inMins) : 0;
       const after7Pm = nightshiftRepair ? Math.max(0, effOut - shiftEnd) : 0;
-      grossOtMins = (!nightshiftRepair && inMins >= 9 * 60) ? 0 : (earlyBefore10 + after7Pm);
+      grossOtMins = earlyBefore10 + after7Pm;
+      finalOtMins = Math.min(Math.max(0, computedWorked - standardMins), grossOtMins);
     } else {
       grossOtMins = Math.max(0, effOut - shiftEnd);
+      finalOtMins = Math.max(0, computedWorked - standardMins);
     }
   } else {
     lateMins = Math.max(0, standardMins - computedWorked);
+    if (isSun) {
+      if (inMins !== null) {
+        const impliedOut = inMins + computedWorked;
+        const earlyBefore10 = inMins < shiftStart ? Math.max(0, Math.min(impliedOut, shiftStart) - inMins) : 0;
+        const after7Pm = nightshiftRepair ? Math.max(0, impliedOut - shiftEnd) : 0;
+        grossOtMins = earlyBefore10 + after7Pm;
+        finalOtMins = Math.min(Math.max(0, computedWorked - standardMins), grossOtMins);
+      } else if (!nightshiftRepair) {
+        grossOtMins = 0;
+        finalOtMins = 0;
+      }
+    }
   }
 
   return {
@@ -1415,7 +1425,7 @@ export function parseDtrJobMeta(
     if (!approvedBy) approvedBy = apprMatch[1].trim();
     text = text.slice(0, apprMatch.index).trim();
   }
-  if (/night\s*shift|operations?\s+to\s+repair|repair\s+op/i.test(approvedBy)) {
+  if (/night\s*shift|operations?\s+(?:to\s+)?(?:fix|install|repair)|(?:fix|install|repair)\s+op|ns[\s/_-]*repair/i.test(approvedBy)) {
     nightshiftRepair = true;
   }
   return { unitName, approvedBy, cleanJob: text, nightshiftRepair };
