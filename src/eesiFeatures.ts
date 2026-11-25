@@ -7,6 +7,7 @@ import {
   SITE_STATUS_OPTIONS,
   TimeLogNoticeMeta,
   UNIT_MANUAL_DEFAULTS,
+  applyRandomOpenStyle,
   avatarHtml,
   buildDtrJobWithApproval,
   buildLeaveReasonWithMeta,
@@ -135,7 +136,7 @@ import {
   threadTitle,
 } from "./eesiChat";
 import { exportPayslipPdf, exportPayslipXlsx } from "./eesiExport";
-import { phHolidays, PhHolidayItem, triggerAlert, triggerShiftAlert } from "./eesiSettings";
+import { phHolidays, PhHolidayItem, triggerAlert, triggerAndroidHapticTap, triggerShiftAlert } from "./eesiSettings";
 
 const SYSTEM_ANNOUNCEMENTS = [
   { title: "✨ GOOD VIBES", body: "Great teamwork builds great results. Stay positive, stay sharp, and have a safe, productive shift!" },
@@ -180,6 +181,8 @@ export function go(p: string, opts: { skipScrollReset?: boolean } = {}): void {
   if (!pageEl) { toast("Page not found"); return; }
   document.querySelectorAll(".page").forEach(el => el.classList.add("hidden"));
   pageEl.classList.remove("hidden");
+  applyRandomOpenStyle(pageEl);
+  triggerAndroidHapticTap();
   runtime.currentPage = p;
   $("settingsMenu")?.classList.add("hidden");
   document.querySelectorAll<HTMLElement>("nav.bottom button").forEach(btn => btn.classList.toggle("active", btn.dataset.page === p));
@@ -4143,6 +4146,9 @@ export function dtrTab(tab: "fill" | "time_log" | "preview" | "time_in" | "time_
   $("dtrFillTab")?.classList.toggle("active", normalized === "fill");
   $("dtrTimeLogTab")?.classList.toggle("active", normalized === "time_log");
   $("dtrPrevTab")?.classList.toggle("active", normalized === "preview");
+  const activeDtrPanel = normalized === "fill" ? $("dtrFill") : normalized === "time_log" ? $("dtrTimeLog") : $("dtrPreview");
+  applyRandomOpenStyle(activeDtrPanel);
+  triggerAndroidHapticTap();
   if (normalized === "fill") autoFillDtrFromSchedule(false);
   if (normalized === "preview") buildDtrPaper();
   if (normalized === "time_log") {
@@ -7399,6 +7405,8 @@ export function switchNoteTab(tab: "notes" | "recs"): void {
   $("recsPanel")?.classList.toggle("hidden", tab !== "recs");
   $("notesTab")?.classList.toggle("active", tab === "notes");
   $("recsTab")?.classList.toggle("active", tab === "recs");
+  applyRandomOpenStyle($(tab === "notes" ? "notesPanel" : "recsPanel"));
+  triggerAndroidHapticTap();
   if (tab === "recs") renderRecPickers();
   saveLastView();
 }
@@ -8827,6 +8835,22 @@ export function initFeatureWiring(): void {
       case "go-schedule": go("schedule"); return;
       case "go-leave": go("leave"); return;
       case "go-pending": go("pending"); return;
+    }
+  });
+
+  document.addEventListener("click", ev => {
+    const tabBtn = (ev.target as HTMLElement | null)?.closest<HTMLElement>(".tabs .tab, .seg button");
+    if (!tabBtn) return;
+    triggerAndroidHapticTap();
+    // Avoid double-animating dedicated tab handlers that already animate their specific panel
+    if (["dtrFillTab", "dtrTimeLogTab", "dtrPrevTab", "notesTab", "recsTab"].includes(tabBtn.id)) return;
+    const container = tabBtn.closest(".tabs, .seg");
+    const targetPanel =
+      (container?.nextElementSibling as HTMLElement | null) ||
+      tabBtn.closest(".card") ||
+      tabBtn.closest(".page");
+    if (targetPanel) {
+      requestAnimationFrame(() => applyRandomOpenStyle(targetPanel));
     }
   });
 

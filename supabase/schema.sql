@@ -441,9 +441,21 @@ CREATE TABLE IF NOT EXISTS public.push_subscriptions (
   p256dh TEXT,
   auth TEXT,
   user_agent TEXT,
+  platform TEXT NOT NULL DEFAULT 'android',
+  sound_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  sound_name TEXT NOT NULL DEFAULT 'bright',
+  vibration_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  is_installed BOOLEAN NOT NULL DEFAULT FALSE,
+  installed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE public.push_subscriptions ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT 'android';
+ALTER TABLE public.push_subscriptions ADD COLUMN IF NOT EXISTS sound_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE public.push_subscriptions ADD COLUMN IF NOT EXISTS sound_name TEXT NOT NULL DEFAULT 'bright';
+ALTER TABLE public.push_subscriptions ADD COLUMN IF NOT EXISTS vibration_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE public.push_subscriptions ADD COLUMN IF NOT EXISTS is_installed BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE public.push_subscriptions ADD COLUMN IF NOT EXISTS installed_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS public.employee_locations (
   user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -690,6 +702,57 @@ BEGIN
     updated_at = NOW();
 END;
 $$;
+
+DROP FUNCTION IF EXISTS public.register_android_device_prefs(TEXT, BOOLEAN, TEXT, BOOLEAN, BOOLEAN, TEXT);
+CREATE OR REPLACE FUNCTION public.register_android_device_prefs(
+  p_platform TEXT DEFAULT 'android',
+  p_sound_enabled BOOLEAN DEFAULT TRUE,
+  p_sound_name TEXT DEFAULT 'bright',
+  p_vibration_enabled BOOLEAN DEFAULT TRUE,
+  p_is_installed BOOLEAN DEFAULT FALSE,
+  p_user_agent TEXT DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_endpoint TEXT;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RETURN;
+  END IF;
+  v_endpoint := 'device:' || auth.uid()::TEXT || ':' || COALESCE(NULLIF(TRIM(p_platform), ''), 'android');
+  INSERT INTO public.push_subscriptions (
+    user_id, endpoint, user_agent, platform, sound_enabled, sound_name, vibration_enabled, is_installed, installed_at, updated_at
+  )
+  VALUES (
+    auth.uid(),
+    v_endpoint,
+    p_user_agent,
+    COALESCE(NULLIF(TRIM(p_platform), ''), 'android'),
+    COALESCE(p_sound_enabled, TRUE),
+    COALESCE(NULLIF(TRIM(p_sound_name), ''), 'bright'),
+    COALESCE(p_vibration_enabled, TRUE),
+    COALESCE(p_is_installed, FALSE),
+    CASE WHEN COALESCE(p_is_installed, FALSE) THEN NOW() ELSE NULL END,
+    NOW()
+  )
+  ON CONFLICT (endpoint) DO UPDATE SET
+    user_id = auth.uid(),
+    user_agent = COALESCE(EXCLUDED.user_agent, public.push_subscriptions.user_agent),
+    platform = EXCLUDED.platform,
+    sound_enabled = EXCLUDED.sound_enabled,
+    sound_name = EXCLUDED.sound_name,
+    vibration_enabled = EXCLUDED.vibration_enabled,
+    is_installed = EXCLUDED.is_installed OR public.push_subscriptions.is_installed,
+    installed_at = COALESCE(public.push_subscriptions.installed_at, EXCLUDED.installed_at),
+    updated_at = NOW();
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.register_android_device_prefs(TEXT, BOOLEAN, TEXT, BOOLEAN, BOOLEAN, TEXT) TO authenticated;
 
 DROP FUNCTION IF EXISTS public.get_or_create_direct_thread(UUID);
 CREATE OR REPLACE FUNCTION public.get_or_create_direct_thread(other_user_id UUID)

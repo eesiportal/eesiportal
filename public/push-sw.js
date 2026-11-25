@@ -3,22 +3,46 @@ self.addEventListener("push", (event) => {
   try {
     payload = event.data ? event.data.json() : {};
   } catch {
-    payload = { title: "EESI Ops", body: event.data ? event.data.text() : "New update" };
+    payload = { title: "EESI Elevators, Inc.", body: event.data ? event.data.text() : "New update" };
   }
-  const title = payload.title || "EESI Ops";
+  const title = payload.title || "EESI Elevators, Inc.";
+  const body = payload.body || "";
+  const vibratePattern = Array.isArray(payload.vibrate) ? payload.vibrate : [260, 110, 260, 110, 380];
   const options = {
-    body: payload.body || "",
+    body,
     icon: "/pwa-192x192.png",
     badge: "/pwa-192x192.png",
+    vibrate: vibratePattern,
+    silent: false,
+    timestamp: Date.now(),
+    requireInteraction: !!payload.requireInteraction,
     data: {
       threadId: payload.threadId || payload.thread_id || null,
       page: payload.page || null,
       scheduleId: payload.scheduleId || payload.schedule_id || null
     },
     tag: payload.tag || "eesi-notification",
-    renotify: true
+    renotify: true,
+    actions: [{ action: "open", title: "Open App" }]
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+
+  event.waitUntil(
+    Promise.all([
+      self.registration.showNotification(title, options),
+      self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+        clientList.forEach((client) => {
+          try {
+            client.postMessage({
+              type: "push-received",
+              title,
+              body,
+              vibrate: vibratePattern
+            });
+          } catch {}
+        });
+      })
+    ])
+  );
 });
 
 self.addEventListener("notificationclick", (event) => {

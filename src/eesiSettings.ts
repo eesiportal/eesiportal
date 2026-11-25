@@ -244,7 +244,7 @@ export function requestNotificationPermission(): void {
   }
 }
 
-export async function showBackgroundNotification(title: string, body: string, vibratePattern: number[] = [200, 100, 200]): Promise<void> {
+export async function showBackgroundNotification(title: string, body: string, vibratePattern: number[] = [260, 110, 260, 110, 380]): Promise<void> {
   if (document.visibilityState === "visible") return;
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   if ("serviceWorker" in navigator) {
@@ -254,7 +254,8 @@ export async function showBackgroundNotification(title: string, body: string, vi
         body,
         icon: "/pwa-192x192.png",
         badge: "/pwa-192x192.png",
-        vibrate: vibratePattern,
+        vibrate: notificationSettings().vibration ? vibratePattern : undefined,
+        silent: false,
         tag: "eesi-notification",
         renotify: true,
       } as NotificationOptions);
@@ -279,7 +280,8 @@ export async function showShiftReminderNotification(
         body,
         icon: "/pwa-192x192.png",
         badge: "/pwa-192x192.png",
-        vibrate: vibratePattern,
+        vibrate: s.vibration ? vibratePattern : undefined,
+        silent: false,
         tag,
         renotify: true,
         requireInteraction: true,
@@ -725,7 +727,17 @@ export function playSettingSound(silent = false): void {
 
 function vibrateForNotification(pattern: number[] = [220, 100, 220]): void {
   const s = notificationSettings();
-  if (s.enabled && s.vibration && "vibrate" in navigator) navigator.vibrate(pattern);
+  if (s.enabled && s.vibration && "vibrate" in navigator) {
+    try { navigator.vibrate(pattern); } catch {}
+  }
+}
+
+export function triggerAndroidHapticTap(): void {
+  const s = notificationSettings();
+  if (!s.vibration || !("vibrate" in navigator)) return;
+  const ua = (navigator as any).userActivation;
+  if (ua && !ua.hasBeenActive) return;
+  try { navigator.vibrate(12); } catch {}
 }
 
 let lastAlertAt = 0;
@@ -1181,6 +1193,10 @@ export function checkAppLock(): void {
 
 /* ==================== PWA INSTALL PROMPT (ANDROID / DESKTOP / IOS) ==================== */
 let deferredInstallPrompt: any = null;
+let androidBannerDismissed = false;
+try {
+  androidBannerDismissed = sessionStorage.getItem("eesi-android-banner-dismissed") === "1";
+} catch {}
 
 function isStandaloneMode(): boolean {
   return (
@@ -1191,28 +1207,118 @@ function isStandaloneMode(): boolean {
 function isIosDevice(): boolean {
   return /iphone|ipad|ipod/i.test(navigator.userAgent) && !(window as any).MSStream;
 }
+function isAndroidDevice(): boolean {
+  return /android/i.test(navigator.userAgent);
+}
+
+export async function syncAndroidDevicePrefsToDb(installed?: boolean): Promise<void> {
+  if (!state.userId || !runtime.client || !navigator.onLine) return;
+  const s = notificationSettings();
+  const soundName = localStorage.getItem("eesi-sound") || "bright";
+  const platform = isAndroidDevice() ? "android" : isIosDevice() ? "ios" : "web";
+  try {
+    await runtime.client.rpc("register_android_device_prefs", {
+      p_platform: platform,
+      p_sound_enabled: s.enabled && soundName !== "off",
+      p_sound_name: soundName,
+      p_vibration_enabled: s.vibration,
+      p_is_installed: installed ?? isStandaloneMode(),
+      p_user_agent: navigator.userAgent,
+    });
+  } catch {}
+}
+
+export async function activateAndroidSoundAndVibration(): Promise<void> {
+  try {
+    localStorage.setItem("eesi-notifications", "on");
+    localStorage.setItem("eesi-vibration", "on");
+    const curSound = localStorage.getItem("eesi-sound") || "bright";
+    if (curSound === "off") localStorage.setItem("eesi-sound", "bright");
+  } catch {}
+
+  const sn = $("settingNotifications") as HTMLInputElement | null;
+  const sv = $("settingVibration") as HTMLInputElement | null;
+  const ss = $("settingSound") as HTMLSelectElement | null;
+  if (sn) sn.checked = true;
+  if (sv) sv.checked = true;
+  if (ss && ss.value === "off") ss.value = "bright";
+
+  const ctx = getOrCreateAudioContext();
+  if (ctx && ctx.state === "suspended") {
+    try { await ctx.resume(); } catch {}
+  }
+
+  let perm: NotificationPermission = "Notification" in window ? Notification.permission : "denied";
+  if ("Notification" in window && Notification.permission !== "granted") {
+    try { perm = await Notification.requestPermission(); } catch {}
+  }
+
+  if ("vibrate" in navigator) {
+    try { navigator.vibrate([220, 90, 220, 90, 320]); } catch {}
+  }
+  playSettingSound(true);
+  if (state.userId) {
+    void enablePush(true);
+    void syncAndroidDevicePrefsToDb(isStandaloneMode());
+  }
+
+  const stEl = $("androidAlertsStatus");
+  if (stEl) {
+    stEl.textContent = perm === "granted"
+      ? "✅ Sound chime & vibration enabled! Alerts will ring and vibrate."
+      : "🔊 In-app sound & vibration active! Allow browser notifications for lock-screen push alerts.";
+  }
+  toast("Android sound & vibration activated!");
+}
 
 export function refreshPwaInstallUi(): void {
   const standalone = isStandaloneMode();
   const ios = isIosDevice();
-  const canShow = !standalone && (!!deferredInstallPrompt || ios);
+  const android = isAndroidDevice();
+  const canShowPrompt = !standalone && (!!deferredInstallPrompt || ios || android);
   ["headerInstallBtn", "authInstallBtn", "settingsInstallBtn"].forEach(id => {
     const el = $(id);
     if (!el) return;
     if (standalone) {
       el.classList.add("hidden");
     } else if (id === "settingsInstallBtn") {
-      // Always show in settings unless already installed so user can trigger native prompt or read mobile install guide
       el.classList.remove("hidden");
     } else {
-      el.classList.toggle("hidden", !canShow);
+      el.classList.toggle("hidden", !canShowPrompt);
     }
   });
+
+  const banner = $("androidInstallBanner");
+  if (banner) {
+    const showBanner = !standalone && !androidBannerDismissed && (android || !!deferredInstallPrompt || ios);
+    banner.classList.toggle("hidden", !showBanner);
+  }
+
+  const sheetInstallBtn = $("androidSheetInstallBtn");
+  if (sheetInstallBtn) {
+    if (standalone) {
+      sheetInstallBtn.classList.add("hidden");
+    } else {
+      sheetInstallBtn.classList.remove("hidden");
+      sheetInstallBtn.textContent = deferredInstallPrompt
+        ? "📲 Install Official Android App Now"
+        : ios
+          ? "📲 Follow Safari Steps Below to Install"
+          : "📲 How to Install on Android Home Screen";
+    }
+  }
 }
 
-export async function triggerPwaInstall(): Promise<void> {
+export function dismissAndroidInstallBanner(): void {
+  androidBannerDismissed = true;
+  try { sessionStorage.setItem("eesi-android-banner-dismissed", "1"); } catch {}
+  $("androidInstallBanner")?.classList.add("hidden");
+}
+
+export async function installFromAndroidSheet(): Promise<void> {
   if (isStandaloneMode()) {
-    toast("App is already installed!");
+    toast("EESI Elevators, Inc. is already installed!");
+    closeIosInstallModal();
     return;
   }
   if (deferredInstallPrompt) {
@@ -1221,16 +1327,45 @@ export async function triggerPwaInstall(): Promise<void> {
       const { outcome } = await deferredInstallPrompt.userChoice;
       deferredInstallPrompt = null;
       refreshPwaInstallUi();
-      if (outcome === "accepted") toast("Installing EESI Elevators on your device…");
+      if (outcome === "accepted") {
+        void activateAndroidSoundAndVibration();
+        void syncAndroidDevicePrefsToDb(true);
+        closeIosInstallModal();
+        toast("Installing official EESI Elevators, Inc. app…");
+      }
       return;
     } catch {}
   }
-  if (isIosDevice()) {
-    $("iosInstallOverlay")?.classList.remove("hidden");
+  const steps = $("androidInstallStepsBox");
+  if (steps) {
+    steps.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    steps.style.borderColor = "var(--cyan)";
+  }
+  toast(isIosDevice() ? "Tap Safari Share (↑) → Add to Home Screen" : "Tap Chrome menu ⋮ → Install app / Add to Home screen");
+}
+
+export async function triggerPwaInstall(): Promise<void> {
+  if (isStandaloneMode()) {
+    toast("EESI Elevators, Inc. is already installed!");
     return;
   }
-  // Fallback manual install instructions for mobile browsers before beforeinstallprompt fires
+  if (!isAndroidDevice() && !isIosDevice() && deferredInstallPrompt) {
+    try {
+      deferredInstallPrompt.prompt();
+      const { outcome } = await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt = null;
+      refreshPwaInstallUi();
+      if (outcome === "accepted") {
+        void activateAndroidSoundAndVibration();
+        void syncAndroidDevicePrefsToDb(true);
+        toast("Installing EESI Elevators, Inc.…");
+      }
+      return;
+    } catch {}
+  }
+  // Open Android Material-style Install & Sound/Vibration bottom sheet
   $("iosInstallOverlay")?.classList.remove("hidden");
+  refreshPwaInstallUi();
 }
 
 export function closeIosInstallModal(): void {
@@ -1273,7 +1408,12 @@ export function initPwaInstall(): void {
   window.addEventListener("appinstalled", () => {
     deferredInstallPrompt = null;
     refreshPwaInstallUi();
-    toast("EESI Elevators installed on your home screen!");
+    if ("vibrate" in navigator) {
+      try { navigator.vibrate([180, 80, 260]); } catch {}
+    }
+    playSettingSound(true);
+    void syncAndroidDevicePrefsToDb(true);
+    toast("EESI Elevators, Inc. installed with sound & vibration alerts!");
   });
   window.matchMedia("(display-mode: standalone)").addEventListener("change", refreshPwaInstallUi);
   refreshPwaInstallUi();
@@ -1342,6 +1482,13 @@ export function initSettingsWiring(): void {
     navigator.serviceWorker.addEventListener("message", e => {
       if (e.data && e.data.type === "open-thread") openPushThread(e.data.threadId);
       if (e.data && e.data.type === "open-page" && e.data.page) hooks.go?.(String(e.data.page));
+      if (e.data && e.data.type === "push-received") {
+        triggerAlert(
+          String(e.data.title || "EESI Elevators, Inc."),
+          String(e.data.body || ""),
+          Array.isArray(e.data.vibrate) ? e.data.vibrate : [260, 110, 260, 110, 380]
+        );
+      }
     });
   }
 

@@ -4,10 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#060e1f">
-<title>EESI Elevators</title>
-<meta name="description" content="EESI Elevators operations console with reports, DTR half-sheet export, scheduling, PMS checklists, live GPS map, and realtime chat.">
-<meta property="og:title" content="EESI Elevators">
-<meta property="og:description" content="EESI Elevators operations console with reports, DTR half-sheet export, scheduling, PMS checklists, live GPS map, and realtime chat.">
+<meta name="application-name" content="EESI Elevators, Inc.">
+<title>EESI Elevators, Inc. — Official Operations Console</title>
+<meta name="description" content="Official EESI Elevators, Inc. operations console with reports, DTR half-sheet export, scheduling, PMS checklists, live GPS map, sound &amp; vibration alerts, and realtime chat.">
+<meta property="og:title" content="EESI Elevators, Inc. — Official Operations Console">
+<meta property="og:description" content="Official EESI Elevators, Inc. operations console with reports, DTR half-sheet export, scheduling, PMS checklists, live GPS map, sound &amp; vibration alerts, and realtime chat.">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -746,6 +747,56 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
 .payslip-table td.ps-net-amt{border-top:1.5px solid #000000!important;border-bottom:3px double #000000!important;font-weight:700!important}
 .payslip-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
 .payslip-actions button{flex:1 1 140px}
+
+/* Random Page & Tab Open Styles */
+@keyframes openFadeUp{from{opacity:0;transform:translate3d(0,18px,0)}to{opacity:1;transform:none}}
+@keyframes openSlideLeft{from{opacity:0;transform:translate3d(26px,0,0)}to{opacity:1;transform:none}}
+@keyframes openSlideRight{from{opacity:0;transform:translate3d(-26px,0,0)}to{opacity:1;transform:none}}
+@keyframes openZoomIn{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:scale(1)}}
+@keyframes openFlipIn{from{opacity:0;transform:perspective(900px) rotateX(6deg) translateY(10px)}to{opacity:1;transform:none}}
+@keyframes openDropIn{from{opacity:0;transform:translate3d(0,-16px,0) scale(.98)}to{opacity:1;transform:none}}
+@keyframes openSpringPop{0%{opacity:0;transform:scale(.92)}65%{opacity:1;transform:scale(1.015)}100%{opacity:1;transform:scale(1)}}
+@keyframes openBlurReveal{from{opacity:0;filter:blur(5px);transform:scale(.98)}to{opacity:1;filter:blur(0);transform:none}}
+
+.open-style-0{animation:openFadeUp .32s cubic-bezier(.22,1,.36,1) both}
+.open-style-1{animation:openSlideLeft .3s cubic-bezier(.22,1,.36,1) both}
+.open-style-2{animation:openSlideRight .3s cubic-bezier(.22,1,.36,1) both}
+.open-style-3{animation:openZoomIn .28s cubic-bezier(.22,1,.36,1) both}
+.open-style-4{animation:openFlipIn .34s cubic-bezier(.22,1,.36,1) both}
+.open-style-5{animation:openDropIn .3s cubic-bezier(.22,1,.36,1) both}
+.open-style-6{animation:openSpringPop .36s cubic-bezier(.22,1,.36,1) both}
+.open-style-7{animation:openBlurReveal .3s ease-out both}
+@media(prefers-reduced-motion:reduce){
+  .open-style-0,.open-style-1,.open-style-2,.open-style-3,.open-style-4,.open-style-5,.open-style-6,.open-style-7{animation:none!important}
+}
+
+/* Android Material-Style Install Banner & Bottom Sheet */
+.android-install-banner{
+  position:fixed;left:12px;right:12px;bottom:calc(68px + env(safe-area-inset-bottom));z-index:28;
+  max-width:520px;margin:0 auto;display:flex;align-items:center;gap:10px;padding:10px 12px;
+  border-radius:18px;background:linear-gradient(135deg,#0f2448,#091731);
+  border:1px solid rgba(56,189,248,.42);box-shadow:0 12px 32px rgba(0,0,0,.55);
+  animation:openFadeUp .32s cubic-bezier(.22,1,.36,1) both;
+}
+.android-install-banner img{width:42px;height:42px;border-radius:11px;flex:none;border:1px solid rgba(255,255,255,.18)}
+.android-install-meta{flex:1;min-width:0}
+.android-install-title{font-weight:700;font-size:13px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.android-install-sub{font-size:11.5px;color:#a5c4f3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.android-sheet-dialog{align-items:flex-end!important;padding:0!important}
+.android-sheet-card{
+  width:min(540px,100%)!important;margin:0 auto!important;
+  border-radius:26px 26px 0 0!important;padding:10px 18px calc(20px + env(safe-area-inset-bottom))!important;
+  border:1px solid rgba(56,189,248,.38)!important;border-bottom:0!important;
+  background:linear-gradient(180deg,#0f2448 0%,#08142b 100%)!important;
+  box-shadow:0 -14px 44px rgba(0,0,0,.65)!important;
+  animation:openFadeUp .28s cubic-bezier(.22,1,.36,1) both;
+}
+.android-sheet-handle{width:42px;height:4px;border-radius:999px;background:rgba(255,255,255,.28);margin:2px auto 14px}
+.android-app-hero{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.android-app-hero img{width:56px;height:56px;border-radius:14px;border:1px solid rgba(255,255,255,.22);box-shadow:0 6px 18px rgba(0,0,0,.4)}
+.android-official-tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:#4ade80;margin-top:2px}
+.android-feature-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0 12px}
+.android-feature-tile{padding:8px 10px;border-radius:12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);font-size:12px;color:#e8f0ff}
 </style>
 </head>
 <body>
@@ -927,7 +978,7 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
       <h3>Notifications</h3>
       <button id="enablePushBtn" class="btn" type="button" style="width:100%;margin:8px 0">🔔 Enable Notifications, Sound &amp; Push</button>
       <label><input id="settingNotifications" type="checkbox" checked> In-app notifications</label>
-      <label><input id="settingVibration" type="checkbox"> Vibration (with or without sound)</label>
+      <label><input id="settingVibration" type="checkbox" checked> Vibration (with or without sound)</label>
       <div style="display:flex;gap:8px;margin:8px 0">
         <button id="builtInSoundChoice" class="btn" type="button" style="flex:1">Built-in sounds</button>
         <button id="customSoundChoice" class="gray" type="button" style="flex:1">Custom ringtone</button>
@@ -971,8 +1022,8 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
       <button class="gray" type="button" style="width:100%" onclick="previewNotificationSound()">Preview sound / vibration</button>
     </div>
 
-    <h3>Phone App &amp; Account</h3>
-    <button id="settingsInstallBtn" class="btn" type="button" style="width:100%" onclick="triggerPwaInstall()">📲 Install App on Phone</button>
+    <h3>Official Android &amp; Phone App</h3>
+    <button id="settingsInstallBtn" class="btn" type="button" style="width:100%" onclick="triggerPwaInstall()">🤖 Install Android / Phone App</button>
     <button class="gray" type="button" style="width:100%" onclick="changePassword()">Change password</button>
     <button class="red" type="button" style="width:100%" onclick="signOut()">Sign out</button>
   </div>
@@ -1751,6 +1802,16 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
     </div>
   </div>
 
+  <div id="androidInstallBanner" class="android-install-banner hidden" role="region" aria-label="Install Official Android App">
+    <img src="/pwa-192x192.png" alt="EESI Ops">
+    <div class="android-install-meta">
+      <div class="android-install-title">EESI Elevators, Inc. · Official</div>
+      <div class="android-install-sub">Install Android App · Sound &amp; Vibration Alerts</div>
+    </div>
+    <button class="btn small-btn" type="button" onclick="triggerPwaInstall()">Install</button>
+    <button class="gray small-btn" type="button" onclick="dismissAndroidInstallBanner()" aria-label="Dismiss install banner">✕</button>
+  </div>
+
   <nav class="bottom">
     <button type="button" data-page="home" class="active" onclick="go('home')"><span>🏠</span>Home</button>
     <button type="button" data-page="schedule" onclick="go('schedule')"><span>📅</span>Schedule</button>
@@ -1901,19 +1962,31 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
   </div>
 </div>
 
-<div id="iosInstallOverlay" class="dialog hidden" style="z-index:360" role="dialog" aria-modal="true" aria-labelledby="iosInstallTitle">
-  <div class="card">
-    <h2 id="iosInstallTitle" style="margin-top:0;">📲 Install EESI Elevators on Your Phone</h2>
-    <p class="muted" style="line-height:1.55;">Install this app to your Home Screen for full-screen access, instant launch, and device biometrics:</p>
-    <div class="item" style="text-align:left;line-height:1.6;">
-      <b>Android (Chrome / Edge):</b><br>
-      Tap browser menu <b>⋮</b> → <b>Install app</b> or <b>Add to Home screen</b>.<br><br>
-      <b>iPhone / iPad (Safari):</b><br>
-      1. Tap the <b>Share</b> button (square with arrow ↑).<br>
-      2. Scroll down and tap <b>Add to Home Screen</b>.<br>
-      3. Tap <b>Add</b> in the top-right corner.
+<div id="iosInstallOverlay" class="dialog hidden android-sheet-dialog" style="z-index:360" role="dialog" aria-modal="true" aria-labelledby="iosInstallTitle">
+  <div class="card android-sheet-card">
+    <div class="android-sheet-handle"></div>
+    <div class="android-app-hero">
+      <img src="/pwa-192x192.png" alt="EESI Elevators, Inc.">
+      <div>
+        <h2 id="iosInstallTitle" style="margin:0;font-size:17px;">EESI Elevators, Inc.</h2>
+        <div class="android-official-tag">✓ Official Android &amp; Mobile App</div>
+        <div class="muted" style="font-size:12px;">Standalone app with sound, vibration &amp; live GPS</div>
+      </div>
     </div>
-    <button class="btn" type="button" style="width:100%" onclick="closeIosInstallModal()">Got it</button>
+    <div class="android-feature-grid">
+      <div class="android-feature-tile">🔊 <b>Sound Alerts</b><br><span class="muted" style="font-size:11px;">Ringtone on messages &amp; mentions</span></div>
+      <div class="android-feature-tile">📳 <b>Vibrate Alerts</b><br><span class="muted" style="font-size:11px;">Android haptic &amp; pulse alerts</span></div>
+    </div>
+    <button id="activateAndroidAlertsBtn" class="green" type="button" style="width:100%;margin-bottom:8px;" onclick="activateAndroidSoundAndVibration()">🔔 Activate &amp; Test Sound + Vibration</button>
+    <p id="androidAlertsStatus" class="muted" style="font-size:12px;margin:0 0 10px;"></p>
+    <button id="androidSheetInstallBtn" class="btn" type="button" style="width:100%;margin-bottom:10px;" onclick="installFromAndroidSheet()">📲 Install on Android Home Screen</button>
+    <div id="androidInstallStepsBox" class="item" style="text-align:left;line-height:1.55;font-size:12.5px;margin-bottom:10px;">
+      <b>Android (Chrome / Edge / Samsung Internet):</b><br>
+      Tap the Install button above or tap browser menu <b>⋮</b> → <b>Install app</b> / <b>Add to Home screen</b>.<br><br>
+      <b>iPhone / iPad (Safari):</b><br>
+      Tap <b>Share</b> (↑) → <b>Add to Home Screen</b> → <b>Add</b>.
+    </div>
+    <button class="gray" type="button" style="width:100%" onclick="closeIosInstallModal()">Close</button>
   </div>
 </div>
 

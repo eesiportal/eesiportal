@@ -30,6 +30,7 @@ import {
   val,
 } from "./eesiTypes";
 import {
+  activateAndroidSoundAndVibration,
   applyDisplaySettings,
   applyTheme,
   applyWatermark,
@@ -38,10 +39,12 @@ import {
   closeIosInstallModal,
   closePinSetup,
   disableBiometricLock,
+  dismissAndroidInstallBanner,
   enableBiometricLock,
   enablePush,
   initPwaInstall,
   initSettingsWiring,
+  installFromAndroidSheet,
   openPinSetup,
   playSettingSound,
   renderDecor,
@@ -52,6 +55,7 @@ import {
   startClock,
   stopSettingSound,
   submitPinSetup,
+  syncAndroidDevicePrefsToDb,
   syncPushSession,
   toggleSettingsMenu,
   toggleTheme,
@@ -730,6 +734,9 @@ function exposeWindowGlobals(): void {
     closePinSetup,
     submitPinSetup,
     previewNotificationSound: () => playSettingSound(false),
+    activateAndroidSoundAndVibration,
+    dismissAndroidInstallBanner,
+    installFromAndroidSheet,
     changePassword,
     closeChangePasswordModal,
     submitChangePassword,
@@ -1166,6 +1173,7 @@ async function boot(session: any): Promise<void> {
     if (!state.booted) return;
     syncPushSession(session);
     enablePush(true);
+    void syncAndroidDevicePrefsToDb();
     const openedFromPush = await openStartupThread();
     if (!openedFromPush) await restoreLastView();
   } finally {

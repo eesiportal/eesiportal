@@ -491,11 +491,38 @@ export function confirmDialog(message: string, title = "Confirm"): Promise<boole
   });
 }
 
+const OPEN_STYLE_CLASSES = [
+  "open-style-0",
+  "open-style-1",
+  "open-style-2",
+  "open-style-3",
+  "open-style-4",
+  "open-style-5",
+  "open-style-6",
+  "open-style-7",
+];
+let lastOpenStyleIndex = -1;
+
+export function applyRandomOpenStyle(el: HTMLElement | null): void {
+  if (!el) return;
+  el.classList.remove(...OPEN_STYLE_CLASSES);
+  let idx = Math.floor(Math.random() * OPEN_STYLE_CLASSES.length);
+  if (idx === lastOpenStyleIndex && OPEN_STYLE_CLASSES.length > 1) {
+    idx = (idx + 1 + Math.floor(Math.random() * (OPEN_STYLE_CLASSES.length - 1))) % OPEN_STYLE_CLASSES.length;
+  }
+  lastOpenStyleIndex = idx;
+  void el.offsetWidth;
+  el.classList.add(OPEN_STYLE_CLASSES[idx]);
+}
+
 export function openSheet(html: string): void {
   const body = $("sheetBody");
   const sheet = $("sheet");
   if (body) body.innerHTML = html;
-  if (sheet) sheet.classList.remove("hidden");
+  if (sheet) {
+    sheet.classList.remove("hidden");
+    applyRandomOpenStyle(sheet.querySelector<HTMLElement>(".card"));
+  }
 }
 export function closeSheet(): void {
   const sheet = $("sheet");
