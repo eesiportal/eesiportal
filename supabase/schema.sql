@@ -168,7 +168,9 @@ CREATE TABLE IF NOT EXISTS public.schedules (
   priority TEXT NOT NULL DEFAULT 'Normal',
   notes TEXT,
   created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 ALTER TABLE public.schedules ADD COLUMN IF NOT EXISTS region TEXT;
 ALTER TABLE public.schedules ADD COLUMN IF NOT EXISTS scheduled_date DATE;
@@ -178,6 +180,24 @@ ALTER TABLE public.schedules ADD COLUMN IF NOT EXISTS time_out TEXT;
 ALTER TABLE public.schedules ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'Normal';
 ALTER TABLE public.schedules ADD COLUMN IF NOT EXISTS notes TEXT;
 ALTER TABLE public.schedules ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.schedules ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE public.schedules ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+
+CREATE OR REPLACE FUNCTION public.touch_schedules_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.updated_at := NOW();
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_schedules_updated_at ON public.schedules;
+CREATE TRIGGER trg_schedules_updated_at
+  BEFORE UPDATE ON public.schedules
+  FOR EACH ROW
+  EXECUTE FUNCTION public.touch_schedules_updated_at();
 
 CREATE TABLE IF NOT EXISTS public.service_delivery_reports (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

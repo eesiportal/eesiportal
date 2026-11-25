@@ -203,6 +203,7 @@ import {
   closeTimemarkTemplatesDrawer,
   closeUnitManualOverlay,
   completeDtrExportStep,
+  copyDailyScheduleSummary,
   cycleTimemarkZoom,
   deleteAdminMember,
   deleteAllNotices,
@@ -215,6 +216,7 @@ import {
   downloadPayslipPdf,
   dtrTab,
   editLeaveRequest,
+  editSchedule,
   editTimemarkNotesText,
   editUnit,
   ensureAmcbUnitsSeeded,
@@ -224,6 +226,7 @@ import {
   focusTimemarkAt,
   go,
   initFeatureWiring,
+  isCurrentUserMentionedInSchedule,
   loadPayslipIntoEditor,
   loadSavedDrawnSignature,
   loadSavedSignaturePhoto,
@@ -310,6 +313,9 @@ import {
   selectTimemarkTemplate,
   sendTimeLogNote,
   setAdminRoleFilter,
+  setNoticesFilter,
+  setScheduleFilter,
+  setScheduleSearch,
   setTimeLogMode,
   setTimemarkAccentColor,
   setTimemarkAutoFlip,
@@ -719,6 +725,7 @@ function registerHooks(): void {
     closeSiteUnitsOverlay,
     renderPayroll,
     evaluateDailySiteGeofence,
+    isUserMentionedInSchedule: isCurrentUserMentionedInSchedule,
   });
 }
 
@@ -748,6 +755,11 @@ function exposeWindowGlobals(): void {
     renderScheduleSiteOptions,
     renderScheduleUnitOptions,
     saveSchedule,
+    editSchedule,
+    setScheduleFilter,
+    setScheduleSearch,
+    copyDailyScheduleSummary,
+    setNoticesFilter,
     clearScheduleStatement,
     openScheduleFormOverlay,
     closeScheduleFormOverlay,
@@ -1191,6 +1203,11 @@ function resetState(): void {
   });
   resetDataLoadFlags();
   runtime.editingAnnouncementId = null;
+  runtime.editingScheduleId = null;
+  runtime.editingScheduleMeta = null;
+  runtime.scheduleFilter = "all";
+  runtime.scheduleSearch = "";
+  runtime.noticesFilter = "all";
   runtime.editingReportId = null;
   runtime.editingExistingUrls = [];
   runtime.editingUnitId = null;

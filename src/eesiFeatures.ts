@@ -89,6 +89,7 @@ import {
   haversineMeters,
   initAddSitePinPicker,
   initSitesMapOverview,
+  isCurrentUserMentioned,
   isNoticeDeleted,
   isNoticeMarkedRead,
   loadAnnouncements,
@@ -383,20 +384,21 @@ function sessionBadge(s: any): string {
   if (st === "soon") return '<span class="sess-badge soon">⏳ UPCOMING</span>';
   return "";
 }
+export function isCurrentUserMentionedInSchedule(s: any): boolean {
+  if (!s || !state.userId) return false;
+  const tags = parseScheduleTags(s.notes);
+  const myName = (state.profile?.full_name || "").trim().toLowerCase();
+  if (myName && tags.assigned.some(n => doesAssignedTokenMatchUser(n, myName))) {
+    return true;
+  }
+  const combined = [s.title || "", tags.cleanNotes, tags.assigned.join(" ")].filter(Boolean).join(" ");
+  return isCurrentUserMentioned(combined);
+}
+
 export function visibleSchedules(): any[] {
   const list = isAdmin()
     ? [...state.schedules]
-    : (() => {
-        const myName = (state.profile?.full_name || "").trim().toLowerCase();
-        if (!myName) return [];
-        const escaped = myName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const nameRegex = new RegExp("(^|[^a-z0-9])" + escaped + "([^a-z0-9]|$)", "i");
-        return state.schedules.filter(s => {
-          const tags = parseScheduleTags(s.notes);
-          if (tags.assigned.some(n => doesAssignedTokenMatchUser(n, myName))) return true;
-          return nameRegex.test((s.title || "") + " " + tags.cleanNotes);
-        });
-      })();
+    : state.schedules.filter(isCurrentUserMentionedInSchedule);
 
   return list.sort((a, b) => {
     const da = String(a.scheduled_date || "9999-12-31");
@@ -416,7 +418,7 @@ export function visibleSchedules(): any[] {
 
 export function checkUpcomingShiftReminders(): void {
   if (!state.userId || !state.schedules?.length) return;
-  const list = visibleSchedules();
+  const list = (state.schedules || []).filter(isCurrentUserMentionedInSchedule);
   if (!list.length) return;
 
   const now = Date.now();
@@ -457,16 +459,26 @@ export function getNoticeItems(): any[] {
     key: "ann:" + a.id, date: a.created_at, icon: "📢",
     title: a.title || "Announcement", body: a.body || "",
     label: "Announcement", act: "go-announcements",
+    isMention: isCurrentUserMentioned(`${a.title || ""} ${a.body || ""}`),
     isRead: isNoticeMarkedRead("ann:" + a.id),
   }));
-  visibleSchedules().forEach(s => {
+  (state.schedules || []).filter(isCurrentUserMentionedInSchedule).forEach(s => {
+    const tags = parseScheduleTags(s.notes);
     const timeRange = s.time_in && s.time_out
       ? `${formatScheduleTimeDisplay(s.time_in)}–${formatScheduleTimeDisplay(s.time_out)}`
       : (s.time_in ? formatScheduleTimeDisplay(s.time_in) : "");
     items.push({
       key: "sched:" + s.id, date: (s.scheduled_date || "1970-01-01") + "T" + (s.time_in || "00:00"), icon: "📅",
-      title: s.title || "Schedule", body: [s.region, timeRange, s.priority].filter(Boolean).join(" · "),
-      label: "Schedule", act: "go-schedule",
+      title: s.title || "Schedule",
+      body: [
+        s.scheduled_date ? fmtDay(s.scheduled_date) : "",
+        s.region,
+        timeRange,
+        tags.assigned.length ? "Assigned: " + tags.assigned.join(", ") : "",
+        s.priority && s.priority !== "Normal" ? s.priority : "",
+      ].filter(Boolean).join(" · "),
+      label: "Schedule (Mentioned)", act: "go-schedule",
+      isMention: true,
       isRead: isNoticeMarkedRead("sched:" + s.id),
     });
   });
@@ -500,12 +512,15 @@ export function getNoticeItems(): any[] {
       title: (m.sender_name || (t ? threadTitle(t) : "Chat")) + (t && t.kind === "group" ? " (" + threadTitle(t) + ")" : ""),
       body: bodyText,
       label: "Chat", chatId: m.thread_id,
+      isMention: isCurrentUserMentioned(m.body || ""),
       isRead: isNoticeMarkedRead(key),
     });
   });
   state.approvalNotifications.forEach(n => items.push({
     key: "appr:" + n.id, date: n.created_at, icon: "🔔", title: n.title, body: n.body,
-    label: "Notification", approvalId: n.id, isRead: !!n.is_read || isNoticeMarkedRead("appr:" + n.id),
+    label: "Notification", approvalId: n.id,
+    isMention: isCurrentUserMentioned(`${n.title || ""} ${n.body || ""}`),
+    isRead: !!n.is_read || isNoticeMarkedRead("appr:" + n.id),
   }));
   state.appNotifications.forEach(n => {
     if (isHiddenSystemNotice(n)) return;
@@ -1001,6 +1016,49 @@ export function openHolidayCalendarSheet(filter: "all" | "National" | "Christian
   );
 }
 
+export function renderHomeTodayShift(): void {
+  const card = $("homeTodayShiftCard");
+  if (!card) return;
+  const todayStr = localDateKey(new Date());
+  const myToday = (state.schedules || [])
+    .filter(s => String(s.scheduled_date || "") === todayStr && isCurrentUserMentionedInSchedule(s))
+    .sort((a, b) => String(a.time_in || "99:99").localeCompare(String(b.time_in || "99:99")));
+  if (!myToday.length) {
+    card.classList.add("hidden");
+    card.innerHTML = "";
+    return;
+  }
+  const rowsHtml = myToday.map(s => {
+    const tags = parseScheduleTags(s.notes);
+    const timeStr = s.time_in && s.time_out
+      ? `${formatScheduleTimeDisplay(s.time_in)} – ${formatScheduleTimeDisplay(s.time_out)}`
+      : (s.time_in ? formatScheduleTimeDisplay(s.time_in) : "Time TBA");
+    const stBadge = sessionBadge(s);
+    return (
+      '<div style="padding:8px 10px;border-radius:10px;background:rgba(30,108,242,.08);border:1px solid rgba(56,189,248,.22);margin-top:6px;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;">' +
+      '<b>' + esc(s.title || "Scheduled Duty") + '</b>' +
+      '<span>' + stBadge + ' <span class="badge">' + esc(timeStr) + '</span></span>' +
+      '</div>' +
+      '<div class="muted" style="margin-top:2px;">' +
+      [s.region, tags.assigned.length ? "Team: " + tags.assigned.join(", ") : ""].filter(Boolean).map(esc).join(" · ") +
+      '</div>' +
+      '</div>'
+    );
+  }).join("");
+
+  const nextHtml =
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">' +
+    '<b>📅 Your Shift Today (' + esc(fmtDay(todayStr)) + ')</b>' +
+    '<div class="inline-actions" style="margin:0;">' +
+    '<button class="btn small-btn" type="button" onclick="autoFillDtrFromSchedule(true);go(\'dtr\')">⏰ Fill DTR</button>' +
+    '<button class="gray small-btn" type="button" onclick="go(\'schedule\')">View Schedule</button>' +
+    '</div></div>' +
+    rowsHtml;
+  card.classList.remove("hidden");
+  if (card.innerHTML !== nextHtml) card.innerHTML = nextHtml;
+}
+
 export function renderHome(): void {
   if (!state.userId) return;
   const online = onlineIds().size;
@@ -1018,6 +1076,7 @@ export function renderHome(): void {
   setTxt("roleLabel", roleLabel(state.role));
   updateAnnouncementTicker();
   renderHomeDtrStatus();
+  renderHomeTodayShift();
   renderHomeShareFeed();
   void evaluateDailySiteGeofence();
 
@@ -1179,15 +1238,38 @@ export async function deleteAllNotices(): Promise<void> {
   toast("All notifications deleted");
 }
 
+export function setNoticesFilter(f: "all" | "unread" | "mentions"): void {
+  runtime.noticesFilter = f === "unread" || f === "mentions" ? f : "all";
+  renderNotices();
+}
+
 export function renderNotices(): void {
   const box = $("noticeList");
   if (!box) return;
-  const items = getNoticeItems();
-  const unreadCount = items.filter(i => !i.isRead).length;
+  const allItems = getNoticeItems();
+  const unreadCount = allItems.filter(i => !i.isRead).length;
+  const filter = runtime.noticesFilter || "all";
+  document.querySelectorAll<HTMLElement>("#noticeFilterTabs .tab").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.noticeFilter === filter);
+  });
+
+  const items = allItems.filter(i => {
+    if (filter === "unread") return !i.isRead;
+    if (filter === "mentions") return !!i.isMention;
+    return true;
+  });
+
   const markAllBtn = $("markAllNoticesReadBtn") as HTMLButtonElement | null;
   const delAllBtn = $("deleteAllNoticesBtn") as HTMLButtonElement | null;
   if (markAllBtn) markAllBtn.disabled = unreadCount === 0;
-  if (delAllBtn) delAllBtn.disabled = items.length === 0;
+  if (delAllBtn) delAllBtn.disabled = allItems.length === 0;
+
+  const emptyMsg =
+    filter === "unread"
+      ? "No unread notifications."
+      : filter === "mentions"
+        ? "No mentions or scheduled shifts for your name yet."
+        : "No notifications yet.";
 
   box.innerHTML = items.map(item => {
     let attr = ' data-act="noop"';
@@ -1204,7 +1286,7 @@ export function renderNotices(): void {
     return '<div class="item clickable' + unreadClass + '"' + attr + ' data-notice-key="' + esc(item.key) + '">' +
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;"><div style="flex:1;min-width:0;"><b>' + item.icon + " " + esc(item.title) +
       '</b><div class="muted">' + esc(item.label) + " · " + esc(fmtDate(item.date)) + '</div></div><div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">' + statusBadge + delBtn + '</div></div><div style="margin-top:4px">' + esc(item.body) + "</div></div>";
-  }).join("") || '<p class="muted">No notifications yet.</p>';
+  }).join("") || '<p class="muted">' + emptyMsg + '</p>';
   const bell = $("bell");
   if (bell) {
     bell.textContent = unreadCount ? String(unreadCount) : "";
@@ -1549,12 +1631,23 @@ export function renderAssigneesPicker(): void {
     (grouped[key] = grouped[key] || []).push(p);
   });
   const keys = Object.keys(grouped).sort();
-  box.innerHTML = keys.map(key =>
+  let html = keys.map(key =>
     '<div class="person-group-title">' + esc(key) + "</div>" +
     grouped[key].map(p =>
       '<label style="display:flex;gap:8px;align-items:center;margin:4px 0"><input type="checkbox" name="schPersonnel" data-name="' + esc(p.full_name) + '" value="' + esc(p.user_id) + '" style="width:auto">' + esc(p.full_name) + "</label>"
     ).join("")
-  ).join("") || '<p class="muted">No personnel in this area.</p>';
+  ).join("");
+
+  const customList = (runtime.editingScheduleMeta?.customAssigned || []).filter(Boolean);
+  if (customList.length) {
+    html +=
+      '<div class="person-group-title">Other Assigned Names</div>' +
+      customList.map(name =>
+        '<label style="display:flex;gap:8px;align-items:center;margin:4px 0"><input type="checkbox" name="schPersonnel" data-name="' + esc(name) + '" value="" checked style="width:auto">' + esc(name) + " (Custom)</label>"
+      ).join("");
+  }
+
+  box.innerHTML = html || '<p class="muted">No personnel in this area.</p>';
 }
 
 interface ParsedScheduleItem {
@@ -1850,12 +1943,104 @@ export function clearScheduleStatement(): void {
   updateScheduleStatementPreview();
 }
 
+function getFilteredSchedules(): any[] {
+  const base = visibleSchedules();
+  const filter = runtime.scheduleFilter || "all";
+  const q = String(runtime.scheduleSearch || "").trim().toLowerCase();
+  const todayStr = localDateKey(new Date());
+
+  return base.filter(s => {
+    if (filter === "mentioned" && !isCurrentUserMentionedInSchedule(s)) return false;
+    if (filter === "today" && String(s.scheduled_date || "") !== todayStr) return false;
+    if (filter === "upcoming" && String(s.scheduled_date || "9999-12-31") < todayStr) return false;
+    if (q) {
+      const tags = parseScheduleTags(s.notes);
+      const hay = [
+        s.title,
+        s.region,
+        s.scheduled_date,
+        s.priority,
+        tags.dutyLabel,
+        tags.assigned.join(" "),
+        tags.cleanNotes,
+      ].join(" ").toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+export function setScheduleFilter(f: "all" | "mentioned" | "today" | "upcoming"): void {
+  runtime.scheduleFilter = f === "mentioned" || f === "today" || f === "upcoming" ? f : "all";
+  renderSchedules();
+}
+
+export function setScheduleSearch(q: string): void {
+  runtime.scheduleSearch = String(q || "");
+  renderSchedules();
+}
+
+export async function copyDailyScheduleSummary(): Promise<void> {
+  const list = getFilteredSchedules();
+  if (!list.length) {
+    toast("No schedules in current view to copy.");
+    return;
+  }
+  const byDate = new Map<string, any[]>();
+  list.forEach(s => {
+    const dk = String(s.scheduled_date || "Unscheduled");
+    if (!byDate.has(dk)) byDate.set(dk, []);
+    byDate.get(dk)!.push(s);
+  });
+
+  const lines: string[] = [];
+  for (const [dk, items] of byDate.entries()) {
+    const firstDuty = items.map(x => parseScheduleTags(x.notes).dutyLabel).find(Boolean) || "";
+    const header = dk !== "Unscheduled"
+      ? `📅 Schedule ${fmtDay(dk)}${firstDuty ? ` (${firstDuty})` : ""}`
+      : `📅 Upcoming Schedule`;
+    lines.push(header);
+    items.forEach((s, idx) => {
+      const tags = parseScheduleTags(s.notes);
+      const who = tags.assigned.length ? tags.assigned.join(" / ") : "Unassigned";
+      const tm = s.time_in && s.time_out
+        ? `${formatScheduleTimeDisplay(s.time_in)}–${formatScheduleTimeDisplay(s.time_out)}`
+        : (s.time_in ? formatScheduleTimeDisplay(s.time_in) : "");
+      lines.push(`${idx + 1}. ${who}${tm ? " - " + tm : ""} ${s.title || ""}${s.region ? " [" + s.region + "]" : ""}`.trim());
+    });
+    lines.push("");
+  }
+
+  const text = lines.join("\n").trim();
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      toast("📋 Daily schedule copied to clipboard");
+      return;
+    }
+  } catch {}
+  openSheet(
+    `<h2>📋 Daily Schedule Summary</h2>` +
+    `<textarea readonly rows="10" style="width:100%;margin-top:8px;">${esc(text)}</textarea>` +
+    sheetClose()
+  );
+}
+
 export function renderSchedules(): void {
   const box = $("scheduleList");
   if (!box) return;
-  const filtered = visibleSchedules();
+  const filter = runtime.scheduleFilter || "all";
+  document.querySelectorAll<HTMLElement>("#scheduleFilterTabs .tab").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.schFilter === filter);
+  });
+
+  const filtered = getFilteredSchedules();
   if (!filtered.length) {
-    box.innerHTML = '<p class="muted">No schedules assigned to you.</p>';
+    box.innerHTML = `<p class="muted">${
+      runtime.scheduleSearch || filter !== "all"
+        ? "No schedules match the selected filter."
+        : "No schedules assigned to you."
+    }</p>`;
     return;
   }
 
@@ -1893,17 +2078,25 @@ export function renderSchedules(): void {
         ? `${formatScheduleTimeDisplay(s.time_in)} – ${formatScheduleTimeDisplay(s.time_out)}`
         : (s.time_in ? formatScheduleTimeDisplay(s.time_in) : "");
       const sst = sessionState(s);
+      const isMine = isCurrentUserMentionedInSchedule(s);
+      const canEditOrDel = isManager() || (state.userId && String(s.created_by || "") === String(state.userId));
+      const actionsHtml = [
+        canEditOrDel ? `<button class="gray small-btn" type="button" data-act="edit-sched" data-id="${esc(s.id)}">✏️ Edit</button>` : "",
+        isMine ? `<button class="btn small-btn" type="button" data-act="sched-to-dtr" data-id="${esc(s.id)}">⏰ Fill DTR</button>` : "",
+        canEditOrDel ? `<button class="red small-btn" type="button" data-act="del-sched" data-id="${esc(s.id)}">🗑 Delete</button>` : "",
+      ].filter(Boolean).join("");
 
       return '<div class="item' + (sst ? " sess-" + sst : "") + '">' +
         '<div style="display:flex;align-items:flex-start;gap:8px;">' +
         '<span class="badge" style="min-width:26px;text-align:center;font-weight:800;">' + (idx + 1) + '.</span>' +
         '<div style="flex:1;min-width:0;">' +
         '<b>' + esc(s.title) + "</b> " + sessionBadge(s) +
+        (isMine ? ' <span class="badge">👤 You</span>' : "") +
         ' <span class="badge">' + esc(s.priority || "Normal") + '</span>' +
         '<div class="muted">' + esc(fmtDay(s.scheduled_date)) +
         (s.region ? " · " + esc(s.region) : "") + (timeStr ? " · " + esc(timeStr) : "") +
         "</div>" + (assigned ? "<div><b>Assigned:</b> " + esc(assigned) + "</div>" : "") + notesHtml +
-        (isManager() ? '<div class="inline-actions"><button class="red small-btn" type="button" data-act="del-sched" data-id="' + esc(s.id) + '">Delete</button></div>' : "") +
+        (actionsHtml ? '<div class="inline-actions">' + actionsHtml + "</div>" : "") +
         '</div></div></div>';
     }).join("");
 
@@ -1914,8 +2107,114 @@ export function renderSchedules(): void {
   }).join("");
 }
 
+function resetScheduleFormState(): void {
+  runtime.editingScheduleId = null;
+  runtime.editingScheduleMeta = null;
+  const titleEl = $("scheduleFormTitle");
+  if (titleEl) titleEl.textContent = "📅 Add Schedule";
+  const saveBtn = $("saveScheduleBtn");
+  if (saveBtn) saveBtn.textContent = "Save schedule";
+  const metaNote = $("scheduleEditMetaNote");
+  if (metaNote) {
+    metaNote.textContent = "";
+    metaNote.classList.add("hidden");
+  }
+  $("schStatementWrap")?.classList.remove("hidden");
+}
+
+function clearScheduleFormFields(): void {
+  clearScheduleStatement();
+  setVal("schSite", "");
+  setVal("schUnit", "");
+  setVal("schTitle", "");
+  setVal("schDate", "");
+  setVal("schPriority", "Normal");
+  setVal("schIn", "");
+  setVal("schOut", "");
+  setVal("schNotes", "");
+  document.querySelectorAll<HTMLInputElement>('input[name="schPersonnel"]:checked').forEach(i => { i.checked = false; });
+}
+
+export function editSchedule(id: string): void {
+  const s = (state.schedules || []).find(x => String(x.id) === String(id));
+  if (!s) {
+    toast("Schedule not found.");
+    return;
+  }
+  const canEdit = isManager() || (state.userId && String(s.created_by || "") === String(state.userId));
+  if (!canEdit) return;
+
+  const tags = parseScheduleTags(s.notes);
+  runtime.editingScheduleId = String(s.id);
+  runtime.editingScheduleMeta = {
+    seq: tags.seq,
+    dutyLabel: tags.dutyLabel,
+    customAssigned: [],
+  };
+
+  setVal("schStatement", "");
+  updateScheduleStatementPreview();
+  $("schStatementWrap")?.classList.add("hidden");
+
+  const titleEl = $("scheduleFormTitle");
+  if (titleEl) titleEl.textContent = "✏️ Edit Schedule";
+  const saveBtn = $("saveScheduleBtn");
+  if (saveBtn) saveBtn.textContent = "💾 Update Schedule";
+  const metaNote = $("scheduleEditMetaNote");
+  if (metaNote) {
+    metaNote.textContent =
+      `Editing schedule item${tags.seq ? " #" + tags.seq : ""}${tags.dutyLabel ? " (" + tags.dutyLabel + ")" : ""}. Updating notifies mentioned personnel.`;
+    metaNote.classList.remove("hidden");
+  }
+
+  setVal("schRegion", s.region || "Visayas");
+  renderScheduleSiteOptions();
+  renderAssigneesPicker();
+
+  const checkboxes = [...document.querySelectorAll<HTMLInputElement>('input[name="schPersonnel"]')];
+  const matchedCheckboxes = new Set<HTMLInputElement>();
+  const customUnmatched: string[] = [];
+
+  for (const tok of tags.assigned) {
+    const matchCb = checkboxes.find(cb => doesAssignedTokenMatchUser(tok, String(cb.dataset.name || "")));
+    if (matchCb) matchedCheckboxes.add(matchCb);
+    else customUnmatched.push(tok);
+  }
+
+  if (customUnmatched.length) {
+    runtime.editingScheduleMeta.customAssigned = customUnmatched;
+    renderAssigneesPicker();
+  }
+
+  const allCheckboxes = [...document.querySelectorAll<HTMLInputElement>('input[name="schPersonnel"]')];
+  allCheckboxes.forEach(cb => {
+    const cbName = String(cb.dataset.name || "");
+    cb.checked =
+      tags.assigned.some(tok => doesAssignedTokenMatchUser(tok, cbName)) ||
+      customUnmatched.some(name => name.toLowerCase() === cbName.toLowerCase());
+  });
+
+  setVal("schSite", "");
+  setVal("schUnit", "");
+  setVal("schTitle", s.title || "");
+  setVal("schDate", s.scheduled_date || "");
+  setVal("schPriority", s.priority || "Normal");
+  const parsedIn = parseScheduleTimeToken(s.time_in || "");
+  const parsedOut = parseScheduleTimeToken(s.time_out || "");
+  setVal("schIn", parsedIn ? parsedIn.time24 : (/^\d{2}:\d{2}/.test(String(s.time_in || "")) ? String(s.time_in).slice(0, 5) : ""));
+  setVal("schOut", parsedOut ? parsedOut.time24 : (/^\d{2}:\d{2}/.test(String(s.time_out || "")) ? String(s.time_out).slice(0, 5) : ""));
+  setVal("schNotes", tags.cleanNotes);
+
+  $("scheduleFormOverlay")?.classList.remove("hidden");
+  setTimeout(() => ($("schTitle") as HTMLInputElement | null)?.focus(), 40);
+}
+
 export function openScheduleFormOverlay(): void {
   if (!isManager()) return;
+  if (runtime.editingScheduleId) {
+    clearScheduleFormFields();
+  }
+  resetScheduleFormState();
   renderScheduleSiteOptions();
   renderAssigneesPicker();
   updateScheduleStatementPreview();
@@ -1925,11 +2224,17 @@ export function openScheduleFormOverlay(): void {
 
 export function closeScheduleFormOverlay(): void {
   $("scheduleFormOverlay")?.classList.add("hidden");
+  if (runtime.editingScheduleId) {
+    clearScheduleFormFields();
+  }
+  resetScheduleFormState();
 }
 
 export async function saveSchedule(): Promise<void> {
-  if (!isManager()) return;
-  const statementRaw = val("schStatement").trim();
+  const isEditing = !!runtime.editingScheduleId;
+  if (!isEditing && !isManager()) return;
+
+  const statementRaw = isEditing ? "" : val("schStatement").trim();
   const region = val("schRegion");
   const priority = val("schPriority") || "Normal";
   const extraNotes = val("schNotes").trim();
@@ -1955,18 +2260,15 @@ export async function saveSchedule(): Promise<void> {
         time_in: it.timeIn || null,
         time_out: it.timeOut || null,
         notes: noteParts.join(" ").trim(),
+        created_by: state.userId || null,
       };
     });
 
     const { error } = await runtime.client.from("schedules").insert(rows);
     if (error) { toast("Could not save: " + error.message); return; }
 
-    clearScheduleStatement();
-    setVal("schSite", "");
-    setVal("schUnit", "");
-    setVal("schTitle", "");
-    setVal("schNotes", "");
-    document.querySelectorAll<HTMLInputElement>('input[name="schPersonnel"]:checked').forEach(i => { i.checked = false; });
+    clearScheduleFormFields();
+    resetScheduleFormState();
     suppressNotifications();
     await loadSchedules();
     closeScheduleFormOverlay();
@@ -1977,18 +2279,67 @@ export async function saveSchedule(): Promise<void> {
   const title = val("schTitle").trim();
   if (!title) { toast("Enter a schedule statement or job / site"); return; }
   const picked = [...document.querySelectorAll<HTMLInputElement>('input[name="schPersonnel"]:checked')];
-  const names = picked.map(i => i.dataset.name).filter(Boolean);
-  const note = (names.length ? "[ASSIGNED: " + names.join(", ") + "] " : "") + extraNotes;
+  const names = [...new Set(picked.map(i => String(i.dataset.name || "").trim()).filter(Boolean))];
+  const noteParts: string[] = [];
+  if (names.length) noteParts.push(`[ASSIGNED: ${names.join(", ")}]`);
+  if (isEditing && runtime.editingScheduleMeta?.seq !== null && runtime.editingScheduleMeta?.seq !== undefined) {
+    noteParts.push(`[SEQ:${runtime.editingScheduleMeta.seq}]`);
+  }
+  if (isEditing && runtime.editingScheduleMeta?.dutyLabel) {
+    noteParts.push(`[DUTY:${runtime.editingScheduleMeta.dutyLabel}]`);
+  }
+  if (extraNotes) noteParts.push(extraNotes);
+  const note = noteParts.join(" ").trim();
+
+  if (isEditing && runtime.editingScheduleId) {
+    const basePayload = {
+      title,
+      region,
+      scheduled_date: val("schDate") || null,
+      priority,
+      time_in: val("schIn") || null,
+      time_out: val("schOut") || null,
+      notes: note,
+    };
+    let res = await runtime.client
+      .from("schedules")
+      .update({
+        ...basePayload,
+        updated_at: new Date().toISOString(),
+        updated_by: state.userId || null,
+      })
+      .eq("id", runtime.editingScheduleId);
+    if (res.error && /updated_at|updated_by|column|schema cache|42703/i.test(String(res.error.message || ""))) {
+      res = await runtime.client
+        .from("schedules")
+        .update(basePayload)
+        .eq("id", runtime.editingScheduleId);
+    }
+    if (res.error) { toast("Could not update: " + res.error.message); return; }
+
+    clearScheduleFormFields();
+    resetScheduleFormState();
+    suppressNotifications();
+    await loadSchedules();
+    closeScheduleFormOverlay();
+    toast("Schedule updated");
+    return;
+  }
+
   const { error } = await runtime.client.from("schedules").insert({
-    title, region, scheduled_date: val("schDate") || null,
-    priority, time_in: val("schIn") || null, time_out: val("schOut") || null, notes: note,
+    title,
+    region,
+    scheduled_date: val("schDate") || null,
+    priority,
+    time_in: val("schIn") || null,
+    time_out: val("schOut") || null,
+    notes: note,
+    created_by: state.userId || null,
   });
   if (error) { toast("Could not save: " + error.message); return; }
-  setVal("schSite", "");
-  setVal("schUnit", "");
-  setVal("schTitle", "");
-  setVal("schNotes", "");
-  document.querySelectorAll<HTMLInputElement>('input[name="schPersonnel"]:checked').forEach(i => { i.checked = false; });
+
+  clearScheduleFormFields();
+  resetScheduleFormState();
   suppressNotifications();
   await loadSchedules();
   closeScheduleFormOverlay();
@@ -8696,6 +9047,18 @@ export function initFeatureWiring(): void {
         suppressNotifications();
         await loadAnnouncements();
         toast("Deleted");
+        return;
+      }
+      case "edit-sched": {
+        editSchedule(id);
+        return;
+      }
+      case "sched-to-dtr": {
+        const s = (state.schedules || []).find(x => String(x.id) === String(id));
+        if (s?.scheduled_date) setVal("dtrDate", String(s.scheduled_date));
+        autoFillDtrFromSchedule(true);
+        go("dtr");
+        toast("DTR filled from schedule");
         return;
       }
       case "del-sched": {

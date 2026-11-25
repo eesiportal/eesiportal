@@ -696,17 +696,46 @@ export async function loadApprovalNotifications(): Promise<void> {
   }
 }
 
+function scheduleSignature(s: any): string {
+  return [
+    s?.title || "",
+    s?.region || "",
+    s?.scheduled_date || "",
+    s?.time_in || "",
+    s?.time_out || "",
+    s?.priority || "",
+    s?.notes || "",
+  ].join("|");
+}
+
+function isScheduleMentionForMe(s: any): boolean {
+  if (typeof hooks.isUserMentionedInSchedule === "function") {
+    return !!hooks.isUserMentionedInSchedule(s);
+  }
+  return isCurrentUserMentioned(`${s?.title || ""} ${s?.notes || ""}`);
+}
+
 export async function loadSchedules(): Promise<void> {
   const { data, error } = await runtime.client
     .from("schedules")
-    .select("id,title,region,scheduled_date,scheduled_time,time_in,time_out,priority,notes,created_at")
+    .select("id,title,region,scheduled_date,scheduled_time,time_in,time_out,priority,notes,created_by,created_at")
     .order("scheduled_date", { ascending: true });
   if (error) { setupError("Could not load schedules", error); return; }
-  const prevIds = new Set((hooks.visibleSchedules() || []).map((s: any) => String(s.id)));
+
+  const prevMentionSigs = new Map<string, string>();
+  (state.schedules || []).forEach((s: any) => {
+    if (isScheduleMentionForMe(s)) {
+      prevMentionSigs.set(String(s.id), scheduleSignature(s));
+    }
+  });
+
   state.schedules = data || [];
-  const vis = hooks.visibleSchedules() || [];
-  const newlyVisible = schedulesLoaded ? vis.filter((s: any) => !prevIds.has(String(s.id))) : [];
+  const mentionedList = (state.schedules || []).filter(isScheduleMentionForMe);
+  const changedMentioned = schedulesLoaded
+    ? mentionedList.filter((s: any) => prevMentionSigs.get(String(s.id)) !== scheduleSignature(s))
+    : [];
   schedulesLoaded = true;
+
   hooks.renderSchedules();
   hooks.renderNotices();
   hooks.renderUnits();
@@ -714,25 +743,32 @@ export async function loadSchedules(): Promise<void> {
   hooks.checkShiftReminders?.();
   hooks.autoFillDtrFromSchedule?.();
   hooks.evaluateDailySiteGeofence?.();
-  if (newlyVisible.length > 0 && !isWithinSelfActionWindow()) {
-    const s = newlyVisible[0];
-    const mentionTxt = `${s.title || ""} ${s.notes || ""}`;
-    const body = (s.title || "Schedule") + (s.scheduled_date ? " · " + fmtDay(s.scheduled_date) : "");
-    if (isCurrentUserMentioned(mentionTxt)) {
-      markMentionSeen("sched:" + s.id);
-      triggerMentionAlert("📅 You are Scheduled / Mentioned", body);
-    } else {
-      triggerAlert("📅 New Schedule", body, [300, 100, 300]);
-    }
-    toast("📅 New Schedule: " + (s.title || ""));
+
+  if (changedMentioned.length > 0 && !isWithinSelfActionWindow()) {
+    const s = changedMentioned[0];
+    const wasAlreadyMentioned = prevMentionSigs.has(String(s.id));
+    const body = [
+      s.title || "Schedule",
+      s.scheduled_date ? fmtDay(s.scheduled_date) : "",
+      s.time_in ? String(s.time_in) : "",
+    ].filter(Boolean).join(" · ");
+    const seenKey = `sched:${s.id}:${scheduleSignature(s)}`;
+    markMentionSeen(seenKey);
+    const alertTitle = wasAlreadyMentioned
+      ? "📅 Scheduled Shift Updated"
+      : "📅 You Are Mentioned in Schedule";
+    triggerMentionAlert(alertTitle, body);
+    toast(alertTitle + ": " + (s.title || ""));
   } else if (!isWithinSelfActionWindow()) {
-    const recentMentionedSched = vis.find(
-      (s: any) => isRecentItem(s.created_at) && isCurrentUserMentioned(`${s.title || ""} ${s.notes || ""}`)
-    );
-    if (recentMentionedSched && markMentionSeen("sched:" + recentMentionedSched.id)) {
-      const body = (recentMentionedSched.title || "Schedule") + (recentMentionedSched.scheduled_date ? " · " + fmtDay(recentMentionedSched.scheduled_date) : "");
-      triggerMentionAlert("📅 You are Scheduled / Mentioned", body);
-      toast("📅 Scheduled: " + (recentMentionedSched.title || ""));
+    const recentMentionedSched = mentionedList.find((s: any) => isRecentItem(s.created_at));
+    if (recentMentionedSched) {
+      const seenKey = `sched:${recentMentionedSched.id}:${scheduleSignature(recentMentionedSched)}`;
+      if (markMentionSeen(seenKey)) {
+        const body = (recentMentionedSched.title || "Schedule") +
+          (recentMentionedSched.scheduled_date ? " · " + fmtDay(recentMentionedSched.scheduled_date) : "");
+        triggerMentionAlert("📅 You Are Mentioned in Schedule", body);
+        toast("📅 Scheduled: " + (recentMentionedSched.title || ""));
+      }
     }
   }
 }
