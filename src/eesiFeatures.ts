@@ -2929,97 +2929,31 @@ export function openSiteOnMap(siteId: string): void {
 }
 
 /* ==================== UNITS & MANUALS ==================== */
-const AMCB_UNIT_SEED: Array<{
-  unit_name: string;
-  unit_type: "escalator" | "elevator";
-  brand_model: string;
-  capacity_floors: string;
-  notes: string;
-}> = [
-  // SEDA SIDE (12)
-  { unit_name: "Esc. No. 19 B2-B3", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B2-B3 · DOWN", notes: "[SIDE: SEDA SIDE]" },
-  { unit_name: "Esc. No. 20 B3-B2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B3-B2 · UP", notes: "[SIDE: SEDA SIDE]" },
-  { unit_name: "Esc. No. 21 B1-B2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B1-B2 · DOWN", notes: "[SIDE: SEDA SIDE]" },
-  { unit_name: "Esc. No. 22 B2-B1", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B2-B1 · UP", notes: "[SIDE: SEDA SIDE]" },
-  { unit_name: "Esc. No. 3 G-B1", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "G-B1 · DOWN", notes: "[SIDE: SEDA SIDE]" },
-  { unit_name: "Esc. No. 4 B1-G", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B1-G · UP", notes: "[SIDE: SEDA SIDE]" },
-  { unit_name: "Esc. No. 26 2-G", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "2-G · DOWN", notes: "[SIDE: SEDA SIDE] 2 Lgt. Newel Guide Roller (Leftside), 2 Lgt. Newel Guide Roller (Rightside)" },
-  { unit_name: "Esc. No. 25 G-2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "G-2 · UP", notes: "[SIDE: SEDA SIDE]" },
-  { unit_name: "Esc. No. 27 3-2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "3-2 · DOWN", notes: "[SIDE: SEDA SIDE]" },
-  { unit_name: "Esc. No. 28 2-3", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "2-3 · UP", notes: "[SIDE: SEDA SIDE]" },
-  { unit_name: "Esc. No. 17 4-3", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "4-3 · DOWN", notes: "[SIDE: SEDA SIDE]" },
-  { unit_name: "Esc. No. 18 3-4", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "3-4 · UP", notes: "[SIDE: SEDA SIDE]" },
-  // IVILLA SIDE (15)
-  { unit_name: "Esc. No. 2 B1-B2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B1-B2 · DOWN", notes: "[SIDE: IVILLA SIDE]" },
-  { unit_name: "Esc. No. 1 B2-B1", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B2-B1 · UP", notes: "[SIDE: IVILLA SIDE]" },
-  { unit_name: "Esc. No. 23 (G-B1)", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "G-B1 · DOWN", notes: "[SIDE: IVILLA SIDE] 1 lgt. Rubber Handrail (Leftside), 2pcs. Newel Guide Roller (Leftside), 1 Lot. Flywheel (Leftside)" },
-  { unit_name: "Esc. No. 24 B1-G", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "B1-G · UP", notes: "[SIDE: IVILLA SIDE]" },
-  { unit_name: "Esc. No. 6 2-G", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "2-G · DOWN", notes: "[SIDE: IVILLA SIDE]" },
-  { unit_name: "Esc. No. 5 G-2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "G-2 · UP", notes: "[SIDE: IVILLA SIDE]" },
-  { unit_name: "Esc. No. 7 3-2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "3-2 · DOWN", notes: "[SIDE: IVILLA SIDE]" },
-  { unit_name: "Esc. No. 8 2-3", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "2-3 · UP", notes: "[SIDE: IVILLA SIDE]" },
-  { unit_name: "Esc. No. 9 4-3", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "4-3 · DOWN", notes: "[SIDE: IVILLA SIDE]" },
-  { unit_name: "Esc. No. 10 3-4", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "3-4 · UP", notes: "[SIDE: IVILLA SIDE]" },
-  { unit_name: "Esc. No. 12 5-4", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "5-4 · DOWN", notes: "[SIDE: IVILLA SIDE]" },
-  { unit_name: "Esc. No. 11 4-5", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "4-5 · UP", notes: "[SIDE: IVILLA SIDE]" },
-  { unit_name: "PE1", unit_type: "elevator", brand_model: "Mitsubishi", capacity_floors: "Passenger Elevator", notes: "[SIDE: IVILLA SIDE]" },
-  { unit_name: "PE2", unit_type: "elevator", brand_model: "Mitsubishi", capacity_floors: "Passenger Elevator", notes: "[SIDE: IVILLA SIDE]" },
-  { unit_name: "PE3", unit_type: "elevator", brand_model: "Mitsubishi", capacity_floors: "Passenger Elevator", notes: "[SIDE: IVILLA SIDE]" },
-  // PADRIGA SIDE (7)
-  { unit_name: "Esc. No. 14 2-G", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "2-G · DOWN", notes: "[SIDE: PADRIGA SIDE]" },
-  { unit_name: "Esc. No. 13 G-2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "G-2 · UP", notes: "[SIDE: PADRIGA SIDE]" },
-  { unit_name: "Esc. No. 30 3-2", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "3-2 · DOWN", notes: "[SIDE: PADRIGA SIDE]" },
-  { unit_name: "Esc. No. 29 2-3", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "2-3 · UP", notes: "[SIDE: PADRIGA SIDE]" },
-  { unit_name: "Esc. No. 16 4-3", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "4-3 · DOWN", notes: "[SIDE: PADRIGA SIDE]" },
-  { unit_name: "Esc. No. 15 3-4", unit_type: "escalator", brand_model: "Mitsubishi", capacity_floors: "3-4 · UP", notes: "[SIDE: PADRIGA SIDE]" },
-  { unit_name: "CARGO", unit_type: "elevator", brand_model: "Mitsubishi", capacity_floors: "Cargo / Service Elevator", notes: "[SIDE: PADRIGA SIDE]" },
-];
-
 export async function ensureAmcbUnitsSeeded(): Promise<void> {
   if (runtime.amcbSeedAttempted || !state.userId || !runtime.client || !navigator.onLine) return;
   runtime.amcbSeedAttempted = true;
   try {
-    let amcbSite = state.sites.find(s =>
+    const amcbSites = state.sites.filter(s =>
       /ayala\s*malls?\s*central\s*bloc|\bamcb\b/i.test(String(s.name || ""))
     );
-    if (!amcbSite) {
-      const { data: insertedSite, error: siteErr } = await runtime.client
-        .from("sites")
-        .insert({
-          name: "Ayala Malls Central Bloc (AMCB)",
-          address: "Cebu IT Park, Apas",
-          city: "Cebu City",
-          region: "Visayas",
-        })
-        .select("*")
-        .maybeSingle();
-      if (siteErr) return;
-      amcbSite = insertedSite;
-      if (amcbSite) await loadSites();
-    }
-    if (!amcbSite) return;
+    if (!amcbSites.length) return;
+    const amcbSiteIds = amcbSites.map(s => String(s.id));
+    const mitsubishiIds = state.units
+      .filter(
+        u =>
+          amcbSiteIds.includes(String(u.site_id)) &&
+          /mitsubishi/i.test(String(u.brand_model || ""))
+      )
+      .map(u => u.id)
+      .filter(Boolean);
+    if (!mitsubishiIds.length) return;
 
-    const existingForAmcb = state.units.filter(u => String(u.site_id) === String(amcbSite.id));
-    const existingNames = new Set(
-      existingForAmcb.map(u => String(u.unit_name || "").trim().toLowerCase())
-    );
-    const missing = AMCB_UNIT_SEED.filter(
-      seed => !existingNames.has(seed.unit_name.trim().toLowerCase())
-    );
-    if (!missing.length) return;
-
-    const rows = missing.map(m => ({
-      site_id: amcbSite.id,
-      unit_name: m.unit_name,
-      unit_type: m.unit_type,
-      status: "Operational",
-      brand_model: m.brand_model,
-      capacity_floors: m.capacity_floors,
-      notes: m.notes,
-      created_by: state.userId,
-    }));
-    const { error } = await runtime.client.from("site_units").insert(rows);
+    const { error } = await runtime.client
+      .from("site_units")
+      .delete()
+      .in("id", mitsubishiIds);
     if (!error) {
+      state.units = state.units.filter(u => !mitsubishiIds.includes(u.id));
       suppressNotifications();
       await loadUnits();
     }

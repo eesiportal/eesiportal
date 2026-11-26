@@ -1489,14 +1489,14 @@ function recordLocalPosition(pos: GeolocationPosition): void {
   }
   lastKnownCoords = { lat, lng, acc, updatedAt: now };
 
-  setGpsUiStatus("🟢 Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Auto-refresh 5s");
+  setGpsUiStatus("🟢 Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Auto-sync 1s");
   const movedForWeather =
     !runtime.hasLiveGpsLock ||
-    Math.abs(lat - runtime.lastWeatherLat) > 0.004 ||
-    Math.abs(lng - runtime.lastWeatherLon) > 0.004 ||
-    Date.now() - (runtime.lastWeatherUpdatedAt || 0) > 300000;
+    Math.abs(lat - runtime.lastWeatherLat) > 0.0015 ||
+    Math.abs(lng - runtime.lastWeatherLon) > 0.0015 ||
+    Date.now() - (runtime.lastWeatherUpdatedAt || 0) >= 15000;
   if (movedForWeather) {
-    void updateLiveWeather(lat, lng, { fromGps: true, accuracy: acc });
+    void updateLiveWeather(lat, lng, { fromGps: true, accuracy: acc, force: true });
   }
   hooks.evaluateDailySiteGeofence?.();
 }
@@ -1530,7 +1530,7 @@ async function upsertCoordsToSupabase(lat: number, lng: number, acc: number, for
     }
     lastLocationUploadAt = Date.now();
     lastUploadedAcc = acc || lastUploadedAcc;
-    setGpsUiStatus("🟢 Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Auto-refresh 5s");
+    setGpsUiStatus("🟢 Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Auto-sync 1s");
     mergeOwnLocationLocally(lat, lng, isoNow);
     return true;
   } catch (err) {

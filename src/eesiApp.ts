@@ -47,12 +47,12 @@ import {
   installFromAndroidSheet,
   openPinSetup,
   playSettingSound,
-  refreshLiveGpsWeather,
   renderDecor,
   requestNotificationPermission,
   resetDisplaySettings,
   setWatermarkOpacity,
   showDailyVerse,
+  startAutoWeatherSyncLoop,
   startClock,
   stopSettingSound,
   submitPinSetup,
@@ -951,7 +951,6 @@ function exposeWindowGlobals(): void {
     syncPayrollFromDtr,
     syncPayrollMonthQuickPicker,
     selectPayrollQuickCycle,
-    refreshLiveGpsWeather,
     savePayslipRecord,
     loadPayslipIntoEditor,
     deletePayslipRecord,
@@ -1155,7 +1154,7 @@ async function bootInner(session: any): Promise<void> {
   applyTheme(localStorage.getItem("eesi-theme") || "dark");
   applyDisplaySettings();
   startClock();
-  updateLiveWeather();
+  startAutoWeatherSyncLoop();
   startEmployeeLocationSharing();
   renderDecor();
   showDailyVerse();
@@ -1248,6 +1247,10 @@ function resetState(): void {
   runtime.lastWeatherPlace = "";
   runtime.lastWeatherAcc = 0;
   runtime.lastWeatherUpdatedAt = 0;
+  runtime.lastWeatherCode = 0;
+  runtime.lastWeatherIsDay = 1;
+  runtime.lastWeatherTemp = null;
+  runtime.lastWeatherLabel = "";
   runtime.editingLeaveId = null;
   runtime.adminRoleFilter = "all";
   runtime.selectedSiteId = null;

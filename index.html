@@ -846,10 +846,236 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
 .android-official-tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:#4ade80;margin-top:2px}
 .android-feature-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0 12px}
 .android-feature-tile{padding:8px 10px;border-radius:12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);font-size:12px;color:#e8f0ff}
+/* ===== DYNAMIC SESSION & WEATHER ATMOSPHERIC BACKGROUND ===== */
+#appAmbientBg{
+  position:fixed;inset:0;z-index:-1;pointer-events:none;overflow:hidden;
+  transition:opacity .7s ease,background 1.2s ease;
+}
+body[data-atmos="off"] #appAmbientBg{opacity:0;visibility:hidden}
+.ambient-sky,.ambient-celestial,.ambient-stars,.ambient-aurora,.ambient-clouds,.ambient-rain,.ambient-lightning{
+  position:absolute;inset:0;pointer-events:none;transition:opacity 1s ease,background 1.2s ease;
+}
+.ambient-celestial,.ambient-stars,.ambient-aurora,.ambient-clouds,.ambient-rain,.ambient-lightning{opacity:0}
+
+/* Sky Palettes — Dark Theme */
+body[data-atmos-time="daytime"] #appAmbientBg .ambient-sky{
+  background:radial-gradient(circle at 82% 14%,rgba(253,224,71,.34) 0%,rgba(56,189,248,.22) 34%,transparent 65%),
+             linear-gradient(180deg,#0f3564 0%,#0b2144 48%,#061124 100%);
+}
+body[data-atmos-time="noontime"] #appAmbientBg .ambient-sky{
+  background:radial-gradient(circle at 52% 8%,rgba(254,240,138,.42) 0%,rgba(56,189,248,.28) 38%,transparent 68%),
+             linear-gradient(180deg,#124986 0%,#0d2a56 50%,#07152c 100%);
+}
+body[data-atmos-time="sunset"] #appAmbientBg .ambient-sky{
+  background:radial-gradient(circle at 75% 72%,rgba(251,146,60,.42) 0%,rgba(244,63,94,.24) 36%,transparent 68%),
+             linear-gradient(180deg,#1d1d4d 0%,#44214b 54%,#120d26 100%);
+}
+body[data-atmos-time="nighttime"] #appAmbientBg .ambient-sky{
+  background:radial-gradient(circle at 82% 16%,rgba(147,197,253,.22) 0%,transparent 48%),
+             linear-gradient(180deg,#081533 0%,#050d22 55%,#030714 100%);
+}
+body[data-atmos-time="midnight"] #appAmbientBg .ambient-sky{
+  background:radial-gradient(circle at 22% 18%,rgba(16,185,129,.16) 0%,transparent 44%),
+             radial-gradient(circle at 82% 14%,rgba(139,92,246,.2) 0%,transparent 46%),
+             linear-gradient(180deg,#040818 0%,#020511 60%,#010208 100%);
+}
+
+/* Sky Palettes — Light Theme */
+body.light[data-atmos-time="daytime"] #appAmbientBg .ambient-sky{
+  background:radial-gradient(circle at 82% 12%,rgba(253,224,71,.58) 0%,rgba(125,211,252,.35) 38%,transparent 70%),
+             linear-gradient(180deg,#bfe4ff 0%,#e2f2ff 54%,#f2f7fc 100%);
+}
+body.light[data-atmos-time="noontime"] #appAmbientBg .ambient-sky{
+  background:radial-gradient(circle at 50% 6%,rgba(254,249,195,.72) 0%,rgba(56,189,248,.34) 40%,transparent 70%),
+             linear-gradient(180deg,#9bd2ff 0%,#d7edff 52%,#f1f6fc 100%);
+}
+body.light[data-atmos-time="sunset"] #appAmbientBg .ambient-sky{
+  background:radial-gradient(circle at 76% 32%,rgba(253,186,116,.62) 0%,rgba(251,113,133,.28) 42%,transparent 72%),
+             linear-gradient(180deg,#fbcfe8 0%,#fde68a 45%,#eef2ff 100%);
+}
+body.light[data-atmos-time="nighttime"] #appAmbientBg .ambient-sky{
+  background:radial-gradient(circle at 82% 15%,rgba(147,197,253,.42) 0%,transparent 48%),
+             linear-gradient(180deg,#c7d2fe 0%,#dde7f8 52%,#edf2fa 100%);
+}
+body.light[data-atmos-time="midnight"] #appAmbientBg .ambient-sky{
+  background:radial-gradient(circle at 82% 15%,rgba(167,139,250,.32) 0%,transparent 50%),
+             linear-gradient(180deg,#cbd5e1 0%,#e2e8f0 56%,#f1f5f9 100%);
+}
+
+/* Weather tint modulation */
+body[data-atmos-weather="cloudy"] #appAmbientBg .ambient-sky{filter:saturate(.78) brightness(.94)}
+body[data-atmos-weather="rain"] #appAmbientBg .ambient-sky{filter:saturate(.66) brightness(.84)}
+body[data-atmos-weather="storm"] #appAmbientBg .ambient-sky{filter:saturate(.58) brightness(.72)}
+
+/* Celestial Sun / Moon Orb */
+.ambient-orb{
+  position:absolute;width:130px;height:130px;border-radius:50%;
+  transition:all 1.4s cubic-bezier(.22,1,.36,1);
+}
+body[data-atmos-time="daytime"] .ambient-celestial,
+body[data-atmos-time="noontime"] .ambient-celestial,
+body[data-atmos-time="sunset"] .ambient-celestial{opacity:.95}
+body[data-atmos-time="nighttime"] .ambient-celestial,
+body[data-atmos-time="midnight"] .ambient-celestial{opacity:.9}
+body[data-atmos-weather="rain"] .ambient-celestial,
+body[data-atmos-weather="storm"] .ambient-celestial{opacity:.25!important}
+
+body[data-atmos-time="daytime"] .ambient-orb{
+  top:6%;right:8%;width:120px;height:120px;
+  background:radial-gradient(circle,#fffbeb 0%,#fde047 45%,rgba(253,224,71,0) 75%);
+  box-shadow:0 0 80px 26px rgba(253,224,71,.34);
+  animation:ambientPulse 7s ease-in-out infinite;
+}
+body[data-atmos-time="noontime"] .ambient-orb{
+  top:3%;right:36%;width:150px;height:150px;
+  background:radial-gradient(circle,#ffffff 0%,#fef08a 42%,rgba(250,204,21,0) 76%);
+  box-shadow:0 0 110px 38px rgba(250,204,21,.42);
+  animation:ambientPulse 6s ease-in-out infinite;
+}
+body[data-atmos-time="sunset"] .ambient-orb{
+  top:18%;right:12%;width:140px;height:140px;
+  background:radial-gradient(circle,#ffedd5 0%,#fb923c 44%,rgba(244,63,94,0) 76%);
+  box-shadow:0 0 95px 32px rgba(251,146,60,.45);
+}
+body[data-atmos-time="nighttime"] .ambient-orb{
+  top:8%;right:10%;width:74px;height:74px;
+  background:radial-gradient(circle at 36% 36%,#f8fafc 0%,#cbd5e1 62%,rgba(148,163,184,0) 80%);
+  box-shadow:0 0 42px 14px rgba(147,197,253,.32);
+}
+body[data-atmos-time="midnight"] .ambient-orb{
+  top:9%;right:12%;width:66px;height:66px;
+  background:radial-gradient(circle at 35% 35%,#ffffff 0%,#dbeafe 58%,rgba(147,197,253,0) 82%);
+  box-shadow:0 0 50px 16px rgba(125,211,252,.28);
+}
+
+/* Solar Rays during Daytime / Noontime */
+.ambient-rays{
+  position:absolute;inset:-20%;opacity:0;
+  background:conic-gradient(from 190deg at 75% 12%,rgba(254,249,195,.14) 0deg,transparent 24deg,rgba(254,249,195,.12) 48deg,transparent 78deg);
+  transition:opacity 1s ease;
+}
+body[data-atmos-time="daytime"][data-atmos-weather="clear"] .ambient-rays,
+body[data-atmos-time="noontime"][data-atmos-weather="clear"] .ambient-rays{opacity:1;animation:ambientDrift 24s ease-in-out infinite alternate}
+
+/* Twinkling Starfield during Nighttime / Midnight */
+body[data-atmos-time="nighttime"] .ambient-stars,
+body[data-atmos-time="midnight"] .ambient-stars{opacity:.85}
+body.light[data-atmos-time="nighttime"] .ambient-stars,
+body.light[data-atmos-time="midnight"] .ambient-stars{opacity:.28}
+body[data-atmos-weather="rain"] .ambient-stars,
+body[data-atmos-weather="storm"] .ambient-stars{opacity:.08!important}
+.ambient-stars::before,.ambient-stars::after{
+  content:"";position:absolute;inset:0;
+  background-image:
+    radial-gradient(1.5px 1.5px at 12% 18%,#fff 80%,transparent),
+    radial-gradient(1.5px 1.5px at 28% 36%,#dbeafe 80%,transparent),
+    radial-gradient(2px 2px at 44% 14%,#fff 80%,transparent),
+    radial-gradient(1.5px 1.5px at 64% 26%,#e0f2fe 80%,transparent),
+    radial-gradient(1.5px 1.5px at 78% 42%,#fff 80%,transparent),
+    radial-gradient(2px 2px at 88% 22%,#bae6fd 80%,transparent),
+    radial-gradient(1.5px 1.5px at 18% 64%,#fff 80%,transparent),
+    radial-gradient(1.5px 1.5px at 54% 58%,#dbeafe 80%,transparent),
+    radial-gradient(1.5px 1.5px at 72% 76%,#fff 80%,transparent),
+    radial-gradient(1.5px 1.5px at 36% 82%,#e0f2fe 80%,transparent);
+  animation:starTwinkle 4.5s ease-in-out infinite alternate;
+}
+.ambient-stars::after{transform:scale(1.18) rotate(8deg);opacity:.65;animation-duration:6.5s;animation-delay:1.2s}
+
+/* Subtle Aurora Ribbon at Midnight */
+body[data-atmos-time="midnight"]:not(.light) .ambient-aurora{
+  opacity:.72;
+  background:radial-gradient(ellipse 70% 28% at 24% 18%,rgba(16,185,129,.22),transparent 70%),
+             radial-gradient(ellipse 65% 24% at 72% 24%,rgba(139,92,246,.22),transparent 72%);
+  animation:ambientDrift 18s ease-in-out infinite alternate;
+}
+
+/* Drifting Clouds */
+body[data-atmos-weather="cloudy"] .ambient-clouds,
+body[data-atmos-weather="rain"] .ambient-clouds,
+body[data-atmos-weather="storm"] .ambient-clouds{opacity:1}
+body[data-atmos-time="daytime"] .ambient-clouds,
+body[data-atmos-time="noontime"] .ambient-clouds{opacity:.38}
+.ambient-clouds::before,.ambient-clouds::after{
+  content:"";position:absolute;top:0;left:-25%;width:150%;height:55%;
+  background:
+    radial-gradient(ellipse 26% 14% at 18% 16%,rgba(226,232,240,.22),transparent 70%),
+    radial-gradient(ellipse 30% 16% at 52% 11%,rgba(203,213,225,.2),transparent 72%),
+    radial-gradient(ellipse 28% 15% at 84% 20%,rgba(226,232,240,.22),transparent 70%);
+  animation:cloudDrift 36s linear infinite;
+}
+.ambient-clouds::after{top:12%;opacity:.75;animation-duration:52s;animation-direction:reverse}
+body[data-atmos-weather="storm"] .ambient-clouds::before,
+body[data-atmos-weather="rain"] .ambient-clouds::before{filter:brightness(.62)}
+
+/* Animated Rainfall Streaks */
+body[data-atmos-weather="rain"] .ambient-rain,
+body[data-atmos-weather="storm"] .ambient-rain{opacity:.65}
+body[data-atmos-weather="rain"] .ambient-rain::before,
+body[data-atmos-weather="storm"] .ambient-rain::before{
+  content:"";position:absolute;inset:-40% -20%;
+  background-image:repeating-linear-gradient(104deg,transparent 0 26px,rgba(147,197,253,.24) 26px 27.5px,transparent 27.5px 54px);
+  background-size:64px 64px;
+  animation:rainFall .75s linear infinite;
+}
+body[data-atmos-weather="storm"] .ambient-rain::before{
+  background-image:repeating-linear-gradient(108deg,transparent 0 20px,rgba(186,230,253,.32) 20px 21.5px,transparent 21.5px 44px);
+  animation-duration:.48s;
+}
+
+/* Storm Lightning Shimmer */
+body[data-atmos-weather="storm"] .ambient-lightning{
+  opacity:1;
+  background:radial-gradient(circle at 60% 14%,rgba(224,242,254,.55),transparent 55%);
+  animation:lightningFlash 9s ease-in-out infinite;
+}
+
+/* Frosted glass translucent surfaces so living background gleams behind cards */
+body:not([data-atmos="off"]):not(.light) .card,
+body:not([data-atmos="off"]):not(.light) .item,
+body:not([data-atmos="off"]):not(.light) .stat,
+body:not([data-atmos="off"]):not(.light) .tile,
+body:not([data-atmos="off"]):not(.light) .person{
+  background:linear-gradient(180deg,rgba(12,26,54,.82),rgba(8,19,40,.84));
+  backdrop-filter:blur(14px) saturate(140%);-webkit-backdrop-filter:blur(14px) saturate(140%);
+}
+body.light:not([data-atmos="off"]) .card,
+body.light:not([data-atmos="off"]) .item,
+body.light:not([data-atmos="off"]) .stat,
+body.light:not([data-atmos="off"]) .tile,
+body.light:not([data-atmos="off"]) .person{
+  background:rgba(255,255,255,.84);
+  backdrop-filter:blur(14px) saturate(140%);-webkit-backdrop-filter:blur(14px) saturate(140%);
+}
+body:not([data-atmos="off"]){background:transparent!important}
+.atmos-pill{
+  display:inline-flex;align-items:center;gap:5px;margin-top:6px;padding:3px 10px;
+  border-radius:999px;font-size:11.5px;font-weight:700;
+  background:rgba(47,140,255,.16);border:1px solid rgba(125,211,252,.35);color:#bae6fd;
+}
+body.light .atmos-pill{background:rgba(30,108,242,.1);border-color:rgba(30,108,242,.28);color:#1d4ed8}
+
+@keyframes ambientPulse{0%,100%{transform:scale(1);opacity:.92}50%{transform:scale(1.07);opacity:1}}
+@keyframes ambientDrift{0%{transform:translate3d(-2%,0,0) scale(1)}100%{transform:translate3d(2%,2%,0) scale(1.05)}}
+@keyframes starTwinkle{0%{opacity:.45}100%{opacity:1}}
+@keyframes cloudDrift{0%{transform:translateX(0)}100%{transform:translateX(18%)}}
+@keyframes rainFall{0%{transform:translate3d(0,-64px,0)}100%{transform:translate3d(-14px,0,0)}}
+@keyframes lightningFlash{0%,86%,90%,94%,100%{opacity:0}88%{opacity:.42}92%{opacity:.22}}
+@media(prefers-reduced-motion:reduce){
+  #appAmbientBg *::before,#appAmbientBg *::after,#appAmbientBg *{animation:none!important}
+}
 </style>
 </head>
 <body>
 
+<div id="appAmbientBg" aria-hidden="true">
+  <div class="ambient-sky"></div>
+  <div class="ambient-aurora"></div>
+  <div class="ambient-stars"></div>
+  <div class="ambient-celestial"><div class="ambient-orb"></div><div class="ambient-rays"></div></div>
+  <div class="ambient-clouds"></div>
+  <div class="ambient-rain"></div>
+  <div class="ambient-lightning"></div>
+</div>
 <div id="appWatermark" class="hidden" aria-hidden="true"></div>
 <div id="offlineBanner" class="hidden">⚠️ No Internet Connection. Please check your network.</div>
 
@@ -955,6 +1181,18 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
     <div id="displaySettingsPanel" class="settings-subpanel hidden">
       <label for="settingTheme">Theme</label>
       <select id="settingTheme"><option value="dark">Dark</option><option value="light">Light</option></select>
+      <label for="settingAtmosphere">Background atmosphere</label>
+      <select id="settingAtmosphere">
+        <option value="auto">Auto (Live GPS Weather &amp; Time)</option>
+        <option value="daytime">Daytime Morning</option>
+        <option value="noontime">Noontime Sunny</option>
+        <option value="sunset">Golden Sunset</option>
+        <option value="nighttime">Nighttime Clear</option>
+        <option value="midnight">Midnight Aurora</option>
+        <option value="rain">Rainy Session</option>
+        <option value="storm">Thunderstorm</option>
+        <option value="off">Off (Solid Background)</option>
+      </select>
       <label for="settingDecor">Decoration</label>
       <select id="settingDecor"><option value="auto">Auto (by date)</option><option value="off">Off</option><option value="christmas">Christmas</option><option value="holyweek">Holy Week</option><option value="newyear">New Year</option><option value="valentine">Valentine's</option><option value="allsaints">All Saints</option><option value="session">Session</option><option value="event">Event</option></select>
       <label for="settingFont">Font</label>
@@ -1189,10 +1427,6 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
         <div class="app-icon-tile clickable" onclick="openTroubleUnitsFilter()" role="button" tabindex="0">
           <div class="app-squircle ic-red">🚨</div>
           <span class="app-icon-label">Alerts</span>
-        </div>
-        <div class="app-icon-tile clickable" onclick="refreshLiveGpsWeather()" role="button" tabindex="0">
-          <div class="app-squircle ic-amber">🌤️</div>
-          <span class="app-icon-label">GPS Weather</span>
         </div>
       </div>
     </div></section>

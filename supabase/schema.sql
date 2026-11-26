@@ -1318,76 +1318,11 @@ CREATE INDEX IF NOT EXISTS idx_pms_date_created ON public.pms_checklist_records 
 CREATE INDEX IF NOT EXISTS idx_notif_dismissals_user ON public.notification_dismissals (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_payslips_user_period ON public.payslips (user_id, period_end DESC, created_at DESC);
 
-/* 10. SEED AYALA MALLS CENTRAL BLOC (AMCB) & 34 UNITS */
-DO $$
-DECLARE
-  v_site_id_text TEXT;
-  v_site_type TEXT;
-BEGIN
-  SELECT format_type(a.atttypid, a.atttypmod) INTO v_site_type
-  FROM pg_attribute a
-  JOIN pg_class c ON c.oid = a.attrelid
-  JOIN pg_namespace n ON n.oid = c.relnamespace
-  WHERE n.nspname = 'public' AND c.relname = 'sites' AND a.attname = 'id' AND NOT a.attisdropped;
-
-  v_site_type := COALESCE(v_site_type, 'uuid');
-
-  SELECT id::TEXT INTO v_site_id_text
-  FROM public.sites
-  WHERE LOWER(name) LIKE '%ayala%central bloc%' OR UPPER(TRIM(name)) = 'AMCB'
-  LIMIT 1;
-
-  IF v_site_id_text IS NULL THEN
-    INSERT INTO public.sites (name, address, city, region)
-    VALUES ('Ayala Malls Central Bloc (AMCB)', 'Cebu IT Park, Apas', 'Cebu City', 'Visayas')
-    RETURNING id::TEXT INTO v_site_id_text;
-  END IF;
-
-  EXECUTE replace($ins$
-    INSERT INTO public.site_units (site_id, unit_name, unit_type, status, capacity_floors, notes)
-    SELECT $1::__SITE_ID_TYPE__, u.unit_name, u.unit_type, 'Operational', u.capacity_floors, u.notes
-    FROM (VALUES
-      ('Esc. No. 19 B2-B3', 'escalator', 'B2-B3', 'SEDA SIDE · DOWN'),
-      ('Esc. No. 20 B3-B2', 'escalator', 'B3-B2', 'SEDA SIDE · UP'),
-      ('Esc. No. 21 B1-B2', 'escalator', 'B1-B2', 'SEDA SIDE · DOWN'),
-      ('Esc. No. 22 B2-B1', 'escalator', 'B2-B1', 'SEDA SIDE · UP'),
-      ('Esc. No. 3 G-B1', 'escalator', 'G-B1', 'SEDA SIDE · DOWN'),
-      ('Esc. No. 4 B1-G', 'escalator', 'B1-G', 'SEDA SIDE · UP'),
-      ('Esc. No. 26 2-G', 'escalator', '2-G', 'SEDA SIDE · DOWN · 2 Lgt. Newel Guide Roller (Leftside), 2 Lgt. Newel Guide Roller (Rightside)'),
-      ('Esc. No. 25 G-2', 'escalator', 'G-2', 'SEDA SIDE · UP'),
-      ('Esc. No. 27 3-2', 'escalator', '3-2', 'SEDA SIDE · DOWN'),
-      ('Esc. No. 28 2-3', 'escalator', '2-3', 'SEDA SIDE · UP'),
-      ('Esc. No. 17 4-3', 'escalator', '4-3', 'SEDA SIDE · DOWN'),
-      ('Esc. No. 18 3-4', 'escalator', '3-4', 'SEDA SIDE · UP'),
-      ('Esc. No. 2 B1-B2', 'escalator', 'B1-B2', 'IVILLA SIDE · DOWN'),
-      ('Esc. No. 1 B2-B1', 'escalator', 'B2-B1', 'IVILLA SIDE · UP'),
-      ('Esc. No. 23 (G-B1)', 'escalator', 'G-B1', 'IVILLA SIDE · DOWN · 1 Lgt. Rubber Handrail (Leftside), 2pcs. Newel Guide Roller (Leftside), 1 Lot. Flywheel (Leftside)'),
-      ('Esc. No. 24 B1-G', 'escalator', 'B1-G', 'IVILLA SIDE · UP'),
-      ('Esc. No. 6 2-G', 'escalator', '2-G', 'IVILLA SIDE · DOWN'),
-      ('Esc. No. 5 G-2', 'escalator', 'G-2', 'IVILLA SIDE · UP'),
-      ('Esc. No. 7 3-2', 'escalator', '3-2', 'IVILLA SIDE · DOWN'),
-      ('Esc. No. 8 2-3', 'escalator', '2-3', 'IVILLA SIDE · UP'),
-      ('Esc. No. 9 4-3', 'escalator', '4-3', 'IVILLA SIDE · DOWN'),
-      ('Esc. No. 10 3-4', 'escalator', '3-4', 'IVILLA SIDE · UP'),
-      ('Esc. No. 12 5-4', 'escalator', '5-4', 'IVILLA SIDE · DOWN'),
-      ('Esc. No. 11 4-5', 'escalator', '4-5', 'IVILLA SIDE · UP'),
-      ('PE1', 'elevator', NULL, 'IVILLA SIDE · Passenger Elevator'),
-      ('PE2', 'elevator', NULL, 'IVILLA SIDE · Passenger Elevator'),
-      ('PE3', 'elevator', NULL, 'IVILLA SIDE · Passenger Elevator'),
-      ('Esc. No. 14 2-G', 'escalator', '2-G', 'PADRIGA SIDE · DOWN'),
-      ('Esc. No. 13 G-2', 'escalator', 'G-2', 'PADRIGA SIDE · UP'),
-      ('Esc. No. 30 3-2', 'escalator', '3-2', 'PADRIGA SIDE · DOWN'),
-      ('Esc. No. 29 2-3', 'escalator', '2-3', 'PADRIGA SIDE · UP'),
-      ('Esc. No. 16 4-3', 'escalator', '4-3', 'PADRIGA SIDE · DOWN'),
-      ('Esc. No. 15 3-4', 'escalator', '3-4', 'PADRIGA SIDE · UP'),
-      ('CARGO', 'elevator', NULL, 'PADRIGA SIDE · Cargo Elevator')
-    ) AS u(unit_name, unit_type, capacity_floors, notes)
-    WHERE NOT EXISTS (
-      SELECT 1 FROM public.site_units su
-      WHERE su.site_id = $1::__SITE_ID_TYPE__ AND LOWER(TRIM(su.unit_name)) = LOWER(TRIM(u.unit_name))
-    );
-  $ins$, '__SITE_ID_TYPE__', v_site_type)
-  USING v_site_id_text;
-END $$;
+/* 10. REMOVE EXISTING MITSUBISHI BRAND UNITS IN AYALA MALLS CENTRAL BLOC (AMCB) */
+DELETE FROM public.site_units su
+USING public.sites s
+WHERE su.site_id = s.id
+  AND (LOWER(s.name) LIKE '%ayala%central bloc%' OR UPPER(TRIM(s.name)) = 'AMCB')
+  AND LOWER(COALESCE(su.brand_model, '')) LIKE '%mitsubishi%';
 
 NOTIFY pgrst, 'reload schema';

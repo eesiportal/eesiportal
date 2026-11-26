@@ -853,6 +853,11 @@ export function applyDisplaySettings(): void {
   if (sts) sts.value = textSize;
   if (sc) sc.checked = compact;
 
+  const atmosPref = localStorage.getItem("eesi-atmosphere") || "auto";
+  runtime.atmosphereSession = atmosPref;
+  const sa = $("settingAtmosphere") as HTMLSelectElement | null;
+  if (sa) sa.value = atmosPref;
+  applyAmbientSessionBackground();
   applyWatermark();
 }
 
@@ -906,7 +911,7 @@ export function clearWatermark(): void {
 }
 
 export function resetDisplaySettings(): void {
-  ["eesi-font", "eesi-font-weight", "eesi-font-style", "eesi-text-size", "eesi-compact", "eesi-theme"].forEach(k => localStorage.removeItem(k));
+  ["eesi-font", "eesi-font-weight", "eesi-font-style", "eesi-text-size", "eesi-compact", "eesi-theme", "eesi-atmosphere"].forEach(k => localStorage.removeItem(k));
   clearWatermark();
   applyDisplaySettings();
   applyTheme("dark");
@@ -1419,20 +1424,109 @@ export function initPwaInstall(): void {
   refreshPwaInstallUi();
 }
 
-/* ==================== WEATHER + CLOCK ==================== */
+/* ==================== WEATHER + SESSION ATMOSPHERE + 1S AUTO SYNC ==================== */
 let clockTimer: any = null;
+let weatherAutoSyncTimer: any = null;
+let weatherGeoProbeInFlight = false;
+let weatherFetchInFlight = false;
+let lastWeatherGeoProbeAt = 0;
+let lastWeatherUiHtml: {
+  temp: string;
+  feels: string;
+  rh: string;
+  wind: string;
+  rainChanceStr: string;
+  icon: string;
+  label: string;
+  placeName: string;
+} | null = null;
+const WEATHER_API_REFRESH_MS = 15000;
+const weatherPlaceCache = new Map<string, string>();
+
+export type TimeSessionSlot = "daytime" | "noontime" | "sunset" | "nighttime" | "midnight";
+export type WeatherAtmosphereKind = "clear" | "cloudy" | "rain" | "storm";
+
+export function getTimeSessionSlot(now = new Date()): TimeSessionSlot {
+  const mins = now.getHours() * 60 + now.getMinutes();
+  if (mins >= 330 && mins < 660) return "daytime";    // 05:30 – 10:59
+  if (mins >= 660 && mins < 960) return "noontime";   // 11:00 – 15:59
+  if (mins >= 960 && mins < 1110) return "sunset";    // 16:00 – 18:29
+  if (mins >= 1110 && mins < 1410) return "nighttime"; // 18:30 – 23:29
+  return "midnight";                                   // 23:30 – 05:29
+}
+
+export function getWeatherAtmosphereKind(code = runtime.lastWeatherCode): WeatherAtmosphereKind {
+  const c = Number(code);
+  if (c >= 95) return "storm";
+  if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82)) return "rain";
+  if (c === 2 || c === 3 || c === 45 || c === 48) return "cloudy";
+  return "clear";
+}
+
+export function applyAmbientSessionBackground(): {
+  pref: string;
+  timeSlot: TimeSessionSlot | "off";
+  weatherKind: WeatherAtmosphereKind;
+  label: string;
+} {
+  const pref = localStorage.getItem("eesi-atmosphere") || "auto";
+  runtime.atmosphereSession = pref;
+  const body = document.body;
+  if (!body) {
+    return { pref, timeSlot: "daytime", weatherKind: "clear", label: "Daytime" };
+  }
+
+  if (pref === "off") {
+    body.setAttribute("data-atmos", "off");
+    body.removeAttribute("data-atmos-time");
+    body.removeAttribute("data-atmos-weather");
+    return { pref, timeSlot: "off", weatherKind: "clear", label: "Solid Theme" };
+  }
+
+  body.setAttribute("data-atmos", pref);
+  const autoSlot = getTimeSessionSlot();
+  let timeSlot: TimeSessionSlot = autoSlot;
+  let weatherKind: WeatherAtmosphereKind = getWeatherAtmosphereKind();
+
+  if (pref === "daytime" || pref === "noontime" || pref === "sunset" || pref === "nighttime" || pref === "midnight") {
+    timeSlot = pref;
+    weatherKind = "clear";
+  } else if (pref === "rain" || pref === "storm") {
+    weatherKind = pref;
+  }
+
+  body.setAttribute("data-atmos-time", timeSlot);
+  body.setAttribute("data-atmos-weather", weatherKind);
+
+  const timeNames: Record<TimeSessionSlot, string> = {
+    daytime: "🌅 Daytime",
+    noontime: "☀️ Noontime",
+    sunset: "🌇 Sunset",
+    nighttime: "🌙 Nighttime",
+    midnight: "🌌 Midnight",
+  };
+  const weatherNames: Record<WeatherAtmosphereKind, string> = {
+    clear: "Clear",
+    cloudy: "Cloudy",
+    rain: "Rainy",
+    storm: "Stormy",
+  };
+  const label = `${timeNames[timeSlot]} · ${weatherNames[weatherKind]}`;
+  const pillEl = $("liveAtmospherePill");
+  if (pillEl) pillEl.textContent = label;
+  return { pref, timeSlot, weatherKind, label };
+}
+
 export function startClock(): void {
   const tick = () => {
     const el = $("liveClock");
     if (el) el.textContent = new Date().toLocaleString(undefined, { dateStyle: "full", timeStyle: "medium" });
+    applyAmbientSessionBackground();
   };
   tick();
   clearInterval(clockTimer);
   clockTimer = setInterval(tick, 1000);
 }
-
-const weatherPlaceCache = new Map<string, string>();
-let weatherGeoProbeInFlight = false;
 
 function weatherCodeInfo(code: number, isDay = 1): { icon: string; label: string } {
   const c = Number(code);
@@ -1500,12 +1594,38 @@ async function resolveWeatherPlaceName(lat: number, lon: number): Promise<string
   return place;
 }
 
+function renderLiveWeatherCard(): void {
+  const el = $("liveWeather");
+  if (!el) return;
+  const atmos = applyAmbientSessionBackground();
+  const gpsTag = runtime.hasLiveGpsLock
+    ? `🟢 Live GPS${runtime.lastWeatherAcc ? ` ±${runtime.lastWeatherAcc}m` : ""} · Auto 1s`
+    : "📡 Auto-syncing GPS every 1s…";
+
+  if (!lastWeatherUiHtml) {
+    el.innerHTML =
+      `<div class="muted" style="font-size:13px;">${esc(gpsTag)}</div>` +
+      `<div id="liveAtmospherePill" class="atmos-pill">${esc(atmos.label)}</div>`;
+    return;
+  }
+
+  const d = lastWeatherUiHtml;
+  const subParts = [
+    `📍 ${d.placeName} (${gpsTag})`,
+    [d.rh, d.wind, d.rainChanceStr].filter(Boolean).join(" · "),
+  ].filter(Boolean);
+
+  el.innerHTML =
+    `<div>${d.icon} <b>${esc(d.temp)}</b> · ${esc(d.label)}${d.feels ? ` <span class="muted" style="font-size:13px;font-weight:500;">(${esc(d.feels)})</span>` : ""}</div>` +
+    `<div class="muted" style="font-size:12px;margin-top:4px;line-height:1.45;">${subParts.map(esc).join("<br>")}</div>` +
+    `<div id="liveAtmospherePill" class="atmos-pill">${esc(atmos.label)}</div>`;
+}
+
 export async function updateLiveWeather(
   latArg?: number,
   lonArg?: number,
   opts?: { fromGps?: boolean; accuracy?: number; force?: boolean }
 ): Promise<void> {
-  const el = $("liveWeather");
   const cachedGps = hooks.getCachedGps?.();
   let lat = typeof latArg === "number" && Number.isFinite(latArg) ? latArg : undefined;
   let lon = typeof lonArg === "number" && Number.isFinite(lonArg) ? lonArg : undefined;
@@ -1520,9 +1640,8 @@ export async function updateLiveWeather(
       acc = Math.round(cachedGps.acc || acc || 0);
     } else if (!runtime.hasLiveGpsLock && "geolocation" in navigator && !weatherGeoProbeInFlight) {
       weatherGeoProbeInFlight = true;
-      if (el && !el.textContent?.includes("°C")) {
-        el.innerHTML = '<div class="muted" style="font-size:13px;">📡 Acquiring your live GPS location for local weather…</div>';
-      }
+      lastWeatherGeoProbeAt = Date.now();
+      renderLiveWeatherCard();
       navigator.geolocation.getCurrentPosition(
         pos => {
           weatherGeoProbeInFlight = false;
@@ -1538,7 +1657,7 @@ export async function updateLiveWeather(
             void updateLiveWeather(runtime.lastWeatherLat, runtime.lastWeatherLon, { fromGps: false });
           }
         },
-        { enableHighAccuracy: true, maximumAge: 15000, timeout: 8000 }
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 }
       );
       return;
     } else {
@@ -1550,6 +1669,10 @@ export async function updateLiveWeather(
 
   const resolvedLat: number = lat ?? runtime.lastWeatherLat;
   const resolvedLon: number = lon ?? runtime.lastWeatherLon;
+  const coordsChanged =
+    Math.abs(resolvedLat - runtime.lastWeatherLat) > 0.0015 ||
+    Math.abs(resolvedLon - runtime.lastWeatherLon) > 0.0015;
+  const newlyLocked = fromGps && !runtime.hasLiveGpsLock;
 
   runtime.lastWeatherLat = resolvedLat;
   runtime.lastWeatherLon = resolvedLon;
@@ -1558,7 +1681,14 @@ export async function updateLiveWeather(
     if (acc > 0) runtime.lastWeatherAcc = acc;
   }
 
-  if (!el) return;
+  const age = Date.now() - (runtime.lastWeatherUpdatedAt || 0);
+  if (!opts?.force && !newlyLocked && !coordsChanged && lastWeatherUiHtml && age < WEATHER_API_REFRESH_MS) {
+    renderLiveWeatherCard();
+    return;
+  }
+  if (weatherFetchInFlight) return;
+  weatherFetchInFlight = true;
+
   try {
     const [weatherRes, placeName] = await Promise.all([
       fetch(
@@ -1568,7 +1698,9 @@ export async function updateLiveWeather(
     ]);
     const j = await weatherRes.json();
     const c = j.current || {};
-    const info = weatherCodeInfo(c.weather_code, c.is_day ?? 1);
+    const wCode = Number(c.weather_code ?? 0);
+    const isDay = Number(c.is_day ?? 1);
+    const info = weatherCodeInfo(wCode, isDay);
     const temp = c.temperature_2m != null ? `${c.temperature_2m}°C` : "—";
     const feels = c.apparent_temperature != null ? `Feels ${c.apparent_temperature}°C` : "";
     const rh = c.relative_humidity_2m != null ? `💧 ${c.relative_humidity_2m}%` : "";
@@ -1581,50 +1713,70 @@ export async function updateLiveWeather(
       if (prob != null) rainChanceStr = `☔ ${prob}% rain`;
     }
 
+    runtime.lastWeatherCode = wCode;
+    runtime.lastWeatherIsDay = isDay;
+    runtime.lastWeatherTemp = c.temperature_2m != null ? Number(c.temperature_2m) : null;
+    runtime.lastWeatherLabel = info.label;
     runtime.lastWeatherPlace = placeName;
     runtime.lastWeatherUpdatedAt = Date.now();
 
-    const gpsTag = runtime.hasLiveGpsLock
-      ? `🟢 Live GPS${runtime.lastWeatherAcc ? ` ±${runtime.lastWeatherAcc}m` : ""}`
-      : "⚠️ Approx (Enable GPS)";
-    const subParts = [
-      `📍 ${placeName} (${gpsTag})`,
-      [rh, wind, rainChanceStr].filter(Boolean).join(" · "),
-    ].filter(Boolean);
-
-    el.innerHTML =
-      `<div>${info.icon} <b>${esc(temp)}</b> · ${esc(info.label)}${feels ? ` <span class="muted" style="font-size:13px;font-weight:500;">(${esc(feels)})</span>` : ""}</div>` +
-      `<div class="muted" style="font-size:12px;margin-top:4px;line-height:1.45;">${subParts.map(esc).join("<br>")}</div>` +
-      `<div style="margin-top:6px;"><button type="button" class="gray small-btn" onclick="refreshLiveGpsWeather()">📡 Sync GPS Weather</button></div>`;
+    lastWeatherUiHtml = {
+      temp,
+      feels,
+      rh,
+      wind,
+      rainChanceStr,
+      icon: info.icon,
+      label: info.label,
+      placeName,
+    };
+    renderLiveWeatherCard();
   } catch {
-    el.innerHTML =
-      `<div>Weather unavailable.</div>` +
-      `<div style="margin-top:6px;"><button type="button" class="gray small-btn" onclick="refreshLiveGpsWeather()">↻ Retry GPS Weather</button></div>`;
+    renderLiveWeatherCard();
+  } finally {
+    weatherFetchInFlight = false;
   }
 }
 
-export function refreshLiveGpsWeather(): void {
-  const el = $("liveWeather");
-  if (!("geolocation" in navigator)) {
-    void updateLiveWeather(undefined, undefined, { force: true });
-    return;
-  }
-  if (el) el.innerHTML = '<div class="muted" style="font-size:13px;">📡 Locking live GPS for exact local weather…</div>';
-  navigator.geolocation.getCurrentPosition(
-    pos => {
-      void updateLiveWeather(pos.coords.latitude, pos.coords.longitude, {
+export function startAutoWeatherSyncLoop(): void {
+  clearInterval(weatherAutoSyncTimer);
+  const syncTick = () => {
+    const cachedGps = hooks.getCachedGps?.();
+    if (cachedGps && Number.isFinite(cachedGps.lat) && Number.isFinite(cachedGps.lng)) {
+      const moved =
+        !runtime.hasLiveGpsLock ||
+        Math.abs(cachedGps.lat - runtime.lastWeatherLat) > 0.0015 ||
+        Math.abs(cachedGps.lng - runtime.lastWeatherLon) > 0.0015;
+      const stale = Date.now() - (runtime.lastWeatherUpdatedAt || 0) >= WEATHER_API_REFRESH_MS;
+      void updateLiveWeather(cachedGps.lat, cachedGps.lng, {
         fromGps: true,
-        accuracy: pos.coords.accuracy,
-        force: true,
+        accuracy: cachedGps.acc,
+        force: moved || stale,
       });
-      toast("Weather synced to your live GPS location");
-    },
-    () => {
-      void updateLiveWeather(undefined, undefined, { force: true });
-      toast("Could not refresh GPS — check location permission");
-    },
-    { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
-  );
+    } else {
+      if ("geolocation" in navigator && !weatherGeoProbeInFlight && Date.now() - lastWeatherGeoProbeAt >= 3000) {
+        weatherGeoProbeInFlight = true;
+        lastWeatherGeoProbeAt = Date.now();
+        navigator.geolocation.getCurrentPosition(
+          pos => {
+            weatherGeoProbeInFlight = false;
+            void updateLiveWeather(pos.coords.latitude, pos.coords.longitude, {
+              fromGps: true,
+              accuracy: pos.coords.accuracy,
+              force: true,
+            });
+          },
+          () => {
+            weatherGeoProbeInFlight = false;
+          },
+          { enableHighAccuracy: true, maximumAge: 1000, timeout: 4000 }
+        );
+      }
+      void updateLiveWeather();
+    }
+  };
+  syncTick();
+  weatherAutoSyncTimer = setInterval(syncTick, 1000);
 }
 
 /* ==================== PULL TO RELOAD (REMOVED) ==================== */
@@ -1767,6 +1919,13 @@ export function initSettingsWiring(): void {
     const val = ($("settingTheme") as HTMLSelectElement).value;
     localStorage.setItem("eesi-theme", val);
     applyTheme(val);
+    applyAmbientSessionBackground();
+  });
+  $("settingAtmosphere")?.addEventListener("change", () => {
+    const val = ($("settingAtmosphere") as HTMLSelectElement).value;
+    localStorage.setItem("eesi-atmosphere", val);
+    applyDisplaySettings();
+    renderLiveWeatherCard();
   });
 
   const wmFile = $("settingWatermarkFile") as HTMLInputElement | null;
@@ -1843,7 +2002,7 @@ export function initSettingsWiring(): void {
     menu.classList.add("hidden");
   });
 
+  applyAmbientSessionBackground();
   renderDecor();
-  updateLiveWeather();
-  setInterval(() => updateLiveWeather(), 300000);
+  startAutoWeatherSyncLoop();
 }
