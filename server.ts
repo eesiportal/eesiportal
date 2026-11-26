@@ -743,7 +743,7 @@ async function createApp() {
             const gUrl =
               `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=${zoom}` +
               `&size=240x240&scale=2&maptype=hybrid&markers=color:red%7C${lat},${lng}&key=${encodeURIComponent(gKey)}`;
-            const gRes = await fetch(gUrl);
+            const gRes = await fetch(gUrl, { signal: AbortSignal.timeout(6000) });
             if (gRes.ok && /^image\//i.test(gRes.headers.get("content-type") || "")) {
               const buf = Buffer.from(await gRes.arrayBuffer());
               res.setHeader("Content-Type", gRes.headers.get("content-type") || "image/png");
@@ -765,6 +765,7 @@ async function createApp() {
         try {
           const tileRes = await fetch(tUrl, {
             headers: { "User-Agent": "EESI-Elevators-Console/1.0 (site-preview)" },
+            signal: AbortSignal.timeout(6000),
           });
           if (!tileRes.ok) continue;
           const buf = Buffer.from(await tileRes.arrayBuffer());
@@ -800,7 +801,7 @@ async function createApp() {
         const u =
           `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6` +
           `&gsrsearch=${encodeURIComponent(term)}&gsrlimit=6&prop=imageinfo&iiprop=url|mime&iiurlwidth=800&format=json&origin=*`;
-        const r = await fetch(u, { headers: { "User-Agent": "EESI-Elevators-Console/1.0" } });
+        const r = await fetch(u, { headers: { "User-Agent": "EESI-Elevators-Console/1.0" }, signal: AbortSignal.timeout(6000) });
         if (r.ok) {
           const j: any = await r.json();
           const pages = Object.values(j?.query?.pages || {}) as any[];
@@ -825,7 +826,7 @@ async function createApp() {
         const u =
           `https://en.wikipedia.org/w/api.php?action=query&generator=search` +
           `&gsrsearch=${encodeURIComponent(term)}&gsrlimit=4&prop=pageimages&piprop=thumbnail&pithumbsize=800&format=json&origin=*`;
-        const r = await fetch(u, { headers: { "User-Agent": "EESI-Elevators-Console/1.0" } });
+        const r = await fetch(u, { headers: { "User-Agent": "EESI-Elevators-Console/1.0" }, signal: AbortSignal.timeout(6000) });
         if (r.ok) {
           const j: any = await r.json();
           const pages = Object.values(j?.query?.pages || {}) as any[];

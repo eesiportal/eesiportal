@@ -18,6 +18,7 @@ import {
   parseTimeLogFromAppNotice,
   profileName,
   profileOf,
+  rebuildProfileIndex,
   roleLabel,
   runtime,
   setLive,
@@ -299,6 +300,8 @@ export function resetDataLoadFlags(): void {
   storiesLoaded = false;
   runtime.dtrTimeLogsTableMissing = false;
   runtime.dtrApprovedByColMissing = false;
+  runtime.dtrNightshiftColMissing = false;
+  runtime.empLocAccColMissing = false;
   runtime.storiesTableMissing = false;
   runtime.notificationDismissalsTableMissing = false;
   runtime.sitesExtraColsMissing = false;
@@ -306,6 +309,7 @@ export function resetDataLoadFlags(): void {
   runtime.siteDistanceOriginKey = "";
   runtime.siteMetaNotices = {};
   runtime.amcbSeedAttempted = false;
+  rebuildProfileIndex();
 }
 
 export async function loadNotificationDismissals(): Promise<void> {
@@ -339,8 +343,10 @@ export async function loadNotificationDismissals(): Promise<void> {
     });
     if (changedDel) saveDeletedNoticesMap(delMap);
     if (changedRead) saveReadNoticesMap(readMap);
-    hooks.renderNotices();
-    hooks.renderHome();
+    if (!runtime.batchLoading) {
+      hooks.renderNotices();
+      hooks.renderHome();
+    }
   } catch {}
 }
 
@@ -351,10 +357,13 @@ export async function loadProfiles(): Promise<void> {
     .order("full_name");
   if (error) { setupError("Could not load members", error); return; }
   state.profiles = data || [];
+  rebuildProfileIndex();
   const mine = profileOf(state.userId);
   if (mine) state.profile = mine;
-  hooks.renderAssigneesPicker();
-  hooks.autoFillDtrFromSchedule?.();
+  if (!runtime.batchLoading) {
+    hooks.renderAssigneesPicker();
+    hooks.autoFillDtrFromSchedule?.();
+  }
 }
 
 export async function loadLeaveRequests(): Promise<void> {
@@ -387,10 +396,12 @@ export async function loadLeaveRequests(): Promise<void> {
   }
   state.leaveRequests = rows;
   leaveLoaded = true;
-  hooks.renderLeave();
-  hooks.renderLeaveBalances();
-  hooks.renderNotices();
-  hooks.renderHome();
+  if (!runtime.batchLoading) {
+    hooks.renderLeave();
+    hooks.renderLeaveBalances();
+    hooks.renderNotices();
+    hooks.renderHome();
+  }
 }
 
 export async function loadRoles(): Promise<void> {
@@ -433,17 +444,19 @@ export async function loadSites(): Promise<void> {
       longitude: hasLng ? Number(s.longitude) : (meta?.longitude ?? null),
     };
   });
-  hooks.renderSites();
-  hooks.renderUnitSiteOptions();
-  hooks.renderUnits();
-  hooks.renderDtrSiteOptions();
-  hooks.renderPmsSiteOptions();
-  hooks.renderPmsChecklist();
-  hooks.renderReportSites();
-  hooks.renderSearchSiteOptions();
-  hooks.renderReports();
-  hooks.renderPmsRecordsFilters();
-  hooks.renderConnectedPickers?.();
+  if (!runtime.batchLoading) {
+    hooks.renderSites();
+    hooks.renderUnitSiteOptions();
+    hooks.renderUnits();
+    hooks.renderDtrSiteOptions();
+    hooks.renderPmsSiteOptions();
+    hooks.renderPmsChecklist();
+    hooks.renderReportSites();
+    hooks.renderSearchSiteOptions();
+    hooks.renderReports();
+    hooks.renderPmsRecordsFilters();
+    hooks.renderConnectedPickers?.();
+  }
   if (runtime.currentPage === "sites" && (siteMapWasActivated || siteMapInstance)) {
     void refreshVisibleSiteDistances();
   }
@@ -464,8 +477,10 @@ export async function loadUnits(): Promise<void> {
   }
   $("unitsSetupHint")?.classList.add("hidden");
   state.units = data || [];
-  hooks.renderUnits();
-  hooks.renderConnectedPickers?.();
+  if (!runtime.batchLoading) {
+    hooks.renderUnits();
+    hooks.renderConnectedPickers?.();
+  }
 }
 
 export function timelineReports(): any[] {
@@ -490,10 +505,12 @@ export async function loadReports(): Promise<void> {
   const newReports = reportsLoaded ? (data || []).filter((r: any) => !previousIds.has(String(r.id)) && String(r.created_by) !== String(state.userId)) : [];
   state.reports = data || [];
   reportsLoaded = true;
-  hooks.renderReports();
-  hooks.renderUnits();
-  hooks.renderHome();
-  hooks.renderNotices();
+  if (!runtime.batchLoading) {
+    hooks.renderReports();
+    hooks.renderUnits();
+    hooks.renderHome();
+    hooks.renderNotices();
+  }
   if (newReports.length > 0 && !isWithinSelfActionWindow()) {
     const r = newReports[0];
     const typeLbl = r.report_type === "delivery" ? "Delivery Report" : "Service Report";
@@ -510,9 +527,11 @@ export async function loadPmsRecords(): Promise<void> {
     .order("created_at", { ascending: false });
   if (error) return;
   state.pmsRecords = data || [];
-  hooks.renderPmsRecordsFilters();
-  hooks.renderPmsRecords();
-  hooks.renderUnits();
+  if (!runtime.batchLoading) {
+    hooks.renderPmsRecordsFilters();
+    hooks.renderPmsRecords();
+    hooks.renderUnits();
+  }
 }
 
 function mentionSeenKey(): string {
@@ -626,7 +645,7 @@ export async function loadAppNotifications(): Promise<void> {
         longitude: Number.isFinite(Number(s.longitude)) && s.longitude !== null ? Number(s.longitude) : (m.longitude ?? null),
       };
     });
-    hooks.renderSites();
+    if (!runtime.batchLoading) hooks.renderSites();
   }
   if (runtime.dtrTimeLogsTableMissing) {
     syncTimeLogsFromAppNotices();
@@ -637,8 +656,10 @@ export async function loadAppNotifications(): Promise<void> {
   if (runtime.payslipsTableMissing) {
     syncPayslipsFromAppNotices();
   }
-  hooks.renderNotices();
-  hooks.renderHome();
+  if (!runtime.batchLoading) {
+    hooks.renderNotices();
+    hooks.renderHome();
+  }
   const visibleNew = newItems.filter((it: any) => !isHiddenSystemNotice(it));
   if (visibleNew.length && !isWithinSelfActionWindow()) {
     const first = visibleNew[0];
@@ -676,8 +697,10 @@ export async function loadApprovalNotifications(): Promise<void> {
   const newItems = approvalNotificationsLoaded ? (data || []).filter((item: any) => !previousIds.has(String(item.id))) : [];
   state.approvalNotifications = data || [];
   approvalNotificationsLoaded = true;
-  hooks.renderNotices();
-  hooks.renderHome();
+  if (!runtime.batchLoading) {
+    hooks.renderNotices();
+    hooks.renderHome();
+  }
   if (newItems.length && !isWithinSelfActionWindow()) {
     const first = newItems[0];
     const text = `${first.title || ""} ${first.body || ""}`;
@@ -736,13 +759,15 @@ export async function loadSchedules(): Promise<void> {
     : [];
   schedulesLoaded = true;
 
-  hooks.renderSchedules();
-  hooks.renderNotices();
-  hooks.renderUnits();
-  hooks.renderHome();
+  if (!runtime.batchLoading) {
+    hooks.renderSchedules();
+    hooks.renderNotices();
+    hooks.renderUnits();
+    hooks.renderHome();
+    hooks.autoFillDtrFromSchedule?.();
+    hooks.evaluateDailySiteGeofence?.();
+  }
   hooks.checkShiftReminders?.();
-  hooks.autoFillDtrFromSchedule?.();
-  hooks.evaluateDailySiteGeofence?.();
 
   if (changedMentioned.length > 0 && !isWithinSelfActionWindow()) {
     const s = changedMentioned[0];
@@ -775,7 +800,24 @@ export async function loadSchedules(): Promise<void> {
 
 export async function loadDtrs(): Promise<void> {
   let rows: any[] | null = null;
-  if (!runtime.dtrApprovedByColMissing) {
+  if (!runtime.dtrApprovedByColMissing && !runtime.dtrNightshiftColMissing) {
+    const res = await runtime.client
+      .from("dtr_entries")
+      .select("id,user_id,work_date,location,job,time_in,time_out,overtime_approved,approved_by,nightshift_repair")
+      .order("work_date", { ascending: true });
+    if (!res.error) {
+      rows = res.data || [];
+    } else if (/nightshift_repair|approved_by|42703|PGRST204/i.test(String(res.error.message || "") + " " + String(res.error.code || ""))) {
+      const msg = String(res.error.message || "");
+      if (/nightshift_repair/i.test(msg)) runtime.dtrNightshiftColMissing = true;
+      if (/approved_by/i.test(msg)) runtime.dtrApprovedByColMissing = true;
+      if (!/nightshift_repair|approved_by/i.test(msg)) runtime.dtrNightshiftColMissing = true;
+    } else {
+      setupError("Could not load DTR", res.error);
+      return;
+    }
+  }
+  if (rows === null && !runtime.dtrApprovedByColMissing) {
     const res = await runtime.client
       .from("dtr_entries")
       .select("id,user_id,work_date,location,job,time_in,time_out,overtime_approved,approved_by")
@@ -798,8 +840,10 @@ export async function loadDtrs(): Promise<void> {
     rows = data || [];
   }
   state.dtrs = rows || [];
-  hooks.renderDtr();
-  hooks.renderHome();
+  if (!runtime.batchLoading) {
+    hooks.renderDtr();
+    hooks.renderHome();
+  }
 }
 
 function applyStoryRows(rows: any[]): void {
@@ -811,7 +855,7 @@ function applyStoryRows(rows: any[]): void {
     : [];
   state.stories = active;
   storiesLoaded = true;
-  hooks.renderChatList?.();
+  if (!runtime.batchLoading) hooks.renderChatList?.();
   if (incoming.length > 0 && !isWithinSelfActionWindow()) {
     const s = incoming[0];
     triggerAlert("✨ New My Day Story", (s.sender_name || profileName(s.user_id)) + " shared a story", [180, 90, 180]);
@@ -859,8 +903,10 @@ function applyTimeLogRows(rows: any[]): void {
     : [];
   state.dtrTimeLogs = rows;
   dtrTimeLogsLoaded = true;
-  hooks.renderTimeLog?.();
-  hooks.renderHome?.();
+  if (!runtime.batchLoading) {
+    hooks.renderTimeLog?.();
+    hooks.renderHome?.();
+  }
   if (incoming.length > 0 && !isWithinSelfActionWindow()) {
     const r = incoming[0];
     const lbl = r.mode === "time_out" ? "Time Out" : "Time In";
@@ -935,7 +981,7 @@ function applyPayslipRows(remoteRows: any[]): void {
   readLocalPayslips().forEach(push);
   merged.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
   state.payslips = merged;
-  hooks.renderPayroll?.();
+  if (!runtime.batchLoading) hooks.renderPayroll?.();
 }
 
 function syncPayslipsFromAppNotices(): void {
@@ -990,7 +1036,7 @@ export async function loadNotes(): Promise<void> {
     .order("created_at", { ascending: false });
   if (error) { setupError("Could not load notes", error); return; }
   state.notes = data || [];
-  hooks.renderNotes();
+  if (!runtime.batchLoading) hooks.renderNotes();
 }
 
 export async function loadRecs(): Promise<void> {
@@ -1000,8 +1046,10 @@ export async function loadRecs(): Promise<void> {
     .order("created_at", { ascending: false });
   if (error) { setupError("Could not load recommendations", error); return; }
   state.recs = data || [];
-  hooks.renderRecs();
-  hooks.renderUnits();
+  if (!runtime.batchLoading) {
+    hooks.renderRecs();
+    hooks.renderUnits();
+  }
   if (!isWithinSelfActionWindow()) {
     const mentionedRec = state.recs.find(
       (r: any) =>
@@ -1029,9 +1077,11 @@ export async function loadAnnouncements(): Promise<void> {
   const newAnnouncements = announcementsLoaded ? (data || []).filter((item: any) => !previousIds.has(String(item.id))) : [];
   state.announcements = data || [];
   announcementsLoaded = true;
-  hooks.renderAnnouncements();
-  hooks.renderNotices();
-  hooks.renderHome();
+  if (!runtime.batchLoading) {
+    hooks.renderAnnouncements();
+    hooks.renderNotices();
+    hooks.renderHome();
+  }
   if (newAnnouncements.length > 0 && !isWithinSelfActionWindow()) {
     const first = newAnnouncements[0];
     const mentionTxt = `${first.title || ""} ${first.body || ""}`;
@@ -1067,9 +1117,11 @@ export async function loadPending(): Promise<void> {
     .order("created_at", { ascending: true });
   if (error) { setupError("Could not load pending registrations", error); return; }
   state.pending = data || [];
-  hooks.renderPending();
-  hooks.renderNotices();
-  hooks.renderHome();
+  if (!runtime.batchLoading) {
+    hooks.renderPending();
+    hooks.renderNotices();
+    hooks.renderHome();
+  }
 }
 
 export async function loadPreviews(): Promise<void> {
@@ -1105,8 +1157,10 @@ export async function loadRecentChatNotices(): Promise<void> {
     .limit(40);
   if (error) return;
   state.recentChatNotices = data || [];
-  hooks.renderNotices();
-  hooks.renderHome();
+  if (!runtime.batchLoading) {
+    hooks.renderNotices();
+    hooks.renderHome();
+  }
 }
 
 export async function loadBlockedUsers(): Promise<void> {
@@ -1125,13 +1179,17 @@ export async function loadThreads(): Promise<void> {
   state.threads = data || [];
   if (state.activeThread && !state.threads.some(t => String(t.id) === String(state.activeThread))) hooks.closeChat();
   await loadPreviews();
-  hooks.renderChatList();
+  if (!runtime.batchLoading) hooks.renderChatList();
 }
 
 export async function loadUnread(): Promise<void> {
   if (!state.userId) return;
   const ids = state.threads.map(t => t.id);
-  if (!ids.length) { state.unread = {}; hooks.renderHome(); hooks.renderNotices(); return; }
+  if (!ids.length) {
+    state.unread = {};
+    if (!runtime.batchLoading) { hooks.renderHome(); hooks.renderNotices(); }
+    return;
+  }
   const lastRead: Record<string, string> = {};
   let min: string | null = null;
   state.threads.forEach(t => {
@@ -1157,9 +1215,11 @@ export async function loadUnread(): Promise<void> {
     }
   });
   state.unread = counts;
-  hooks.renderHome();
-  hooks.renderNotices();
-  hooks.renderChatList();
+  if (!runtime.batchLoading) {
+    hooks.renderHome();
+    hooks.renderNotices();
+    hooks.renderChatList();
+  }
 }
 
 export async function loadMessages(threadId: string): Promise<void> {
@@ -1405,27 +1465,37 @@ export function startLive(): void {
 
 export async function reloadEverything(): Promise<void> {
   if (!state.userId) return;
-  await Promise.all([
-    loadProfiles(),
-    loadRoles(),
-    loadSites(),
-    loadUnits(),
-    loadSchedules(),
-    loadDtrs(),
-    loadTimeLogs(),
-    loadNotes(),
-    loadRecs(),
-    loadAnnouncements(),
-    loadPending(),
-    loadThreads(),
-    loadLeaveRequests(),
-    loadReports(),
-    loadPmsRecords(),
-    loadStories(),
-    loadPayslips(),
-  ]);
-  await loadUnread();
-  await loadRecentChatNotices();
+  runtime.batchLoading++;
+  try {
+    await Promise.all([
+      loadProfiles(),
+      loadRoles(),
+      loadSites(),
+      loadUnits(),
+      loadSchedules(),
+      loadDtrs(),
+      loadTimeLogs(),
+      loadNotes(),
+      loadRecs(),
+      loadAnnouncements(),
+      loadPending(),
+      loadThreads(),
+      loadLeaveRequests(),
+      loadReports(),
+      loadPmsRecords(),
+      loadStories(),
+      loadPayslips(),
+    ]);
+    await Promise.all([
+      loadUnread(),
+      loadRecentChatNotices(),
+    ]);
+  } finally {
+    runtime.batchLoading = Math.max(0, runtime.batchLoading - 1);
+  }
+  hooks.renderAssigneesPicker();
+  hooks.renderReportSites();
+  hooks.autoFillDtrFromSchedule?.();
   hooks.renderAll();
   if (state.activeThread) await loadMessages(state.activeThread);
 }
@@ -1465,9 +1535,9 @@ function mergeOwnLocationLocally(lat: number, lng: number, updatedAt: string): v
   const row = { user_id: uid, latitude: lat, longitude: lng, updated_at: updatedAt };
   if (idx >= 0) liveAllLocationRows[idx] = row;
   else liveAllLocationRows.push(row);
-  renderLiveOnlineMembersList();
-  if (runtime.currentPage === "live-map" && isManager() && !liveBusy) {
-    void loadLiveMap();
+  if (runtime.currentPage === "live-map" && isManager()) {
+    renderLiveOnlineMembersList();
+    if (!liveBusy) void loadLiveMap();
   }
 }
 
@@ -1517,12 +1587,26 @@ async function upsertCoordsToSupabase(lat: number, lng: number, acc: number, for
   locationUploadInFlight = true;
   try {
     const isoNow = new Date().toISOString();
-    const { error } = await runtime.client
+    const payload: Record<string, any> = {
+      user_id: state.userId,
+      latitude: lat,
+      longitude: lng,
+      updated_at: isoNow,
+    };
+    if (!runtime.empLocAccColMissing && acc > 0) {
+      payload.accuracy = acc;
+    }
+    let { error } = await runtime.client
       .from("employee_locations")
-      .upsert(
-        { user_id: state.userId, latitude: lat, longitude: lng, updated_at: isoNow },
-        { onConflict: "user_id" }
-      );
+      .upsert(payload, { onConflict: "user_id" });
+    if (error && /accuracy|42703|PGRST204|schema cache/i.test(String(error.message || "") + " " + String(error.code || ""))) {
+      runtime.empLocAccColMissing = true;
+      delete payload.accuracy;
+      const retry = await runtime.client
+        .from("employee_locations")
+        .upsert(payload, { onConflict: "user_id" });
+      error = retry.error;
+    }
     if (error) {
       console.warn("GPS location upload error:", error.message || error);
       lastLocationUploadAt = 0;
@@ -1646,7 +1730,7 @@ function startLocationWatch(forceRestart = false): void {
 
   if (!locationHeartbeatTimer) {
     locationHeartbeatTimer = setInterval(() => {
-      if (!navigator.geolocation) return;
+      if (document.hidden || !navigator.geolocation) return;
       if (runtime.locationWatchId == null) {
         startLocationWatch(false);
         return;
@@ -1809,7 +1893,7 @@ let liveLastPoints: Array<{ lat: number; lng: number }> = [];
 let liveAllLocationRows: any[] = [];
 const liveMarkers = new Map<
   string,
-  { marker: any; isAdvanced: boolean; infoHtml: string; position: { lat: number; lng: number } }
+  { marker: any; isAdvanced: boolean; infoHtml: string; position: { lat: number; lng: number }; fresh?: boolean; name?: string }
 >();
 const LIVE_REFRESH_MS = 5000;
 const LIVE_STALE_MS = 5 * 60 * 1000;
@@ -1860,22 +1944,29 @@ function createLiveEmployeeMarker(
 }
 
 function updateLiveEmployeeMarker(
-  entry: { marker: any; isAdvanced: boolean; infoHtml: string; position: { lat: number; lng: number } },
+  entry: { marker: any; isAdvanced: boolean; infoHtml: string; position: { lat: number; lng: number }; fresh?: boolean; name?: string },
   position: { lat: number; lng: number },
   name: string,
   fresh: boolean,
   infoHtml: string
 ): void {
+  const posChanged =
+    Math.abs(entry.position.lat - position.lat) > 1e-6 ||
+    Math.abs(entry.position.lng - position.lng) > 1e-6;
+  const visualChanged = entry.fresh !== fresh || entry.name !== name;
+
   if (entry.isAdvanced) {
-    entry.marker.position = position;
-    entry.marker.title = name;
-    entry.marker.content = buildEmployeePinElement(name, fresh);
+    if (posChanged) entry.marker.position = position;
+    if (entry.name !== name) entry.marker.title = name;
+    if (visualChanged) entry.marker.content = buildEmployeePinElement(name, fresh);
   } else {
-    entry.marker.setPosition?.(position);
-    entry.marker.setTitle?.(name);
+    if (posChanged) entry.marker.setPosition?.(position);
+    if (entry.name !== name) entry.marker.setTitle?.(name);
   }
   entry.infoHtml = infoHtml;
   entry.position = position;
+  entry.fresh = fresh;
+  entry.name = name;
 }
 
 function openLiveMarkerInfoWindow(
@@ -1993,41 +2084,46 @@ export function renderLiveOnlineMembersList(): void {
     return String(a.full_name || "").localeCompare(String(b.full_name || ""));
   });
 
-  if (countEl) countEl.textContent = String(onlineMembers.length);
+  const countStr = String(onlineMembers.length);
+  if (countEl && countEl.textContent !== countStr) countEl.textContent = countStr;
   if (!listEl) return;
+  let nextOnlineHtml = "";
   if (!onlineMembers.length) {
-    listEl.innerHTML = '<p class="muted" style="margin:0;">No online members right now.</p>';
-    return;
+    nextOnlineHtml = '<p class="muted" style="margin:0;">No online members right now.</p>';
+  } else {
+    const now = Date.now();
+    nextOnlineHtml = onlineMembers
+      .map(p => {
+        const uid = String(p.user_id);
+        const userRole = state.roles[uid]?.app_role || "employee";
+        const roleText = roleLabel(userRole);
+        const areaTeam = [p.team, p.area].filter(Boolean).join(" · ");
+        const loc = locByUser.get(uid);
+        const hasCoords = !!loc && Number.isFinite(+loc.latitude) && Number.isFinite(+loc.longitude);
+        const fresh = hasCoords && now - new Date(loc.updated_at).getTime() <= LIVE_STALE_MS;
+        const age = hasCoords ? formatAgeLabel(loc.updated_at) : "";
+        const isMe = uid === String(state.userId || "");
+        const gpsLabel = hasCoords
+          ? `${fresh ? "🟢 GPS Live" : "🟡 Last GPS"} (${age}) · ${Number(loc.latitude).toFixed(4)}, ${Number(loc.longitude).toFixed(4)}`
+          : (isMe ? "📡 Locating GPS… (tap Locate)" : "⚪ Waiting for GPS");
+
+        return (
+          `<div class="person clickable" style="margin-bottom:6px;" onclick="focusLiveEmployee('${esc(uid)}')">` +
+          face(p) +
+          `<span class="person-info">` +
+          `<b>${esc(p.full_name || "Member")} <span class="badge">${esc(roleText)}</span></b>` +
+          `<span class="muted"><span class="online-dot on"></span>Online${areaTeam ? " · " + esc(areaTeam) : ""} · ${esc(gpsLabel)}</span>` +
+          `</span>` +
+          `<button class="btn small-btn" type="button" onclick="event.stopPropagation();focusLiveEmployee('${esc(uid)}')">📍 Locate</button>` +
+          `</div>`
+        );
+      })
+      .join("");
   }
-
-  const now = Date.now();
-  listEl.innerHTML = onlineMembers
-    .map(p => {
-      const uid = String(p.user_id);
-      const userRole = state.roles[uid]?.app_role || "employee";
-      const roleText = roleLabel(userRole);
-      const areaTeam = [p.team, p.area].filter(Boolean).join(" · ");
-      const loc = locByUser.get(uid);
-      const hasCoords = !!loc && Number.isFinite(+loc.latitude) && Number.isFinite(+loc.longitude);
-      const fresh = hasCoords && now - new Date(loc.updated_at).getTime() <= LIVE_STALE_MS;
-      const age = hasCoords ? formatAgeLabel(loc.updated_at) : "";
-      const isMe = uid === String(state.userId || "");
-      const gpsLabel = hasCoords
-        ? `${fresh ? "🟢 GPS Live" : "🟡 Last GPS"} (${age}) · ${Number(loc.latitude).toFixed(4)}, ${Number(loc.longitude).toFixed(4)}`
-        : (isMe ? "📡 Locating GPS… (tap Locate)" : "⚪ Waiting for GPS");
-
-      return (
-        `<div class="person clickable" style="margin-bottom:6px;" onclick="focusLiveEmployee('${esc(uid)}')">` +
-        face(p) +
-        `<span class="person-info">` +
-        `<b>${esc(p.full_name || "Member")} <span class="badge">${esc(roleText)}</span></b>` +
-        `<span class="muted"><span class="online-dot on"></span>Online${areaTeam ? " · " + esc(areaTeam) : ""} · ${esc(gpsLabel)}</span>` +
-        `</span>` +
-        `<button class="btn small-btn" type="button" onclick="event.stopPropagation();focusLiveEmployee('${esc(uid)}')">📍 Locate</button>` +
-        `</div>`
-      );
-    })
-    .join("");
+  if (listEl.dataset.lastHtml !== nextOnlineHtml) {
+    listEl.dataset.lastHtml = nextOnlineHtml;
+    listEl.innerHTML = nextOnlineHtml;
+  }
 }
 
 export async function focusLiveEmployee(userId: string): Promise<void> {
@@ -2199,7 +2295,7 @@ export async function loadLiveMap(opts: { fit?: boolean } = {}): Promise<void> {
       const existing = liveMarkers.get(row.user_id);
       if (!existing) {
         const created = createLiveEmployeeMarker(map, position, name, fresh, AdvancedMarkerElement);
-        const entry = { marker: created.marker, isAdvanced: created.isAdvanced, infoHtml, position };
+        const entry = { marker: created.marker, isAdvanced: created.isAdvanced, infoHtml, position, fresh, name };
         created.marker.addListener("click", () => {
           if (liveMapInstance) openLiveMarkerInfoWindow(liveMapInstance, entry);
         });
@@ -2225,11 +2321,12 @@ export async function loadLiveMap(opts: { fit?: boolean } = {}): Promise<void> {
 
     const freshCount = items.filter(i => i.fresh).length;
     if (statusEl) {
-      statusEl.textContent =
+      const nextStatus =
         items.length + " shown (" + freshCount + " live in last 5 min) · Auto-refresh every 5s · Last reload " + new Date().toLocaleTimeString();
+      if (statusEl.textContent !== nextStatus) statusEl.textContent = nextStatus;
     }
     if (listEl) {
-      listEl.innerHTML = items.map(({ row, name, roleText, areaTeam, fresh, age }) =>
+      const nextListHtml = items.map(({ row, name, roleText, areaTeam, fresh, age }) =>
         '<div class="item" style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><div><b>' + esc(name) +
         '</b> <span class="badge">' + esc(roleText) + '</span>' +
         ' <span class="sess-badge ' + (fresh ? "now" : "") + '"' + (fresh ? "" : ' style="background:#94a3b8;"') + ">" + (fresh ? "LIVE" : "STALE") + "</span>" +
@@ -2238,6 +2335,10 @@ export async function loadLiveMap(opts: { fit?: boolean } = {}): Promise<void> {
         '<div class="inline-actions" style="margin-top:0"><button class="gray small-btn" type="button" onclick="focusLiveEmployee(\'' + esc(row.user_id) + '\')">📍 Focus</button>' +
         '<a href="https://www.google.com/maps?q=' + encodeURIComponent(row.latitude + "," + row.longitude) + '" target="_blank" rel="noopener">Open</a></div></div>'
       ).join("") || '<p class="muted">No matching locations yet.</p>';
+      if (listEl.dataset.lastHtml !== nextListHtml) {
+        listEl.dataset.lastHtml = nextListHtml;
+        listEl.innerHTML = nextListHtml;
+      }
     }
   } catch (err: any) {
     if (statusEl) statusEl.textContent = "Could not load Google Live Map: " + (err?.message || err);
@@ -4406,9 +4507,11 @@ export function initDataListeners(): void {
     if (!runtime.dbReady) startLive();
     hooks.checkShiftReminders?.();
     void loadUnread();
+    if (runtime.currentPage === "live-map" && isManager()) void loadLiveMap();
   });
 
   setInterval(() => {
+    if (document.hidden) return;
     if (runtime.currentPage === "live-map" && isManager()) loadLiveMap();
   }, LIVE_REFRESH_MS);
 }

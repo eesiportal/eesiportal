@@ -494,7 +494,7 @@ export async function exportDtrHistoryPdf(opts: { clearAfter?: boolean } = {}): 
 
       const dayMetaMap = new Map<string, { firstIn: string | null; lastOut: string | null; mins: number; nsRepair: boolean }>();
       empRows.forEach(d => {
-        const meta = parseDtrJobMeta(d.job, d.approved_by);
+        const meta = parseDtrJobMeta(d.job, d.approved_by, d.nightshift_repair);
         const dayKey = `${String(d.work_date || "")}::${String(d.user_id || "")}`;
         const ruleOpts = { workDate: d.work_date, nightshiftRepair: meta.nightshiftRepair };
         const mins = calculateDtrMinutes(d.time_in, d.time_out, null, ruleOpts);
@@ -508,7 +508,7 @@ export async function exportDtrHistoryPdf(opts: { clearAfter?: boolean } = {}): 
       });
 
       const tableRows = empRows.map(d => {
-        const meta = parseDtrJobMeta(d.job, d.approved_by);
+        const meta = parseDtrJobMeta(d.job, d.approved_by, d.nightshift_repair);
         const isSunday = isSundayDate(d.work_date);
         const ruleOpts = { workDate: d.work_date, nightshiftRepair: meta.nightshiftRepair };
         const dayKey = `${String(d.work_date || "")}::${String(d.user_id || "")}`;

@@ -223,6 +223,9 @@ export const runtime = {
   isOnlineVerified: navigator.onLine,
   dtrTimeLogsTableMissing: false,
   dtrApprovedByColMissing: false,
+  dtrNightshiftColMissing: false,
+  empLocAccColMissing: false,
+  batchLoading: 0,
   storiesTableMissing: false,
   notificationDismissalsTableMissing: false,
   payslipsTableMissing: false,
@@ -520,17 +523,31 @@ const OPEN_STYLE_CLASSES = [
   "open-style-7",
 ];
 let lastOpenStyleIndex = -1;
+const openStyleTimers = new WeakMap<HTMLElement, any>();
 
 export function applyRandomOpenStyle(el: HTMLElement | null): void {
   if (!el) return;
+  const prevTimer = openStyleTimers.get(el);
+  if (prevTimer) clearTimeout(prevTimer);
   el.classList.remove(...OPEN_STYLE_CLASSES);
   let idx = Math.floor(Math.random() * OPEN_STYLE_CLASSES.length);
   if (idx === lastOpenStyleIndex && OPEN_STYLE_CLASSES.length > 1) {
     idx = (idx + 1 + Math.floor(Math.random() * (OPEN_STYLE_CLASSES.length - 1))) % OPEN_STYLE_CLASSES.length;
   }
   lastOpenStyleIndex = idx;
+  const cls = OPEN_STYLE_CLASSES[idx];
   void el.offsetWidth;
-  el.classList.add(OPEN_STYLE_CLASSES[idx]);
+  el.classList.add(cls);
+  const clearCls = () => {
+    el.classList.remove(cls);
+    const t = openStyleTimers.get(el);
+    if (t) {
+      clearTimeout(t);
+      openStyleTimers.delete(el);
+    }
+  };
+  el.addEventListener("animationend", clearCls, { once: true });
+  openStyleTimers.set(el, setTimeout(clearCls, 450));
 }
 
 export function openSheet(html: string): void {
@@ -920,9 +937,27 @@ export function calculateShiftBreakdown(
   };
 }
 
+let profileMap = new Map<string, any>();
+let profileIndexRef: any[] | null = null;
+let profileIndexLen = -1;
+
+export function rebuildProfileIndex(): void {
+  profileMap = new Map<string, any>();
+  const list = state.profiles || [];
+  for (let i = 0; i < list.length; i++) {
+    const p = list[i];
+    if (p && p.user_id != null) profileMap.set(String(p.user_id), p);
+  }
+  profileIndexRef = state.profiles;
+  profileIndexLen = list.length;
+}
+
 export function profileOf(id: string | null | undefined): any {
   if (!id) return null;
-  return state.profiles.find(p => String(p.user_id) === String(id)) || null;
+  if (profileIndexRef !== state.profiles || profileIndexLen !== (state.profiles?.length ?? 0)) {
+    rebuildProfileIndex();
+  }
+  return profileMap.get(String(id)) || null;
 }
 export function profileName(id: string | null | undefined): string {
   const p = profileOf(id);

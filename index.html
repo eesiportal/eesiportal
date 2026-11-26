@@ -801,20 +801,20 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
 @keyframes openFadeUp{from{opacity:0;transform:translate3d(0,18px,0)}to{opacity:1;transform:none}}
 @keyframes openSlideLeft{from{opacity:0;transform:translate3d(26px,0,0)}to{opacity:1;transform:none}}
 @keyframes openSlideRight{from{opacity:0;transform:translate3d(-26px,0,0)}to{opacity:1;transform:none}}
-@keyframes openZoomIn{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:scale(1)}}
+@keyframes openZoomIn{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:none}}
 @keyframes openFlipIn{from{opacity:0;transform:perspective(900px) rotateX(6deg) translateY(10px)}to{opacity:1;transform:none}}
 @keyframes openDropIn{from{opacity:0;transform:translate3d(0,-16px,0) scale(.98)}to{opacity:1;transform:none}}
-@keyframes openSpringPop{0%{opacity:0;transform:scale(.92)}65%{opacity:1;transform:scale(1.015)}100%{opacity:1;transform:scale(1)}}
-@keyframes openBlurReveal{from{opacity:0;filter:blur(5px);transform:scale(.98)}to{opacity:1;filter:blur(0);transform:none}}
+@keyframes openSpringPop{0%{opacity:0;transform:scale(.92)}65%{opacity:1;transform:scale(1.015)}100%{opacity:1;transform:none}}
+@keyframes openBlurReveal{from{opacity:0;transform:translate3d(0,12px,0) scale(.985)}to{opacity:1;transform:none}}
 
-.open-style-0{animation:openFadeUp .32s cubic-bezier(.22,1,.36,1) both}
-.open-style-1{animation:openSlideLeft .3s cubic-bezier(.22,1,.36,1) both}
-.open-style-2{animation:openSlideRight .3s cubic-bezier(.22,1,.36,1) both}
-.open-style-3{animation:openZoomIn .28s cubic-bezier(.22,1,.36,1) both}
-.open-style-4{animation:openFlipIn .34s cubic-bezier(.22,1,.36,1) both}
-.open-style-5{animation:openDropIn .3s cubic-bezier(.22,1,.36,1) both}
-.open-style-6{animation:openSpringPop .36s cubic-bezier(.22,1,.36,1) both}
-.open-style-7{animation:openBlurReveal .3s ease-out both}
+.open-style-0{animation:openFadeUp .3s cubic-bezier(.22,1,.36,1) both}
+.open-style-1{animation:openSlideLeft .28s cubic-bezier(.22,1,.36,1) both}
+.open-style-2{animation:openSlideRight .28s cubic-bezier(.22,1,.36,1) both}
+.open-style-3{animation:openZoomIn .26s cubic-bezier(.22,1,.36,1) both}
+.open-style-4{animation:openFlipIn .3s cubic-bezier(.22,1,.36,1) both}
+.open-style-5{animation:openDropIn .28s cubic-bezier(.22,1,.36,1) both}
+.open-style-6{animation:openSpringPop .32s cubic-bezier(.22,1,.36,1) both}
+.open-style-7{animation:openBlurReveal .28s ease-out both}
 @media(prefers-reduced-motion:reduce){
   .open-style-0,.open-style-1,.open-style-2,.open-style-3,.open-style-4,.open-style-5,.open-style-6,.open-style-7{animation:none!important}
 }
@@ -978,8 +978,13 @@ body[data-atmos-weather="storm"] .ambient-stars{opacity:.08!important}
     radial-gradient(1.5px 1.5px at 72% 76%,#fff 80%,transparent),
     radial-gradient(1.5px 1.5px at 36% 82%,#e0f2fe 80%,transparent);
   animation:starTwinkle 4.5s ease-in-out infinite alternate;
+  animation-play-state:paused;
 }
 .ambient-stars::after{transform:scale(1.18) rotate(8deg);opacity:.65;animation-duration:6.5s;animation-delay:1.2s}
+body[data-atmos-time="nighttime"] .ambient-stars::before,
+body[data-atmos-time="nighttime"] .ambient-stars::after,
+body[data-atmos-time="midnight"] .ambient-stars::before,
+body[data-atmos-time="midnight"] .ambient-stars::after{animation-play-state:running}
 
 /* Subtle Aurora Ribbon at Midnight */
 body[data-atmos-time="midnight"]:not(.light) .ambient-aurora{
@@ -1002,8 +1007,19 @@ body[data-atmos-time="noontime"] .ambient-clouds{opacity:.38}
     radial-gradient(ellipse 30% 16% at 52% 11%,rgba(203,213,225,.2),transparent 72%),
     radial-gradient(ellipse 28% 15% at 84% 20%,rgba(226,232,240,.22),transparent 70%);
   animation:cloudDrift 36s linear infinite;
+  animation-play-state:paused;
 }
 .ambient-clouds::after{top:12%;opacity:.75;animation-duration:52s;animation-direction:reverse}
+body[data-atmos-weather="cloudy"] .ambient-clouds::before,
+body[data-atmos-weather="cloudy"] .ambient-clouds::after,
+body[data-atmos-weather="rain"] .ambient-clouds::before,
+body[data-atmos-weather="rain"] .ambient-clouds::after,
+body[data-atmos-weather="storm"] .ambient-clouds::before,
+body[data-atmos-weather="storm"] .ambient-clouds::after,
+body[data-atmos-time="daytime"] .ambient-clouds::before,
+body[data-atmos-time="daytime"] .ambient-clouds::after,
+body[data-atmos-time="noontime"] .ambient-clouds::before,
+body[data-atmos-time="noontime"] .ambient-clouds::after{animation-play-state:running}
 body[data-atmos-weather="storm"] .ambient-clouds::before,
 body[data-atmos-weather="rain"] .ambient-clouds::before{filter:brightness(.62)}
 
@@ -1028,24 +1044,32 @@ body[data-atmos-weather="storm"] .ambient-lightning{
   background:radial-gradient(circle at 60% 14%,rgba(224,242,254,.55),transparent 55%);
   animation:lightningFlash 9s ease-in-out infinite;
 }
+body[data-atmos="off"] #appAmbientBg *::before,
+body[data-atmos="off"] #appAmbientBg *::after,
+body[data-atmos="off"] #appAmbientBg *{animation-play-state:paused!important}
 
-/* Frosted glass translucent surfaces so living background gleams behind cards */
-body:not([data-atmos="off"]):not(.light) .card,
+/* Lightweight translucent surfaces: backdrop blur only on top-level cards, fast flat/gradient tint on repeating rows */
+body:not([data-atmos="off"]):not(.light) .card{
+  background:linear-gradient(180deg,rgba(12,26,54,.84),rgba(8,19,40,.86));
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+}
 body:not([data-atmos="off"]):not(.light) .item,
 body:not([data-atmos="off"]):not(.light) .stat,
 body:not([data-atmos="off"]):not(.light) .tile,
 body:not([data-atmos="off"]):not(.light) .person{
-  background:linear-gradient(180deg,rgba(12,26,54,.82),rgba(8,19,40,.84));
-  backdrop-filter:blur(14px) saturate(140%);-webkit-backdrop-filter:blur(14px) saturate(140%);
+  background:linear-gradient(180deg,rgba(12,26,54,.88),rgba(8,19,40,.9));
 }
-body.light:not([data-atmos="off"]) .card,
+body.light:not([data-atmos="off"]) .card{
+  background:rgba(255,255,255,.86);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+}
 body.light:not([data-atmos="off"]) .item,
 body.light:not([data-atmos="off"]) .stat,
 body.light:not([data-atmos="off"]) .tile,
 body.light:not([data-atmos="off"]) .person{
-  background:rgba(255,255,255,.84);
-  backdrop-filter:blur(14px) saturate(140%);-webkit-backdrop-filter:blur(14px) saturate(140%);
+  background:rgba(255,255,255,.92);
 }
+.item,.person{contain:layout style}
 body:not([data-atmos="off"]){background:transparent!important}
 .atmos-pill{
   display:inline-flex;align-items:center;gap:5px;margin-top:6px;padding:3px 10px;
@@ -1540,7 +1564,10 @@ body.light .atmos-pill{background:rgba(30,108,242,.1);border-color:rgba(30,108,2
                   <div class="field"><label for="pmsRecordsTeam">Team</label><select id="pmsRecordsTeam"><option value="">All teams</option></select></div>
                   <div class="field"><label for="pmsRecordsLocation">Location</label><select id="pmsRecordsLocation"><option value="">All locations</option></select></div>
                 </div>
-                <div class="field"><label for="pmsRecordsSite">Site</label><select id="pmsRecordsSite"><option value="">All sites</option></select></div>
+                <div class="row">
+                  <div class="field"><label for="pmsRecordsSite">Site</label><select id="pmsRecordsSite"><option value="">All sites</option></select></div>
+                  <div class="field"><label for="pmsRecordsUnit">Unit</label><select id="pmsRecordsUnit"><option value="">All units</option></select></div>
+                </div>
               </div>
               <div id="pmsRecordsList"></div>
             </div>

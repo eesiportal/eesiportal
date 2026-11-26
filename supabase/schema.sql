@@ -1325,4 +1325,41 @@ WHERE su.site_id = s.id
   AND (LOWER(s.name) LIKE '%ayala%central bloc%' OR UPPER(TRIM(s.name)) = 'AMCB')
   AND LOWER(COALESCE(su.brand_model, '')) LIKE '%mitsubishi%';
 
+/* 11. REMOVE UNIT-LEVEL PMS LINKAGE & RESTRICT ADMIN FROM UNIT PMS CHECKLIST SUBMISSION */
+DROP INDEX IF EXISTS public.idx_pms_unit_date;
+
+ALTER TABLE public.pms_checklist_records
+  DROP COLUMN IF EXISTS unit_id,
+  DROP COLUMN IF EXISTS unit_name;
+
+DROP POLICY IF EXISTS pms_select ON public.pms_checklist_records;
+CREATE POLICY pms_select ON public.pms_checklist_records
+  FOR SELECT USING (public.is_approved_user() OR public.is_manager());
+
+DROP POLICY IF EXISTS pms_insert ON public.pms_checklist_records;
+CREATE POLICY pms_insert ON public.pms_checklist_records
+  FOR INSERT WITH CHECK (public.is_approved_user() AND NOT public.is_admin());
+
+DROP POLICY IF EXISTS pms_update ON public.pms_checklist_records;
+CREATE POLICY pms_update ON public.pms_checklist_records
+  FOR UPDATE USING (public.is_manager() OR auth.uid() = user_id)
+  WITH CHECK (public.is_manager() OR auth.uid() = user_id);
+
+DROP POLICY IF EXISTS pms_modify ON public.pms_checklist_records;
+CREATE POLICY pms_modify ON public.pms_checklist_records
+  FOR DELETE USING (public.is_manager() OR auth.uid() = user_id);
+
+/* 12. OFFICIAL PERFORMANCE INDEXES, NIGHTSHIFT_REPAIR & SCHEMA SYNC */
+ALTER TABLE public.dtr_entries ADD COLUMN IF NOT EXISTS nightshift_repair BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE public.employee_locations ADD COLUMN IF NOT EXISTS accuracy DOUBLE PRECISION;
+
+CREATE INDEX IF NOT EXISTS idx_approval_notifications_recipient ON public.approval_notifications (recipient_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notes_user_created ON public.notes (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rec_comments_rec_created ON public.recommendation_comments (recommendation_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON public.push_subscriptions (user_id);
+CREATE INDEX IF NOT EXISTS idx_messages_active_thread_created ON public.messages (thread_id, created_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_announcements_created_at ON public.announcements (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registration_requests_status_created ON public.registration_requests (status, created_at DESC);
+
 NOTIFY pgrst, 'reload schema';
+

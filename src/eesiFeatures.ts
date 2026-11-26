@@ -667,14 +667,14 @@ function getLiveDtrTodaySummary(): {
   const latestClosed = closedRows.length ? closedRows[closedRows.length - 1] : null;
   const closedMins = closedRows.reduce(
     (sum, d) => {
-      const m = parseDtrJobMeta(d.job, d.approved_by);
+      const m = parseDtrJobMeta(d.job, d.approved_by, d.nightshift_repair);
       return sum + calculateDtrMinutes(d.time_in, d.time_out, null, { workDate: todayStr, nightshiftRepair: m.nightshiftRepair });
     },
     0
   );
-  const activeMeta = activeEntry ? parseDtrJobMeta(activeEntry.job, activeEntry.approved_by) : null;
+  const activeMeta = activeEntry ? parseDtrJobMeta(activeEntry.job, activeEntry.approved_by, activeEntry.nightshift_repair) : null;
   const activeNightshiftRepair = Boolean(activeMeta?.nightshiftRepair);
-  const hasNightshiftRepair = myToday.some(d => parseDtrJobMeta(d.job, d.approved_by).nightshiftRepair);
+  const hasNightshiftRepair = myToday.some(d => parseDtrJobMeta(d.job, d.approved_by, d.nightshift_repair).nightshiftRepair);
   const liveMins = activeEntry
     ? calculateDtrMinutes(activeEntry.time_in, null, nowMins, { workDate: todayStr, nightshiftRepair: activeNightshiftRepair })
     : 0;
@@ -702,6 +702,7 @@ export function renderDtrLiveStatus(): void {
     const formRuleOpts = { workDate: dateVal, nightshiftRepair: isFormNsRepair };
     const dayTag = isSundayDate(dateVal) ? "Sun 10AM–7PM" : "Mon–Sat";
     const nsTag = isFormNsRepair ? " · 🌙 Nightshift/Repair" : "";
+    let hintHtml = "";
     if (inVal && outVal) {
       const cappedOutVal = capDtrTimeOut(inVal, outVal, formRuleOpts);
       const outLbl = fmtTime12h(cappedOutVal) || cappedOutVal;
@@ -712,19 +713,19 @@ export function renderDtrLiveStatus(): void {
         ? " (Sunday O.T. needs <10:00 AM start or Operations Fix/Install/Repair)"
         : "";
       if (bd.lackingMins > 0 && bd.grossOtMins > 0 && bd.finalOtMins >= 0 && (!bd.isSunday || bd.nightshiftRepair || bd.finalOtMins > 0)) {
-        formHint.innerHTML =
+        hintHtml =
           `⏱ [${esc(dayTag)}${nsTag}] Worked: <b>${esc(formatDtrDuration(bd.workedMins))}</b> (${(bd.workedMins / 60).toFixed(2)} hrs)` +
           ` · Std 9h (${esc(bd.shiftStartLabel)}–${esc(bd.shiftEndLabel)}): <b>${esc(formatDtrDuration(bd.inShiftWorkedMins))}</b>` +
           ` <span class="muted">(Lacking ${esc(formatDtrDuration(bd.lackingMins))})</span>` +
           ` · O.T.: <b>${esc(formatDtrDuration(bd.grossOtMins))}</b> − <b>${esc(formatDtrDuration(bd.lackingMins))}</b> = Final O.T.: <b>${esc(formatDtrDuration(bd.finalOtMins))}</b>` +
           ` · Time Out: <b>${esc(outLbl)}</b>${capNote}`;
       } else if (bd.lackingMins > 0) {
-        formHint.innerHTML =
+        hintHtml =
           `⏱ [${esc(dayTag)}${nsTag}] Worked: <b>${esc(formatDtrDuration(bd.workedMins))}</b> (${(bd.workedMins / 60).toFixed(2)} hrs)` +
           ` · Std 9h (${esc(bd.shiftStartLabel)}–${esc(bd.shiftEndLabel)}): Lacking <b>${esc(formatDtrDuration(bd.lackingMins))}</b>` +
           ` · Final O.T.: <b>${esc(formatDtrDuration(bd.finalOtMins))}</b>${sundayNoOtNote} · Time Out: <b>${esc(outLbl)}</b>${capNote}`;
       } else {
-        formHint.innerHTML =
+        hintHtml =
           `⏱ [${esc(dayTag)}${nsTag}] Worked: <b>${esc(formatDtrDuration(bd.workedMins))}</b> (${(bd.workedMins / 60).toFixed(2)} hrs)` +
           ` · Reg: <b>${esc(formatDtrDuration(bd.regularMins))}</b> · Final O.T.: <b>${esc(formatDtrDuration(bd.finalOtMins))}</b>${sundayNoOtNote}` +
           ` · Time Out: <b>${esc(outLbl)}</b>${capNote}`;
@@ -733,14 +734,18 @@ export function renderDtrLiveStatus(): void {
       const liveMins = calculateDtrMinutes(inVal, null, summary.nowMins, formRuleOpts);
       const bd = calculateShiftBreakdown(inVal, null, liveMins, formRuleOpts);
       const cappedAt7Pm = !isFormNsRepair && summary.nowMins >= 19 * 60 && liveMins > 0;
-      formHint.innerHTML =
+      hintHtml =
         `🟢 [${esc(dayTag)}${nsTag}] Counting from <b>${esc(fmtTime12h(inVal) || inVal)}</b>: <b>${esc(formatDtrDuration(liveMins))}</b>` +
         ` (${(liveMins / 60).toFixed(2)} hrs) · Reg: ${esc(formatDtrDuration(bd.regularMins))} / 9h 00m, Final O.T.: ${esc(formatDtrDuration(bd.finalOtMins))}` +
         (cappedAt7Pm ? " · <b>Stopped at 7:00 PM Time Out</b>" : "");
     } else {
-      formHint.textContent = isSundayDate(dateVal)
+      hintHtml = isSundayDate(dateVal)
         ? `📅 Sunday rule: Regular 10:00 AM–7:00 PM (9h). O.T. applies if starting before 10:00 AM or past 7:00 PM with Operations Fix/Install/Repair.`
         : `📅 Mon–Sat rule: Regular 8:00 AM–5:00 PM (9h). O.T. 5:01–7:00 PM (7:01 PM+ requires Nightshift/Operations Repair).`;
+    }
+    if (formHint.dataset.lastHtml !== hintHtml) {
+      formHint.dataset.lastHtml = hintHtml;
+      formHint.innerHTML = hintHtml;
     }
   }
 
@@ -758,7 +763,7 @@ export function renderDtrLiveStatus(): void {
       `</div>`;
   } else if (summary.latestClosed) {
     const inLbl = fmtTime12h(summary.latestClosed.time_in) || summary.latestClosed.time_in;
-    const closedMeta = parseDtrJobMeta(summary.latestClosed.job, summary.latestClosed.approved_by);
+    const closedMeta = parseDtrJobMeta(summary.latestClosed.job, summary.latestClosed.approved_by, summary.latestClosed.nightshift_repair);
     const cappedClosedOut = capDtrTimeOut(summary.latestClosed.time_in, summary.latestClosed.time_out, {
       workDate: summary.todayStr,
       nightshiftRepair: closedMeta.nightshiftRepair,
@@ -785,11 +790,17 @@ export function renderDtrLiveStatus(): void {
     const el = $(id);
     if (!el) return;
     if (!statusHtml) {
-      el.classList.add("hidden");
-      el.innerHTML = "";
+      if (!el.classList.contains("hidden")) el.classList.add("hidden");
+      if (el.dataset.lastHtml !== "") {
+        el.dataset.lastHtml = "";
+        el.innerHTML = "";
+      }
     } else {
-      el.classList.remove("hidden");
-      el.innerHTML = statusHtml;
+      if (el.classList.contains("hidden")) el.classList.remove("hidden");
+      if (el.dataset.lastHtml !== statusHtml) {
+        el.dataset.lastHtml = statusHtml;
+        el.innerHTML = statusHtml;
+      }
     }
   });
 }
@@ -812,7 +823,7 @@ export function renderHomeDtrStatus(): void {
     : (hasAnyToday
       ? '<span class="badge">🔴 Timed Out</span>'
       : '<span class="badge">⚪ Not Clocked In</span>');
-  const closedMeta = latestClosed ? parseDtrJobMeta(latestClosed.job, latestClosed.approved_by) : null;
+  const closedMeta = latestClosed ? parseDtrJobMeta(latestClosed.job, latestClosed.approved_by, latestClosed.nightshift_repair) : null;
   const homeClosedOut = latestClosed
     ? capDtrTimeOut(latestClosed.time_in, latestClosed.time_out, {
         workDate: summary.todayStr,
@@ -831,8 +842,7 @@ export function renderHomeDtrStatus(): void {
     ? '<button class="red small-btn" type="button" onclick="openQuickTimeAction(\'time_out\')">🔴 Time Out</button>'
     : '<button class="green small-btn" type="button" onclick="openQuickTimeAction(\'time_in\')">🟢 Time In</button>';
 
-  card.classList.remove("hidden");
-  card.innerHTML =
+  const nextHtml =
     '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
     '<div style="min-width:0;">' +
     '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;"><b>⏱️ DTR Status</b>' + statusBadge + "</div>" +
@@ -840,6 +850,11 @@ export function renderHomeDtrStatus(): void {
     "</div>" +
     '<div style="flex:0 0 auto;">' + actionBtn + "</div>" +
     "</div>";
+  if (card.classList.contains("hidden")) card.classList.remove("hidden");
+  if (card.dataset.lastHtml !== nextHtml) {
+    card.dataset.lastHtml = nextHtml;
+    card.innerHTML = nextHtml;
+  }
 }
 
 function isScheduleWithinTimelineDuration(s: any, nowMs: number, todayStr: string): boolean {
@@ -866,23 +881,27 @@ let lastGeofenceAlertAt = 0;
 export async function evaluateDailySiteGeofence(): Promise<void> {
   const alertEl = $("homeGeofenceAlert");
   if (!alertEl) return;
+  const hideGeofence = () => {
+    if (!alertEl.classList.contains("hidden")) alertEl.classList.add("hidden");
+    if (alertEl.dataset.lastSig !== "hidden") {
+      alertEl.dataset.lastSig = "hidden";
+      alertEl.innerHTML = "";
+    }
+  };
   if (!state.userId) {
-    alertEl.classList.add("hidden");
-    alertEl.innerHTML = "";
+    hideGeofence();
     return;
   }
   const todayStr = todayIso();
   const sched = findScheduledWorkForUser(todayStr);
   const userCoords = getCachedUserGpsCoords();
   if (!sched || !sched.siteName || !userCoords) {
-    alertEl.classList.add("hidden");
-    alertEl.innerHTML = "";
+    hideGeofence();
     return;
   }
   const siteCoords = await resolveSiteCoordinatesByName(sched.siteName);
   if (!siteCoords) {
-    alertEl.classList.add("hidden");
-    alertEl.innerHTML = "";
+    hideGeofence();
     return;
   }
   const rawMeters = haversineMeters(userCoords.lat, userCoords.lng, siteCoords.lat, siteCoords.lng);
@@ -894,18 +913,24 @@ export async function evaluateDailySiteGeofence(): Promise<void> {
     ? `<button class="gray small-btn" type="button" onclick="openSiteOnMap('${esc(matchedSite.id)}')">📍 View Site Map</button>`
     : `<button class="gray small-btn" type="button" onclick="go('sites')">📍 Sites</button>`;
 
-  if (effectiveMeters > TIMEMARK_FAR_SITE_THRESHOLD_METERS) {
-    alertEl.classList.remove("hidden");
-    alertEl.style.borderColor = "rgba(239,68,68,.55)";
-    alertEl.style.background = "linear-gradient(180deg,rgba(127,29,29,.32),rgba(9,21,44,.95))";
-    alertEl.innerHTML =
-      `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">` +
-      `<div style="min-width:0;flex:1;">` +
-      `<div style="font-weight:800;color:#fca5a5;">⚠️ GPS Far From Today's Assigned Site</div>` +
-      `<div style="font-size:12.5px;margin-top:3px;">You are currently <b>~${esc(distLabel)}</b> away from <b>${esc(siteCoords.name)}</b> (outside ${TIMEMARK_FAR_SITE_THRESHOLD_METERS} m work-site radius).</div>` +
-      `</div>` +
-      `<div style="flex:0 0 auto;">${viewBtn}</div>` +
-      `</div>`;
+  const isFar = effectiveMeters > TIMEMARK_FAR_SITE_THRESHOLD_METERS;
+  const sig = `${todayStr}|${isFar ? "far" : "ok"}|${siteCoords.name}|${distLabel}|${matchedSite?.id || ""}`;
+  if (alertEl.classList.contains("hidden")) alertEl.classList.remove("hidden");
+
+  if (isFar) {
+    if (alertEl.dataset.lastSig !== sig) {
+      alertEl.dataset.lastSig = sig;
+      alertEl.style.borderColor = "rgba(239,68,68,.55)";
+      alertEl.style.background = "linear-gradient(180deg,rgba(127,29,29,.32),rgba(9,21,44,.95))";
+      alertEl.innerHTML =
+        `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">` +
+        `<div style="min-width:0;flex:1;">` +
+        `<div style="font-weight:800;color:#fca5a5;">⚠️ GPS Far From Today's Assigned Site</div>` +
+        `<div style="font-size:12.5px;margin-top:3px;">You are currently <b>~${esc(distLabel)}</b> away from <b>${esc(siteCoords.name)}</b> (outside ${TIMEMARK_FAR_SITE_THRESHOLD_METERS} m work-site radius).</div>` +
+        `</div>` +
+        `<div style="flex:0 0 auto;">${viewBtn}</div>` +
+        `</div>`;
+    }
 
     const key = `${todayStr}:${siteCoords.name}`;
     if (key !== lastGeofenceAlertKey || Date.now() - lastGeofenceAlertAt > 15 * 60 * 1000) {
@@ -917,8 +942,8 @@ export async function evaluateDailySiteGeofence(): Promise<void> {
         [300, 120, 300]
       );
     }
-  } else {
-    alertEl.classList.remove("hidden");
+  } else if (alertEl.dataset.lastSig !== sig) {
+    alertEl.dataset.lastSig = sig;
     alertEl.style.borderColor = "rgba(34,197,94,.42)";
     alertEl.style.background = "";
     alertEl.innerHTML =
@@ -935,44 +960,49 @@ export function renderHomeShareFeed(): void {
   const logs = [...(state.dtrTimeLogs || [])]
     .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
     .slice(0, 8);
+  let html = "";
   if (!logs.length) {
-    box.innerHTML =
+    html =
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
       '<span class="muted">No Time In / Out uploads yet. Upload a photo so the team sees who timed in or out.</span>' +
       '<div class="inline-actions" style="margin-top:0;">' +
       '<button class="green small-btn" type="button" onclick="openQuickTimeAction(\'time_in\')">🟢 Time In</button>' +
       '<button class="red small-btn" type="button" onclick="openQuickTimeAction(\'time_out\')">🔴 Time Out</button>' +
       "</div></div>";
-    return;
+  } else {
+    html = logs.map((l: any) => {
+      const isOut = l.mode === "time_out";
+      const modeBadge = isOut ? '<span class="badge" style="border-color:rgba(239,68,68,.5);color:#fca5a5;">🔴 Time Out</span>' : '<span class="sess-badge now" style="margin-left:0;">🟢 Time In</span>';
+      const who = l.sender_name || profileName(l.user_id);
+      const safeImg = safeUrl(l.image_url);
+      const timeTxt = l.time_12 || l.time_24 || "";
+      const metaStr = [
+        timeTxt ? "⏰ " + timeTxt : "",
+        l.work_date ? fmtDay(l.work_date) : "",
+        l.location ? "📍 " + l.location : "",
+        l.unit ? "🛗 " + l.unit : "",
+      ].filter(Boolean).join(" · ");
+      return (
+        '<div class="item" style="display:flex;gap:10px;align-items:center;margin-bottom:8px;">' +
+        avatarHtml(l.user_id, who) +
+        '<div style="flex:1;min-width:0;">' +
+        '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
+        "<b>" + esc(who) + "</b> " + modeBadge +
+        "</div>" +
+        '<div class="muted" style="font-size:12px;margin-top:2px;">' + esc(metaStr || fmtDate(l.created_at)) + "</div>" +
+        (l.note ? '<div style="font-size:12.5px;margin-top:2px;">' + esc(l.note) + "</div>" : "") +
+        "</div>" +
+        (safeImg
+          ? '<img src="' + esc(safeImg) + '" alt="Time photo" data-preview-url="' + esc(safeImg) + '" data-preview-label="' + esc(who + " — " + (isOut ? "Time Out" : "Time In")) + '" style="width:52px;height:52px;border-radius:10px;object-fit:cover;flex:0 0 52px;cursor:pointer;border:1px solid rgba(47,140,255,.35);">'
+          : "") +
+        "</div>"
+      );
+    }).join("");
   }
-  box.innerHTML = logs.map((l: any) => {
-    const isOut = l.mode === "time_out";
-    const modeBadge = isOut ? '<span class="badge" style="border-color:rgba(239,68,68,.5);color:#fca5a5;">🔴 Time Out</span>' : '<span class="sess-badge now" style="margin-left:0;">🟢 Time In</span>';
-    const who = l.sender_name || profileName(l.user_id);
-    const safeImg = safeUrl(l.image_url);
-    const timeTxt = l.time_12 || l.time_24 || "";
-    const metaStr = [
-      timeTxt ? "⏰ " + timeTxt : "",
-      l.work_date ? fmtDay(l.work_date) : "",
-      l.location ? "📍 " + l.location : "",
-      l.unit ? "🛗 " + l.unit : "",
-    ].filter(Boolean).join(" · ");
-    return (
-      '<div class="item" style="display:flex;gap:10px;align-items:center;margin-bottom:8px;">' +
-      avatarHtml(l.user_id, who) +
-      '<div style="flex:1;min-width:0;">' +
-      '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
-      "<b>" + esc(who) + "</b> " + modeBadge +
-      "</div>" +
-      '<div class="muted" style="font-size:12px;margin-top:2px;">' + esc(metaStr || fmtDate(l.created_at)) + "</div>" +
-      (l.note ? '<div style="font-size:12.5px;margin-top:2px;">' + esc(l.note) + "</div>" : "") +
-      "</div>" +
-      (safeImg
-        ? '<img src="' + esc(safeImg) + '" alt="Time photo" data-preview-url="' + esc(safeImg) + '" data-preview-label="' + esc(who + " — " + (isOut ? "Time Out" : "Time In")) + '" style="width:52px;height:52px;border-radius:10px;object-fit:cover;flex:0 0 52px;cursor:pointer;border:1px solid rgba(47,140,255,.35);">'
-        : "") +
-      "</div>"
-    );
-  }).join("");
+  if (box.dataset.lastHtml !== html) {
+    box.dataset.lastHtml = html;
+    box.innerHTML = html;
+  }
 }
 
 export function openHolidayCalendarSheet(filter: "all" | "National" | "Christian" | "Regional" = "all"): void {
@@ -1064,7 +1094,11 @@ export function renderHome(): void {
   const online = onlineIds().size;
   const myDtr = state.dtrs.filter(d => String(d.user_id) === String(state.userId)).length;
   const unreadNoticeCount = getNoticeItems().filter(item => !item.isRead).length;
-  const setTxt = (id: string, v: string | number) => { const e = $(id); if (e) e.textContent = String(v); };
+  const setTxt = (id: string, v: string | number) => {
+    const e = $(id);
+    const next = String(v);
+    if (e && e.textContent !== next) e.textContent = next;
+  };
   setTxt("memberCount", state.profiles.length);
   setTxt("onlineCount", online);
   setTxt("pendingCount", state.pending.length);
@@ -1271,7 +1305,7 @@ export function renderNotices(): void {
         ? "No mentions or scheduled shifts for your name yet."
         : "No notifications yet.";
 
-  box.innerHTML = items.map(item => {
+  const nextHtml = items.map(item => {
     let attr = ' data-act="noop"';
     if (item.approvalId) attr = ' data-approval-notice="' + esc(item.approvalId) + '"';
     else if (item.appId) attr = ' data-app-notice="' + esc(item.appId) + '"';
@@ -1287,9 +1321,14 @@ export function renderNotices(): void {
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;"><div style="flex:1;min-width:0;"><b>' + item.icon + " " + esc(item.title) +
       '</b><div class="muted">' + esc(item.label) + " · " + esc(fmtDate(item.date)) + '</div></div><div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">' + statusBadge + delBtn + '</div></div><div style="margin-top:4px">' + esc(item.body) + "</div></div>";
   }).join("") || '<p class="muted">' + emptyMsg + '</p>';
+  if (box.dataset.lastHtml !== nextHtml) {
+    box.dataset.lastHtml = nextHtml;
+    box.innerHTML = nextHtml;
+  }
   const bell = $("bell");
-  if (bell) {
-    bell.textContent = unreadCount ? String(unreadCount) : "";
+  const nextBell = unreadCount ? String(unreadCount) : "";
+  if (bell && bell.textContent !== nextBell) {
+    bell.textContent = nextBell;
   }
 }
 
@@ -2635,7 +2674,8 @@ export function renderSites(): void {
         '<option value="' + esc(opt) + '"' + (opt === effStatus ? " selected" : "") + ">" + esc(opt) + "</option>"
       ).join("");
 
-      return '<div class="item' + (isSel ? " site-selected" : "") + '">' +
+        const siteUnitCount = state.units.filter(u => String(u.site_id) === sid).length;
+        return '<div class="item' + (isSel ? " site-selected" : "") + '">' +
         '<div class="site-card-row">' +
           thumbHtml +
           '<div class="site-card-body">' +
@@ -2649,6 +2689,7 @@ export function renderSites(): void {
         '</div>' +
         '<div class="inline-actions">' +
           '<button class="btn small-btn" type="button" data-act="map" data-id="' + esc(sid) + '">📍 View on Map</button>' +
+          '<button class="green small-btn" type="button" onclick="openSiteUnitsOverlay(\'' + esc(sid) + '\')">' + (isAdmin() ? '🛗 Units (' + siteUnitCount + ')' : '🛗 Units &amp; PMS (' + siteUnitCount + ')') + '</button>' +
           (isManager()
             ? '<button class="gray small-btn" type="button" data-act="edit-site" data-id="' + esc(sid) + '">✏️ Edit</button>' +
               '<button class="gray small-btn" type="button" data-act="upload-site-thumb" data-id="' + esc(sid) + '">' + (thumbUrl ? "📷 Photo" : "📷 Upload Photo") + '</button>' +
@@ -3132,7 +3173,8 @@ export function openSiteUnitsOverlay(siteId: string): void {
     meta.textContent =
       `📍 ${loc || site.name} · ✅ ${opsCount} Operational` +
       (issueCount ? ` · ⚠️ ${issueCount} Attention` : "") +
-      ` · ${siteReportsCount} report(s) · ${sitePmsCount} PMS` +
+      ` · ${siteReportsCount} report(s)` +
+      (!isAdmin() ? ` · ${sitePmsCount} PMS` : "") +
       (query ? ` · Showing ${filteredUnits.length}/${siteUnits.length}` : "");
   }
   const searchInp = $("siteUnitsSearchInput") as HTMLInputElement | null;
@@ -3225,9 +3267,7 @@ export function selectUnitForActions(unitId: string): void {
       `<div class="item" style="margin-top:0;">` +
         `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">` +
           `<span class="sess-badge ${isDanger ? "" : isMaint ? "soon" : "now"}" ${isDanger ? 'style="background:var(--red);color:#fff;"' : ""}>${esc(status)}</span>` +
-          `<span class="badge" style="margin-left:0;">${stats.monthPmsCount > 0 ? `✅ PMS This Month (${stats.monthPmsCount})` : "⏳ PMS Due This Month"}</span>` +
           `<span class="badge" style="margin-left:0;">📄 ${stats.reportCount} Report(s)</span>` +
-          `<span class="badge" style="margin-left:0;">📋 ${stats.totalPmsCount} Total PMS</span>` +
         `</div>` +
         (specsParts.length ? `<div class="muted" style="margin-top:8px;font-size:12.5px;">${esc(specsParts.join(" · "))}</div>` : "") +
         (tax.cleanNotes ? `<div style="margin-top:6px;font-size:12.5px;white-space:pre-wrap;">${esc(tax.cleanNotes)}</div>` : "") +
@@ -3236,7 +3276,9 @@ export function selectUnitForActions(unitId: string): void {
         `<div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">Choose Unit Action</div>` +
         `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;">` +
           `<button class="btn" type="button" onclick="closeUnitActionOverlay();openUnitManual('${unitIdSafe}')">📖 Manual</button>` +
-          `<button class="green" type="button" onclick="closeUnitActionOverlay();openUnitPms('${siteIdSafe}','${regionSafe}','${unitTypeSafe}','${unitIdSafe}')">✅ PMS</button>` +
+          (!isAdmin()
+            ? `<button class="green" type="button" onclick="closeUnitActionOverlay();openUnitPms('${siteIdSafe}','${regionSafe}','${unitTypeSafe}','${unitIdSafe}')">✅ PMS</button>`
+            : "") +
           `<button class="btn" type="button" onclick="closeUnitActionOverlay();openUnitReport('${siteIdSafe}','${unitNameSafe}','${unitIdSafe}')">📄 Report</button>` +
           `<button class="gray" type="button" onclick="closeUnitActionOverlay();editUnit('${unitIdSafe}')">✏️ Edit</button>` +
           `<button class="red" type="button" onclick="closeUnitActionOverlay();deleteUnit('${unitIdSafe}')">🗑 Delete</button>` +
@@ -3441,7 +3483,12 @@ export function openUnitReport(siteId: string, unitName: string, unitId = ""): v
 }
 
 export function openUnitPms(siteId: string, region: string, unitType: string, unitId = ""): void {
+  if (isAdmin()) {
+    toast("PMS checklist submission on units is disabled for Admin.");
+    return;
+  }
   closeSiteUnitsOverlay();
+  closeUnitActionOverlay();
   state.reportType = "checklist";
   runtime.reportsViewMode = "checklist";
   document.querySelectorAll<HTMLElement>("#reportTypeTabs .tab").forEach(x => x.classList.toggle("active", x.dataset.reportType === "checklist"));
@@ -3584,33 +3631,16 @@ export async function deleteUnit(unitId: string): Promise<void> {
   toast("Unit deleted");
 }
 
-function getUnitPmsAndReportStats(u: any): { monthPmsCount: number; totalPmsCount: number; reportCount: number } {
-  const monthPrefix = localDateKey(new Date()).slice(0, 7);
+function getUnitPmsAndReportStats(u: any): { reportCount: number } {
   const uId = String(u.id || "");
   const uNameLower = String(u.unit_name || "").trim().toLowerCase();
-  const uBroadType = (u.unit_type === "escalator" || u.unit_type === "moving-walkway") ? "escalator" : "elevator";
-  let monthPmsCount = 0;
-  let totalPmsCount = 0;
-  (state.pmsRecords || []).forEach(r => {
-    if (String(r.site_id) !== String(u.site_id)) return;
-    let parsed: any = {};
-    try { parsed = JSON.parse(r.details || "{}"); } catch {}
-    const recUnitId = parsed?.unitId ? String(parsed.unitId) : "";
-    const recUnitName = String(parsed?.unitName || "").trim().toLowerCase();
-    const matchesUnit = recUnitId
-      ? recUnitId === uId
-      : (recUnitName ? recUnitName === uNameLower : String(r.unit_type || "") === uBroadType);
-    if (!matchesUnit) return;
-    totalPmsCount++;
-    if (String(r.checklist_date || "").startsWith(monthPrefix)) monthPmsCount++;
-  });
   const reportCount = (state.reports || []).filter(r => {
     if (String(r.site_id) !== String(u.site_id)) return false;
     const pu = parseReportUnit(r.details);
     if (pu.unitId) return String(pu.unitId) === uId;
     return Boolean(uNameLower) && String(pu.unitName || "").trim().toLowerCase() === uNameLower;
   }).length;
-  return { monthPmsCount, totalPmsCount, reportCount };
+  return { reportCount };
 }
 
 function renderUnitCardRow(u: any, site: any, taxOpt?: ReturnType<typeof extractUnitTaxonomy>): string {
@@ -3625,26 +3655,32 @@ function renderUnitCardRow(u: any, site: any, taxOpt?: ReturnType<typeof extract
         ? '<span class="badge" style="background:rgba(245,166,35,.18);color:#f59e0b;font-weight:700;">⬇️ DOWN</span>'
         : '<span class="badge">🛗 ELEVATOR</span>');
   const stats = getUnitPmsAndReportStats(u);
-  const pmsBadge = stats.monthPmsCount > 0
-    ? '<span class="badge" style="background:rgba(16,185,129,.16);color:#10b981;">✅ PMS Done</span>'
-    : '<span class="badge" style="background:rgba(245,158,11,.15);color:#f59e0b;">⏳ PMS Due</span>';
   const specs = [u.unit_type, u.brand_model, u.serial_no ? "S/N: " + u.serial_no : "", tax.floorLabel].filter(Boolean).join(" · ");
   const isSelected = String(runtime.selectedUnitId) === String(u.id);
   const selectedStyle = isSelected
     ? "margin-top:6px;border:1.5px solid var(--cyan);background:rgba(56,189,248,.10);"
     : "margin-top:6px;";
-  return '<div class="item clickable" style="' + selectedStyle + '" onclick="selectUnitForActions(\'' + esc(u.id) + '\')" role="button" tabindex="0">' +
-    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
-      '<div style="min-width:0;flex:1;">' +
+  const siteIdSafe = esc(site?.id || u.site_id || "");
+  const regionSafe = esc(site?.region || "");
+  const unitTypeSafe = esc(u.unit_type || "elevator");
+  const unitIdSafe = esc(u.id);
+  const unitPmsBtn = !isAdmin()
+    ? '<button class="green small-btn" type="button" onclick="event.stopPropagation();openUnitPms(\'' + siteIdSafe + '\',\'' + regionSafe + '\',\'' + unitTypeSafe + '\',\'' + unitIdSafe + '\')">✅ PMS</button>'
+    : "";
+  return '<div class="item clickable" style="' + selectedStyle + '" onclick="selectUnitForActions(\'' + unitIdSafe + '\')" role="button" tabindex="0">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">' +
+      '<div style="min-width:180px;flex:1;">' +
         '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
           '<b>🛗 ' + esc(u.unit_name) + '</b> ' + dirBadge +
-          ' <span class="sess-badge ' + statusBadge + '"' + badgeStyle + ">" + esc(status) + "</span> " +
-          pmsBadge +
+          ' <span class="sess-badge ' + statusBadge + '"' + badgeStyle + ">" + esc(status) + "</span>" +
         "</div>" +
         '<div class="muted" style="margin-top:3px;">' + esc(specs || site.name) + (stats.reportCount ? ` · 📄 ${stats.reportCount} report(s)` : "") + "</div>" +
         (tax.cleanNotes ? '<div style="margin-top:3px;font-size:12px;">' + esc(tax.cleanNotes) + "</div>" : "") +
       "</div>" +
-      '<span class="badge" style="flex-shrink:0;font-weight:700;">Actions ›</span>' +
+      '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">' +
+        unitPmsBtn +
+        '<span class="badge" style="margin-left:0;font-weight:700;">Actions ›</span>' +
+      "</div>" +
     "</div></div>";
 }
 
@@ -3732,17 +3768,21 @@ function renderUnitsHealthBar(): void {
       .map(r => String(r.site_id))
   ).size;
 
-  bar.innerHTML =
+  const nextBarHtml =
     `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between;">` +
       `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">` +
         `<span class="badge" style="margin-left:0;">🛗 ${total} Total Units</span>` +
         `<span class="badge" style="margin-left:0;background:rgba(16,185,129,.18);color:#10b981;">🟢 ${operational} Operational</span>` +
         (maintenance ? `<span class="badge" style="margin-left:0;background:rgba(245,166,35,.18);color:#f59e0b;">🔧 ${maintenance} Maintenance</span>` : "") +
         `<span class="badge clickable" style="margin-left:0;${attention ? "background:rgba(239,68,68,.2);color:#ef4444;font-weight:700;" : ""}" onclick="openTroubleUnitsFilter()">🚨 ${attention} Needs Repair / Shutdown</span>` +
-        `<span class="badge" style="margin-left:0;background:rgba(56,189,248,.16);color:#38bdf8;">✅ ${pmsSitesThisMonth} Site(s) PMS Done This Month</span>` +
+        (!isAdmin() ? `<span class="badge" style="margin-left:0;background:rgba(56,189,248,.16);color:#38bdf8;">✅ ${pmsSitesThisMonth} Site(s) PMS Done This Month</span>` : "") +
       `</div>` +
-      `<span class="muted" style="font-size:11.5px;">Tap a Site → select a Unit → Manual, ✅ PMS, 📄 Report, Edit, Delete</span>` +
+      `<span class="muted" style="font-size:11.5px;">${isAdmin() ? "Tap a Site → select a Unit → Manual, 📄 Report, Edit, Delete" : "Tap a Site → select a Unit → Manual, ✅ PMS, 📄 Report, Edit, Delete"}</span>` +
     `</div>`;
+  if (bar.dataset.lastHtml !== nextBarHtml) {
+    bar.dataset.lastHtml = nextBarHtml;
+    bar.innerHTML = nextBarHtml;
+  }
 }
 
 export function openPmsQuickShortcut(): void {
@@ -3837,8 +3877,8 @@ export function renderUnits(): void {
           '<div class="clickable" style="flex:1;min-width:0;" onclick="toggleUnitSiteCard(\'' + esc(site.id) + '\')">' +
           '<h2 style="margin:0 0 4px;font-size:16px;">▸ ' + esc(site.name) +
           ' <span class="badge">' + esc(countsLine) + "</span></h2>" +
-          '<div class="muted">📍 ' + esc(loc) + ' · ' + siteReportsCount + ' report(s) · ' + sitePmsCount + ' PMS</div>' +
-          '<div class="muted" style="font-size:11px;margin-top:2px;">Tap site to list units → select a unit for Manual, PMS, Report, Edit, Delete</div>' +
+          '<div class="muted">📍 ' + esc(loc) + ' · ' + siteReportsCount + ' report(s)' + (!isAdmin() ? ' · ' + sitePmsCount + ' PMS' : '') + '</div>' +
+          '<div class="muted" style="font-size:11px;margin-top:2px;">' + (isAdmin() ? 'Tap site to list units → select a unit for Manual, Report, Edit, Delete' : 'Tap site to list units → select a unit for Manual, PMS, Report, Edit, Delete') + '</div>' +
           "</div>" +
           '<button class="gray small-btn" type="button" onclick="openSiteOnMap(\'' + esc(site.id) + '\')">📍 Map</button>' +
           "</div>" +
@@ -3854,7 +3894,11 @@ export function renderUnits(): void {
     return `<div style="margin-bottom:16px;"><h2 style="margin:8px 0 6px;color:var(--cyan);">🗺️ ${esc(region)}</h2>${areasHtml}</div>`;
   }).filter(Boolean).join("");
 
-  box.innerHTML = html || '<p class="muted">No matching units found for the selected Region / Location / Side / Floor / Direction.</p>';
+  const nextUnitsHtml = html || '<p class="muted">No matching units found for the selected Region / Location / Side / Floor / Direction.</p>';
+  if (box.dataset.lastHtml !== nextUnitsHtml) {
+    box.dataset.lastHtml = nextUnitsHtml;
+    box.innerHTML = nextUnitsHtml;
+  }
   if (!$("siteUnitsOverlay")?.classList.contains("hidden") && runtime.selectedUnitsSiteId) {
     openSiteUnitsOverlay(runtime.selectedUnitsSiteId);
   }
@@ -4186,6 +4230,7 @@ export function renderPmsRecordsFilters(): void {
   const teamSel = $("pmsRecordsTeam") as HTMLSelectElement | null;
   const locSel = $("pmsRecordsLocation") as HTMLSelectElement | null;
   const siteSel = $("pmsRecordsSite") as HTMLSelectElement | null;
+  const unitSel = $("pmsRecordsUnit") as HTMLSelectElement | null;
   if (!teamSel || !locSel || !siteSel) return;
   const teams = [...new Set(state.profiles.map(p => p.team).filter(Boolean))].sort();
   const locs = [...new Set(state.sites.map(s => s.region).filter(Boolean))].sort();
@@ -4198,6 +4243,22 @@ export function renderPmsRecordsFilters(): void {
   if (teams.includes(tCur)) teamSel.value = tCur;
   if (locs.includes(lCur)) locSel.value = lCur;
   if (state.sites.some(s => String(s.id) === sCur)) siteSel.value = sCur;
+
+  if (unitSel) {
+    const uCur = unitSel.value;
+    const activeSiteId = siteSel.value;
+    const scopedUnits = activeSiteId
+      ? state.units.filter(u => String(u.site_id) === String(activeSiteId))
+      : state.units;
+    unitSel.innerHTML = '<option value="">All units</option>' +
+      scopedUnits
+        .map(u => {
+          const s = state.sites.find(x => String(x.id) === String(u.site_id));
+          return '<option value="' + esc(u.id) + '">' + esc(u.unit_name) + (!activeSiteId && s ? " — " + esc(s.name) : "") + "</option>";
+        })
+        .join("");
+    if (scopedUnits.some(u => String(u.id) === String(uCur))) unitSel.value = uCur;
+  }
 }
 
 export function renderPmsRecords(): void {
@@ -4206,19 +4267,37 @@ export function renderPmsRecords(): void {
   const team = val("pmsRecordsTeam");
   const loc = val("pmsRecordsLocation");
   const siteId = val("pmsRecordsSite");
+  const unitId = val("pmsRecordsUnit");
+  const unitObj = unitId ? state.units.find(u => String(u.id) === String(unitId)) : null;
+  const unitNameLower = String(unitObj?.unit_name || "").trim().toLowerCase();
+
   const list = state.pmsRecords.filter(r => {
     const p = profileOf(r.user_id);
     const site = state.sites.find(s => String(s.id) === String(r.site_id));
     if (team && (!p || p.team !== team)) return false;
     if (loc && (!site || site.region !== loc)) return false;
     if (siteId && String(r.site_id) !== siteId) return false;
+    if (unitId) {
+      let parsed: any = {};
+      try { parsed = JSON.parse(r.details || "{}"); } catch {}
+      const rUnitId = String(r.unit_id || parsed?.unitId || "");
+      const rUnitName = String(r.unit_name || parsed?.unitName || "").trim().toLowerCase();
+      if (rUnitId) {
+        if (rUnitId !== String(unitId)) return false;
+      } else if (unitNameLower && rUnitName) {
+        if (rUnitName !== unitNameLower) return false;
+      } else {
+        return false;
+      }
+    }
     return true;
   });
   box.innerHTML = list.map(r => {
     const site = state.sites.find(s => String(s.id) === String(r.site_id));
     let parsed: any = {};
     try { parsed = JSON.parse(r.details || "{}"); } catch {}
-    const uTag = parsed.unitName ? " (" + parsed.unitName + ")" : "";
+    const resolvedUnitName = r.unit_name || parsed.unitName || "";
+    const uTag = resolvedUnitName ? " (" + resolvedUnitName + ")" : "";
     return '<div class="item clickable" data-pms-record="' + esc(r.id) + '"><b>' + esc(site ? site.name : "Site") + esc(uTag) + " — " +
       esc((r.unit_type || "").toUpperCase()) + '</b><div class="muted">' + esc(fmtDay(r.checklist_date)) + " · " +
       esc(profileName(r.user_id)) + " · " + r.items_passed + "/" + r.items_total + " passed</div></div>";
@@ -4709,33 +4788,54 @@ async function insertDtrEntrySafe(payload: {
   time_in: string | null;
   time_out: string | null;
   overtime_approved: boolean;
+  nightshift_repair?: boolean;
 }): Promise<string | null> {
-  const firstAttempt = await runtime.client
+  const buildRow = (opts: { includeNs: boolean; emptyStrings: boolean; fallbackTimes: boolean }): Record<string, any> => {
+    const fallbackTime = payload.time_in || payload.time_out || "00:00";
+    const row: Record<string, any> = {
+      user_id: payload.user_id,
+      work_date: payload.work_date,
+      location: opts.emptyStrings ? (payload.location ?? "") : payload.location,
+      job: opts.emptyStrings ? (payload.job ?? "") : payload.job,
+      time_in: opts.fallbackTimes ? (payload.time_in || fallbackTime) : (opts.emptyStrings ? (payload.time_in ?? "") : payload.time_in),
+      time_out: opts.fallbackTimes ? (payload.time_out || fallbackTime) : (opts.emptyStrings ? (payload.time_out ?? "") : payload.time_out),
+      overtime_approved: payload.overtime_approved,
+    };
+    if (opts.includeNs && !runtime.dtrNightshiftColMissing) {
+      row.nightshift_repair = Boolean(payload.nightshift_repair);
+    }
+    return row;
+  };
+
+  let includeNs = !runtime.dtrNightshiftColMissing;
+  let attempt = await runtime.client
     .from("dtr_entries")
-    .insert(payload)
+    .insert(buildRow({ includeNs, emptyStrings: false, fallbackTimes: false }))
     .select("id")
     .maybeSingle();
-  if (!firstAttempt.error) {
-    return firstAttempt.data?.id ? String(firstAttempt.data.id) : null;
+
+  if (attempt.error && includeNs && /nightshift_repair|42703|PGRST204|schema cache/i.test(String(attempt.error.message || ""))) {
+    runtime.dtrNightshiftColMissing = true;
+    includeNs = false;
+    attempt = await runtime.client
+      .from("dtr_entries")
+      .insert(buildRow({ includeNs: false, emptyStrings: false, fallbackTimes: false }))
+      .select("id")
+      .maybeSingle();
+  }
+  if (!attempt.error) {
+    return attempt.data?.id ? String(attempt.data.id) : null;
   }
 
   const isNotNullErr =
-    firstAttempt.error.code === "23502" ||
-    /violates not-null constraint/i.test(firstAttempt.error.message || "");
-  if (!isNotNullErr) throw firstAttempt.error;
+    attempt.error.code === "23502" ||
+    /violates not-null constraint/i.test(attempt.error.message || "");
+  if (!isNotNullErr) throw attempt.error;
 
   // Retry with empty strings for legacy TEXT NOT NULL columns
   const emptyStringAttempt = await runtime.client
     .from("dtr_entries")
-    .insert({
-      user_id: payload.user_id,
-      work_date: payload.work_date,
-      location: payload.location ?? "",
-      job: payload.job ?? "",
-      time_in: payload.time_in ?? "",
-      time_out: payload.time_out ?? "",
-      overtime_approved: payload.overtime_approved,
-    })
+    .insert(buildRow({ includeNs, emptyStrings: true, fallbackTimes: false }))
     .select("id")
     .maybeSingle();
   if (!emptyStringAttempt.error) {
@@ -4748,18 +4848,9 @@ async function insertDtrEntrySafe(payload: {
   if (!isTimeTypeSyntaxErr) throw emptyStringAttempt.error;
 
   // Last-resort fallback if an older DB column used TIME NOT NULL
-  const fallbackTime = payload.time_in || payload.time_out || "00:00";
   const timeFallbackAttempt = await runtime.client
     .from("dtr_entries")
-    .insert({
-      user_id: payload.user_id,
-      work_date: payload.work_date,
-      location: payload.location ?? "",
-      job: payload.job ?? "",
-      time_in: payload.time_in || fallbackTime,
-      time_out: payload.time_out || fallbackTime,
-      overtime_approved: payload.overtime_approved,
-    })
+    .insert(buildRow({ includeNs, emptyStrings: true, fallbackTimes: true }))
     .select("id")
     .maybeSingle();
   if (timeFallbackAttempt.error) throw timeFallbackAttempt.error;
@@ -4786,6 +4877,7 @@ export async function addDtr(): Promise<void> {
       time_in: rawTimeIn,
       time_out: cappedTimeOut,
       overtime_approved: true,
+      nightshift_repair: nightshiftRepair,
     });
   } catch (err: any) {
     toast("Could not add: " + (err?.message || err));
@@ -5034,21 +5126,30 @@ async function writeAnalyzedTimeToDtr(
   if (mode === "time_in") {
     const existingNoIn = myRowsForDate.find(d => !d.time_in);
     if (existingNoIn) {
-      const exMeta = parseDtrJobMeta(existingNoIn.job, existingNoIn.approved_by);
+      const exMeta = parseDtrJobMeta(existingNoIn.job, existingNoIn.approved_by, existingNoIn.nightshift_repair);
       const nextNs = nightshiftRepair || exMeta.nightshiftRepair;
       const nextJob = existingNoIn.job
         ? (nightshiftRepair && !exMeta.nightshiftRepair
             ? buildDtrJobWithApproval(exMeta.unitName, exMeta.cleanJob, exMeta.approvedBy, runtime.dtrApprovedByColMissing, true)
             : existingNoIn.job)
         : jobLabel;
-      const { error } = await runtime.client
+      const updPayload: Record<string, any> = {
+        time_in: time24,
+        ...(location && !existingNoIn.location ? { location } : {}),
+        ...(nextJob ? { job: nextJob } : {}),
+      };
+      if (!runtime.dtrNightshiftColMissing && nextNs) {
+        updPayload.nightshift_repair = true;
+      }
+      let { error } = await runtime.client
         .from("dtr_entries")
-        .update({
-          time_in: time24,
-          ...(location && !existingNoIn.location ? { location } : {}),
-          ...(nextJob ? { job: nextJob } : {}),
-        })
+        .update(updPayload)
         .eq("id", existingNoIn.id);
+      if (error && /nightshift_repair|42703|PGRST204|schema cache/i.test(String(error.message || ""))) {
+        runtime.dtrNightshiftColMissing = true;
+        delete updPayload.nightshift_repair;
+        ({ error } = await runtime.client.from("dtr_entries").update(updPayload).eq("id", existingNoIn.id));
+      }
       if (error) throw error;
       dtrEntryId = String(existingNoIn.id);
       savedTimeOut = existingNoIn.time_out
@@ -5063,6 +5164,7 @@ async function writeAnalyzedTimeToDtr(
         time_in: time24,
         time_out: null,
         overtime_approved: true,
+        nightshift_repair: nightshiftRepair,
       });
     }
   } else {
@@ -5074,28 +5176,37 @@ async function writeAnalyzedTimeToDtr(
       : null;
 
     if (openRow) {
-      const openMeta = parseDtrJobMeta(openRow.job, openRow.approved_by);
+      const openMeta = parseDtrJobMeta(openRow.job, openRow.approved_by, openRow.nightshift_repair);
       const rowNs = nightshiftRepair || openMeta.nightshiftRepair;
       const cappedOut = capDtrTimeOut(openRow.time_in, time24, { workDate, nightshiftRepair: rowNs });
       const updatedJob = nightshiftRepair && !openMeta.nightshiftRepair
         ? buildDtrJobWithApproval(openMeta.unitName, openMeta.cleanJob, openMeta.approvedBy, runtime.dtrApprovedByColMissing, true)
         : null;
-      const { error } = await runtime.client
+      const updPayload: Record<string, any> = {
+        time_out: cappedOut,
+        overtime_approved: true,
+        ...(location && !openRow.location ? { location } : {}),
+        ...(updatedJob ? { job: updatedJob } : {}),
+      };
+      if (!runtime.dtrNightshiftColMissing && rowNs) {
+        updPayload.nightshift_repair = true;
+      }
+      let { error } = await runtime.client
         .from("dtr_entries")
-        .update({
-          time_out: cappedOut,
-          overtime_approved: true,
-          ...(location && !openRow.location ? { location } : {}),
-          ...(updatedJob ? { job: updatedJob } : {}),
-        })
+        .update(updPayload)
         .eq("id", openRow.id);
+      if (error && /nightshift_repair|42703|PGRST204|schema cache/i.test(String(error.message || ""))) {
+        runtime.dtrNightshiftColMissing = true;
+        delete updPayload.nightshift_repair;
+        ({ error } = await runtime.client.from("dtr_entries").update(updPayload).eq("id", openRow.id));
+      }
       if (error) throw error;
       dtrEntryId = String(openRow.id);
       savedTimeIn = openRow.time_in || "";
       savedTimeOut = cappedOut;
     } else if (lockedClosedRow) {
       // Preserve already-recorded Time Out (e.g. 7:00 PM stays 7:00 PM even if 7:01/7:21 PM arrives continuously)
-      const lockedMeta = parseDtrJobMeta(lockedClosedRow.job, lockedClosedRow.approved_by);
+      const lockedMeta = parseDtrJobMeta(lockedClosedRow.job, lockedClosedRow.approved_by, lockedClosedRow.nightshift_repair);
       dtrEntryId = String(lockedClosedRow.id);
       savedTimeIn = lockedClosedRow.time_in || "";
       savedTimeOut = capDtrTimeOut(lockedClosedRow.time_in, lockedClosedRow.time_out, {
@@ -5113,6 +5224,7 @@ async function writeAnalyzedTimeToDtr(
         time_in: null,
         time_out: cappedOut,
         overtime_approved: true,
+        nightshift_repair: nightshiftRepair,
       });
       savedTimeOut = cappedOut;
     }
@@ -5421,7 +5533,7 @@ export function openEditDtr(id: string): void {
     return;
   }
   runtime.editingDtrId = String(row.id);
-  const meta = parseDtrJobMeta(row.job, row.approved_by);
+  const meta = parseDtrJobMeta(row.job, row.approved_by, row.nightshift_repair);
   setVal("editDtrDate", String(row.work_date || ""));
   setVal("editDtrLocation", String(row.location || ""));
   setVal("editDtrUnit", meta.unitName || "");
@@ -5464,13 +5576,27 @@ export async function saveEditedDtr(): Promise<void> {
     overtime_approved: true,
   };
   if (!runtime.dtrApprovedByColMissing) basePayload.approved_by = approvedBy || null;
+  if (!runtime.dtrNightshiftColMissing) basePayload.nightshift_repair = nightshiftRepair;
 
   try {
     let { error } = await runtime.client.from("dtr_entries").update(basePayload).eq("id", runtime.editingDtrId);
-    if (error && /approved_by|42703|schema cache/i.test(String(error.message || ""))) {
-      runtime.dtrApprovedByColMissing = true;
-      delete basePayload.approved_by;
-      basePayload.job = buildDtrJobWithApproval(unitName, cleanJob, approvedBy, true, nightshiftRepair) || null;
+    if (error && /nightshift_repair|approved_by|42703|PGRST204|schema cache/i.test(String(error.message || ""))) {
+      const msg = String(error.message || "");
+      if (/nightshift_repair/i.test(msg)) {
+        runtime.dtrNightshiftColMissing = true;
+        delete basePayload.nightshift_repair;
+      }
+      if (/approved_by/i.test(msg)) {
+        runtime.dtrApprovedByColMissing = true;
+        delete basePayload.approved_by;
+      }
+      if (!/nightshift_repair|approved_by/i.test(msg)) {
+        runtime.dtrNightshiftColMissing = true;
+        runtime.dtrApprovedByColMissing = true;
+        delete basePayload.nightshift_repair;
+        delete basePayload.approved_by;
+      }
+      basePayload.job = buildDtrJobWithApproval(unitName, cleanJob, approvedBy, runtime.dtrApprovedByColMissing, nightshiftRepair) || null;
       const retry = await runtime.client.from("dtr_entries").update(basePayload).eq("id", runtime.editingDtrId);
       error = retry.error;
     }
@@ -5512,7 +5638,7 @@ function buildDtrPaper(): void {
 
   const dayMetaMap = new Map<string, { firstIn: string | null; lastOut: string | null; mins: number; nsRepair: boolean }>();
   rows.forEach(d => {
-    const meta = parseDtrJobMeta(d.job, d.approved_by);
+    const meta = parseDtrJobMeta(d.job, d.approved_by, d.nightshift_repair);
     const dayKey = `${String(d.work_date || "")}::${String(d.user_id || "")}`;
     const ruleOpts = { workDate: d.work_date, nightshiftRepair: meta.nightshiftRepair };
     const mins = calculateDtrMinutes(d.time_in, d.time_out, null, ruleOpts);
@@ -5526,7 +5652,7 @@ function buildDtrPaper(): void {
   });
 
   const body = rows.map(d => {
-    const meta = parseDtrJobMeta(d.job, d.approved_by);
+    const meta = parseDtrJobMeta(d.job, d.approved_by, d.nightshift_repair);
     const isSunday = isSundayDate(d.work_date);
     const ruleOpts = { workDate: d.work_date, nightshiftRepair: meta.nightshiftRepair };
     const dayKey = `${String(d.work_date || "")}::${String(d.user_id || "")}`;
@@ -8847,6 +8973,7 @@ export function initFeatureWiring(): void {
   });
 
   $("savePmsRecordButton")?.addEventListener("click", async () => {
+    if (isAdmin()) { toast("PMS checklist submission is disabled for Admin."); return; }
     if (!runtime.pmsSiteId) { toast("Pick a site first"); return; }
     if (!checkNetwork()) return;
     const btn = $("savePmsRecordButton") as HTMLButtonElement | null;
@@ -8902,7 +9029,11 @@ export function initFeatureWiring(): void {
     }
   });
 
-  ["pmsRecordsTeam", "pmsRecordsLocation", "pmsRecordsSite"].forEach(id => $(id)?.addEventListener("change", renderPmsRecords));
+  ["pmsRecordsTeam", "pmsRecordsLocation", "pmsRecordsUnit"].forEach(id => $(id)?.addEventListener("change", renderPmsRecords));
+  $("pmsRecordsSite")?.addEventListener("change", () => {
+    renderPmsRecordsFilters();
+    renderPmsRecords();
+  });
   $("closePmsRecordOverlay")?.addEventListener("click", () => $("pmsRecordOverlay")?.classList.add("hidden"));
 
   document.querySelectorAll<HTMLElement>("#reportTypeTabs [data-report-type]").forEach(b => {
@@ -9187,7 +9318,8 @@ export function initFeatureWiring(): void {
       const attHtml = buildUrlAttachmentHtml(Array.isArray(parsed.attachments) ? parsed.attachments : []);
       const det = $("pmsRecordDetails");
       if (det) {
-        det.innerHTML = "<h2>" + esc(site ? site.name : "Site") + '</h2><div class="muted">' + esc((rec.unit_type || "").toUpperCase()) +
+        const unitLabel = rec.unit_name || parsed?.unitName || "";
+        det.innerHTML = "<h2>" + esc(site ? site.name : "Site") + (unitLabel ? " · 🛗 " + esc(unitLabel) : "") + '</h2><div class="muted">' + esc((rec.unit_type || "").toUpperCase()) +
           " · " + esc(fmtDay(rec.checklist_date)) + " · " + esc(profileName(rec.user_id)) + "</div><p><b>Result:</b> " +
           rec.items_passed + "/" + rec.items_total + " passed</p>" +
           '<div class="inline-actions" style="margin:0 0 12px;">' +
@@ -9488,7 +9620,7 @@ export function initFeatureWiring(): void {
 
   let lastDtrMinuteTick = -1;
   setInterval(() => {
-    if (!state.userId) return;
+    if (!state.booted || !state.userId || document.hidden) return;
     const now = new Date();
     const curMin = now.getHours() * 60 + now.getMinutes();
     if (curMin !== lastDtrMinuteTick) {
@@ -9504,13 +9636,12 @@ export function initFeatureWiring(): void {
   }, 1000);
 
   setInterval(() => {
-    if (state.userId) {
-      if (state.schedules && state.schedules.length) {
-        renderSchedules();
-        checkUpcomingShiftReminders();
-      }
-      renderHome();
-      renderHomeDtrStatus();
+    if (!state.booted || !state.userId || document.hidden) return;
+    if (state.schedules && state.schedules.length) {
+      renderSchedules();
+      checkUpcomingShiftReminders();
     }
+    renderHome();
+    renderHomeDtrStatus();
   }, 30000);
 }

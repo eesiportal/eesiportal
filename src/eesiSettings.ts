@@ -314,10 +314,11 @@ function swKvPut(key: string, value: any): Promise<void> {
     };
     req.onerror = () => reject(req.error);
     req.onsuccess = () => {
-      const tx = req.result.transaction("kv", "readwrite");
+      const db = req.result;
+      const tx = db.transaction("kv", "readwrite");
       tx.objectStore("kv").put(value, key);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      tx.oncomplete = () => { try { db.close(); } catch {} resolve(); };
+      tx.onerror = () => { try { db.close(); } catch {} reject(tx.error); };
     };
   });
 }
@@ -506,8 +507,8 @@ async function saveRingtoneToDB(userId: string, file: File): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(RINGTONE_STORE, "readwrite");
     tx.objectStore(RINGTONE_STORE).put({ blob: file, name: file.name, type: file.type, savedAt: Date.now() }, "ringtone:" + userId);
-    tx.oncomplete = () => resolve(true);
-    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => { try { db.close(); } catch {} resolve(true); };
+    tx.onerror = () => { try { db.close(); } catch {} reject(tx.error); };
   });
 }
 async function loadRingtoneFromDB(userId: string): Promise<any> {
@@ -515,8 +516,8 @@ async function loadRingtoneFromDB(userId: string): Promise<any> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(RINGTONE_STORE, "readonly");
     const req = tx.objectStore(RINGTONE_STORE).get("ringtone:" + userId);
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => { try { db.close(); } catch {} resolve(req.result || null); };
+    req.onerror = () => { try { db.close(); } catch {} reject(req.error); };
   });
 }
 async function clearRingtoneFromDB(userId: string): Promise<boolean> {
@@ -524,8 +525,8 @@ async function clearRingtoneFromDB(userId: string): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(RINGTONE_STORE, "readwrite");
     tx.objectStore(RINGTONE_STORE).delete("ringtone:" + userId);
-    tx.oncomplete = () => resolve(true);
-    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => { try { db.close(); } catch {} resolve(true); };
+    tx.onerror = () => { try { db.close(); } catch {} reject(tx.error); };
   });
 }
 
@@ -1463,6 +1464,9 @@ export function getWeatherAtmosphereKind(code = runtime.lastWeatherCode): Weathe
   return "clear";
 }
 
+let lastAmbientSig = "";
+let lastClockStr = "";
+
 export function applyAmbientSessionBackground(): {
   pref: string;
   timeSlot: TimeSessionSlot | "off";
@@ -1477,13 +1481,15 @@ export function applyAmbientSessionBackground(): {
   }
 
   if (pref === "off") {
-    body.setAttribute("data-atmos", "off");
-    body.removeAttribute("data-atmos-time");
-    body.removeAttribute("data-atmos-weather");
+    if (lastAmbientSig !== "off") {
+      lastAmbientSig = "off";
+      body.setAttribute("data-atmos", "off");
+      body.removeAttribute("data-atmos-time");
+      body.removeAttribute("data-atmos-weather");
+    }
     return { pref, timeSlot: "off", weatherKind: "clear", label: "Solid Theme" };
   }
 
-  body.setAttribute("data-atmos", pref);
   const autoSlot = getTimeSessionSlot();
   let timeSlot: TimeSessionSlot = autoSlot;
   let weatherKind: WeatherAtmosphereKind = getWeatherAtmosphereKind();
@@ -1494,9 +1500,6 @@ export function applyAmbientSessionBackground(): {
   } else if (pref === "rain" || pref === "storm") {
     weatherKind = pref;
   }
-
-  body.setAttribute("data-atmos-time", timeSlot);
-  body.setAttribute("data-atmos-weather", weatherKind);
 
   const timeNames: Record<TimeSessionSlot, string> = {
     daytime: "🌅 Daytime",
@@ -1512,20 +1515,35 @@ export function applyAmbientSessionBackground(): {
     storm: "Stormy",
   };
   const label = `${timeNames[timeSlot]} · ${weatherNames[weatherKind]}`;
+  const sig = `${pref}|${timeSlot}|${weatherKind}`;
+
+  if (sig !== lastAmbientSig) {
+    lastAmbientSig = sig;
+    body.setAttribute("data-atmos", pref);
+    body.setAttribute("data-atmos-time", timeSlot);
+    body.setAttribute("data-atmos-weather", weatherKind);
+  }
   const pillEl = $("liveAtmospherePill");
-  if (pillEl) pillEl.textContent = label;
+  if (pillEl && pillEl.textContent !== label) pillEl.textContent = label;
   return { pref, timeSlot, weatherKind, label };
 }
 
 export function startClock(): void {
-  const tick = () => {
+  const tick = (force = false) => {
+    if (!force && document.hidden) return;
     const el = $("liveClock");
-    if (el) el.textContent = new Date().toLocaleString(undefined, { dateStyle: "full", timeStyle: "medium" });
+    if (el) {
+      const nextStr = new Date().toLocaleString(undefined, { dateStyle: "full", timeStyle: "medium" });
+      if (nextStr !== lastClockStr) {
+        lastClockStr = nextStr;
+        el.textContent = nextStr;
+      }
+    }
     applyAmbientSessionBackground();
   };
-  tick();
+  tick(true);
   clearInterval(clockTimer);
-  clockTimer = setInterval(tick, 1000);
+  clockTimer = setInterval(() => tick(false), 1000);
 }
 
 function weatherCodeInfo(code: number, isDay = 1): { icon: string; label: string } {
@@ -1559,6 +1577,7 @@ async function resolveWeatherPlaceName(lat: number, lon: number): Promise<string
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ lat, lng: lon }),
+      signal: AbortSignal.timeout(6000),
     });
     if (r.ok) {
       const data: any = await r.json();
@@ -1572,7 +1591,8 @@ async function resolveWeatherPlaceName(lat: number, lon: number): Promise<string
   if (!place) {
     try {
       const nom = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(String(lat))}&lon=${encodeURIComponent(String(lon))}&zoom=14`
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(String(lat))}&lon=${encodeURIComponent(String(lon))}&zoom=14`,
+        { signal: AbortSignal.timeout(6500) }
       );
       if (nom.ok) {
         const j: any = await nom.json();
@@ -1594,6 +1614,8 @@ async function resolveWeatherPlaceName(lat: number, lon: number): Promise<string
   return place;
 }
 
+let lastRenderedWeatherHtml = "";
+
 function renderLiveWeatherCard(): void {
   const el = $("liveWeather");
   if (!el) return;
@@ -1602,23 +1624,28 @@ function renderLiveWeatherCard(): void {
     ? `🟢 Live GPS${runtime.lastWeatherAcc ? ` ±${runtime.lastWeatherAcc}m` : ""} · Auto 1s`
     : "📡 Auto-syncing GPS every 1s…";
 
+  let nextHtml = "";
   if (!lastWeatherUiHtml) {
-    el.innerHTML =
+    nextHtml =
       `<div class="muted" style="font-size:13px;">${esc(gpsTag)}</div>` +
       `<div id="liveAtmospherePill" class="atmos-pill">${esc(atmos.label)}</div>`;
-    return;
+  } else {
+    const d = lastWeatherUiHtml;
+    const subParts = [
+      `📍 ${d.placeName} (${gpsTag})`,
+      [d.rh, d.wind, d.rainChanceStr].filter(Boolean).join(" · "),
+    ].filter(Boolean);
+
+    nextHtml =
+      `<div>${d.icon} <b>${esc(d.temp)}</b> · ${esc(d.label)}${d.feels ? ` <span class="muted" style="font-size:13px;font-weight:500;">(${esc(d.feels)})</span>` : ""}</div>` +
+      `<div class="muted" style="font-size:12px;margin-top:4px;line-height:1.45;">${subParts.map(esc).join("<br>")}</div>` +
+      `<div id="liveAtmospherePill" class="atmos-pill">${esc(atmos.label)}</div>`;
   }
 
-  const d = lastWeatherUiHtml;
-  const subParts = [
-    `📍 ${d.placeName} (${gpsTag})`,
-    [d.rh, d.wind, d.rainChanceStr].filter(Boolean).join(" · "),
-  ].filter(Boolean);
-
-  el.innerHTML =
-    `<div>${d.icon} <b>${esc(d.temp)}</b> · ${esc(d.label)}${d.feels ? ` <span class="muted" style="font-size:13px;font-weight:500;">(${esc(d.feels)})</span>` : ""}</div>` +
-    `<div class="muted" style="font-size:12px;margin-top:4px;line-height:1.45;">${subParts.map(esc).join("<br>")}</div>` +
-    `<div id="liveAtmospherePill" class="atmos-pill">${esc(atmos.label)}</div>`;
+  if (nextHtml !== lastRenderedWeatherHtml) {
+    lastRenderedWeatherHtml = nextHtml;
+    el.innerHTML = nextHtml;
+  }
 }
 
 export async function updateLiveWeather(
@@ -1692,10 +1719,12 @@ export async function updateLiveWeather(
   try {
     const [weatherRes, placeName] = await Promise.all([
       fetch(
-        `https://api.open-meteo.com/v1/forecast?latitude=${resolvedLat}&longitude=${resolvedLon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,rain,weather_code,wind_speed_10m,is_day&hourly=precipitation_probability&forecast_days=1&timezone=auto`
+        `https://api.open-meteo.com/v1/forecast?latitude=${resolvedLat}&longitude=${resolvedLon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,rain,weather_code,wind_speed_10m,is_day&hourly=precipitation_probability&forecast_days=1&timezone=auto`,
+        { signal: AbortSignal.timeout(7000) }
       ),
       resolveWeatherPlaceName(resolvedLat, resolvedLon),
     ]);
+    if (!weatherRes.ok) throw new Error("Weather HTTP " + weatherRes.status);
     const j = await weatherRes.json();
     const c = j.current || {};
     const wCode = Number(c.weather_code ?? 0);
@@ -1740,7 +1769,8 @@ export async function updateLiveWeather(
 
 export function startAutoWeatherSyncLoop(): void {
   clearInterval(weatherAutoSyncTimer);
-  const syncTick = () => {
+  const syncTick = (forceRun = false) => {
+    if (!forceRun && document.hidden) return;
     const cachedGps = hooks.getCachedGps?.();
     if (cachedGps && Number.isFinite(cachedGps.lat) && Number.isFinite(cachedGps.lng)) {
       const moved =
@@ -1775,8 +1805,8 @@ export function startAutoWeatherSyncLoop(): void {
       void updateLiveWeather();
     }
   };
-  syncTick();
-  weatherAutoSyncTimer = setInterval(syncTick, 1000);
+  syncTick(true);
+  weatherAutoSyncTimer = setInterval(() => syncTick(false), 1000);
 }
 
 /* ==================== PULL TO RELOAD (REMOVED) ==================== */
@@ -1991,6 +2021,13 @@ export function initSettingsWiring(): void {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") { lastHiddenAt = Date.now(); return; }
     if (lastHiddenAt && Date.now() - lastHiddenAt > 30000) showPinLock();
+    applyAmbientSessionBackground();
+    const clockEl = $("liveClock");
+    if (clockEl) {
+      const nextStr = new Date().toLocaleString(undefined, { dateStyle: "full", timeStyle: "medium" });
+      if (nextStr !== lastClockStr) { lastClockStr = nextStr; clockEl.textContent = nextStr; }
+    }
+    void updateLiveWeather();
     if (state.userId) hooks.checkShiftReminders?.();
   });
 

@@ -485,7 +485,7 @@ export function exportData(
     colWidths = [14, 24, 20, 26, 36, 12, 12, 13, 13, 12, 14];
     const dayBuckets = new Map<string, { firstIn: string | null; lastOut: string | null; mins: number; nsRepair: boolean }>();
     list.forEach(d => {
-      const meta = parseDtrJobMeta(d.job, d.approved_by);
+      const meta = parseDtrJobMeta(d.job, d.approved_by, d.nightshift_repair);
       const ruleOpts = { workDate: d.work_date, nightshiftRepair: meta.nightshiftRepair };
       const cappedOut = capDtrTimeOut(d.time_in, d.time_out, ruleOpts);
       const mins = calculateDtrMinutes(d.time_in, cappedOut, null, ruleOpts);
@@ -1159,38 +1159,45 @@ async function bootInner(session: any): Promise<void> {
   renderDecor();
   showDailyVerse();
 
-  await Promise.all([
-    loadBlockedUsers(),
-    loadProfiles(),
-    loadRoles(),
-    loadSites(),
-    loadUnits(),
-    loadSchedules(),
-    loadDtrs(),
-    loadTimeLogs(),
-    loadNotes(),
-    loadRecs(),
-    loadAnnouncements(),
-    loadPending(),
-    loadLeaveRequests(),
-    loadPmsRecords(),
-    loadReports(),
-    loadStories(),
-    loadAppNotifications(),
-    loadApprovalNotifications(),
-    loadThreads(),
-    loadPayslips(),
-  ]);
-  void ensureAmcbUnitsSeeded();
-  await Promise.all([
-    loadUnread(),
-    loadRecentChatNotices(),
-  ]);
+  runtime.batchLoading++;
+  try {
+    await Promise.all([
+      loadBlockedUsers(),
+      loadProfiles(),
+      loadRoles(),
+      loadSites(),
+      loadUnits(),
+      loadSchedules(),
+      loadDtrs(),
+      loadTimeLogs(),
+      loadNotes(),
+      loadRecs(),
+      loadAnnouncements(),
+      loadPending(),
+      loadLeaveRequests(),
+      loadPmsRecords(),
+      loadReports(),
+      loadStories(),
+      loadAppNotifications(),
+      loadApprovalNotifications(),
+      loadThreads(),
+      loadPayslips(),
+    ]);
+    void ensureAmcbUnitsSeeded();
+    if (run !== runtime.authRun) return;
+    await Promise.all([
+      loadUnread(),
+      loadRecentChatNotices(),
+    ]);
+  } finally {
+    runtime.batchLoading = Math.max(0, runtime.batchLoading - 1);
+  }
   if (run !== runtime.authRun) return;
 
   state.booted = true;
   renderAssigneesPicker();
   renderReportSites();
+  autoFillDtrFromSchedule(false);
   renderAll();
   startLive();
 }
