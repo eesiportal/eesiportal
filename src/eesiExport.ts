@@ -20,6 +20,7 @@ import {
   parseReportUnit,
   profileName,
   profileOf,
+  resolvePayrollDtrWindow,
   sortDtrEntriesAscending,
   state,
   stripReportPhotos,
@@ -702,10 +703,17 @@ export async function exportPayslipPdf(rec: PayslipRecord): Promise<void> {
     };
 
     const periodText = `${fmtPayslipPeriodDate(rec.period_start)} to ${fmtPayslipPeriodDate(rec.period_end)}`;
+    const win = resolvePayrollDtrWindow(rec.period_start, rec.period_end);
+    const cutoffStart = rec.dtr_cutoff_start || (win.mapped ? win.dtrStart : "");
+    const cutoffEnd = rec.dtr_cutoff_end || (win.mapped ? win.dtrEnd : "");
+    const dtrLabelCell = win.payoutLabel || (cutoffStart && cutoffEnd ? "DTR Cutoff" : "");
+    const dtrRangeCell = cutoffStart && cutoffEnd
+      ? `DTR ${fmtPayslipPeriodDate(cutoffStart)} - ${fmtPayslipPeriodDate(cutoffEnd)}`
+      : "";
     drawGridRow([{ text: "EESI ELEVATORS, INC.", span: 4, align: "center", bold: true }, { text: "", span: 2 }]);
     drawGridRow([{ text: "PAY SLIP", span: 4, align: "center", bold: true }, { text: "", span: 2 }]);
     drawGridRow([{ text: "Employee" }, { text: rec.employee_name || "Employee", span: 3 }, { text: "" }, { text: "" }]);
-    drawGridRow([{ text: "Pay Period" }, { text: periodText, span: 3 }, { text: "" }, { text: "" }]);
+    drawGridRow([{ text: "Pay Period" }, { text: periodText, span: 3 }, { text: dtrLabelCell }, { text: dtrRangeCell }]);
     drawGridRow([{ text: "Earnings" }, { text: "" }, { text: "" }, { text: "Amount", align: "center" }, { text: "" }, { text: "" }]);
     drawGridRow([
       { text: "Basic Pay" }, { text: "" }, { text: "" }, { text: fmtPayslipAmt(rec.basic_pay), align: "right" },
@@ -760,6 +768,13 @@ export async function exportPayslipPdf(rec: PayslipRecord): Promise<void> {
 
 export function exportPayslipXlsx(rec: PayslipRecord): void {
   const periodText = `${fmtPayslipPeriodDate(rec.period_start)} to ${fmtPayslipPeriodDate(rec.period_end)}`;
+  const win = resolvePayrollDtrWindow(rec.period_start, rec.period_end);
+  const cutoffStart = rec.dtr_cutoff_start || (win.mapped ? win.dtrStart : "");
+  const cutoffEnd = rec.dtr_cutoff_end || (win.mapped ? win.dtrEnd : "");
+  const dtrLabelCell = win.payoutLabel || (cutoffStart && cutoffEnd ? "DTR Cutoff" : "");
+  const dtrRangeCell = cutoffStart && cutoffEnd
+    ? `DTR ${fmtPayslipPeriodDate(cutoffStart)} - ${fmtPayslipPeriodDate(cutoffEnd)}`
+    : "";
   const numOrDash = (v: number, dashWhenZero = true): number | string => {
     const n = Number(v || 0);
     if (!Number.isFinite(n) || (dashWhenZero && Math.abs(n) < 0.005)) return "-";
@@ -769,7 +784,7 @@ export function exportPayslipXlsx(rec: PayslipRecord): void {
     ["EESI ELEVATORS, INC.", "", "", "", "", ""],
     ["PAY SLIP", "", "", "", "", ""],
     ["Employee", rec.employee_name || "", "", "", "", ""],
-    ["Pay Period", periodText, "", "", "", ""],
+    ["Pay Period", periodText, "", "", dtrLabelCell, dtrRangeCell],
     ["Earnings", "", "", "Amount", "", ""],
     ["Basic Pay", "", "", numOrDash(rec.basic_pay), "Deductions", "Amount"],
     ["overtime", Number(rec.overtime_hours || 0), "hrs", numOrDash(rec.overtime_amount), "sss", numOrDash(rec.sss)],

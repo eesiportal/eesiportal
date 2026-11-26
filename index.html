@@ -148,6 +148,51 @@ main:has(#page-dtr:not(.hidden) #dtrPreview:not(.hidden)){max-width:1180px}
 @keyframes sitePinPulse{0%{transform:scale(.6);opacity:.95}100%{transform:scale(2.15);opacity:0}}
 .item.unread-notice{border-left:4px solid var(--cyan);box-shadow:0 0 18px rgba(47,140,255,.32)}
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.app-launcher-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px 6px;padding:4px 0}
+@media(min-width:600px){.app-launcher-grid{grid-template-columns:repeat(5,minmax(0,1fr));gap:14px 10px}}
+@media(max-width:340px){.app-launcher-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.app-icon-tile{
+  display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:6px;
+  padding:6px 4px;border-radius:14px;cursor:pointer;position:relative;user-select:none;
+  background:transparent;border:0;box-shadow:none;min-width:0;text-align:center;
+  transition:transform .16s ease,background .18s ease;
+}
+.app-icon-tile:hover{background:rgba(47,140,255,.1);transform:translateY(-2px)}
+.app-icon-tile:active{transform:scale(.92)}
+.app-squircle{
+  width:56px;height:56px;border-radius:16px;display:grid;place-items:center;position:relative;
+  font-size:27px;line-height:1;color:#fff;
+  border:1px solid rgba(255,255,255,.22);
+  box-shadow:0 6px 14px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.35);
+}
+.app-squircle::before{
+  content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:linear-gradient(160deg,rgba(255,255,255,.24) 0%,rgba(255,255,255,0) 52%);
+}
+.app-count-badge{
+  position:absolute;top:-5px;right:-6px;min-width:21px;height:21px;padding:0 5px;
+  border-radius:999px;background:#ef4444;color:#fff;font-size:11px;font-weight:800;
+  display:inline-flex;align-items:center;justify-content:center;
+  border:2px solid #09152c;box-shadow:0 2px 6px rgba(0,0,0,.45);z-index:2;
+}
+.app-icon-label{
+  font-size:11.5px;font-weight:600;line-height:1.2;color:#e8f0ff;
+  max-width:100%;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+}
+.ic-blue{background:linear-gradient(145deg,#2563eb,#1d4ed8)}
+.ic-green{background:linear-gradient(145deg,#22c55e,#15803d)}
+.ic-amber{background:linear-gradient(145deg,#f59e0b,#d97706)}
+.ic-cyan{background:linear-gradient(145deg,#06b6d4,#0369a1)}
+.ic-indigo{background:linear-gradient(145deg,#6366f1,#4338ca)}
+.ic-rose{background:linear-gradient(145deg,#f43f5e,#be123c)}
+.ic-emerald{background:linear-gradient(145deg,#10b981,#047857)}
+.ic-violet{background:linear-gradient(145deg,#8b5cf6,#6d28d9)}
+.ic-teal{background:linear-gradient(145deg,#14b8a6,#0f766e)}
+.ic-sky{background:linear-gradient(145deg,#0ea5e9,#0284c7)}
+.ic-slate{background:linear-gradient(145deg,#475569,#1e293b)}
+.ic-orange{background:linear-gradient(145deg,#fb923c,#ea580c)}
+.ic-red{background:linear-gradient(145deg,#ef4444,#b91c1c)}
+.ic-eesi{background:linear-gradient(145deg,#0f2a56,#1e6cf2);border-color:rgba(125,211,252,.45)}
 .stat,.tile{padding:14px 10px;text-align:center;cursor:pointer;position:relative;overflow:hidden}
 .stat strong{display:block;font-size:24px;color:#2f8cff;font-weight:800}
 .stat span{font-size:12px;display:block;margin-top:4px;color:#8ea6cc}
@@ -158,7 +203,7 @@ main:has(#page-dtr:not(.hidden) #dtrPreview:not(.hidden)){max-width:1180px}
 /* Big Local Time & Weather (no title) */
 #liveInfoCard{text-align:center;padding:20px 16px}
 #liveClock{font-size:clamp(22px,5vw,32px);font-weight:800;line-height:1.25;color:#e8f0ff}
-#liveWeather{font-size:clamp(18px,3.8vw,24px);font-weight:700;margin-top:8px;color:#2f8cff}
+#liveWeather{font-size:clamp(16px,3.6vw,21px);font-weight:700;margin-top:8px;color:#2f8cff}
 
 /* Buttons with Shadow & Daily/Session Decoration */
 button{
@@ -191,6 +236,7 @@ body:not(.no-decor) button:not(.text-button):not(.composer-btn):not(.composer-em
 body:not(.no-decor) nav.bottom button:not(.active)::after{opacity:.45;top:4px;right:8px;font-size:9px}
 body:not(.no-decor) nav.bottom button.active::after{opacity:.95;top:4px;right:8px;font-size:10px}
 body:not(.no-decor) .msgr-icon::after{top:2px;right:2px;font-size:9px}
+body:not(.no-decor) .app-icon-tile::after{content:none!important}
 body.no-decor button::after{content:none!important}
 
 .badge,.badge-role{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;margin-left:6px;background:rgba(47,140,255,.1);border:1px solid rgba(47,140,255,.5);color:#7fb8ff}
@@ -670,6 +716,9 @@ body.light .muted,body.light .stat span,body.light .thread-preview,body.light .t
 body.light h1,body.light h2,body.light h3,body.light .title,body.light .msgr-title,body.light .sheet h2,body.light .info-head h2,body.light .auth-card h2{color:#0f1f3d}
 body.light .stat strong{color:#1e6cf2}
 body.light .tile{color:#13233f}
+body.light .app-icon-label{color:#0f1f3d}
+body.light .app-count-badge{border-color:#f3f7fc}
+body.light .app-squircle{box-shadow:0 5px 12px rgba(19,35,63,.22),inset 0 1px 0 rgba(255,255,255,.45)}
 body.light th{background:rgba(30,108,242,.10);color:#4a5a78}
 body.light td{color:#0f1f3d}
 body.light .msgr-row.mine .msgr-bub{background:#1e6cf2;color:#ffffff;border-color:transparent}
@@ -1046,13 +1095,39 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
         <b>Database setup needed</b>
         <div id="setupWarnText" class="muted"></div>
       </div>
-      <div class="grid">
-        <div class="stat clickable manager-only hidden" onclick="go('members')"><strong id="memberCount">0</strong><span>👥 Members</span></div>
-        <div class="stat clickable" onclick="go('online')"><strong id="onlineCount">0</strong><span>🟢 Online / Offline</span></div>
-        <div class="stat clickable manager-only hidden" onclick="go('pending')"><strong id="pendingCount">0</strong><span>⏳ Pending</span></div>
-        <div class="stat clickable" onclick="go('sites')"><strong id="siteCount">0</strong><span>📍 Sites</span></div>
-        <div class="stat clickable" onclick="go('dtr')"><strong id="dtrCount">0</strong><span>⏰ DTR</span></div>
-        <div class="stat clickable" onclick="go('notices')"><strong id="noticeCount">0</strong><span>🔔 Notifications</span></div>
+      <div id="homeNavGrid" class="app-launcher-grid">
+        <div class="app-icon-tile clickable manager-only hidden" onclick="go('members')" role="button" tabindex="0" aria-label="Members">
+          <div class="app-squircle ic-indigo">👥<strong id="memberCount" class="app-count-badge">0</strong></div>
+          <span class="app-icon-label">Members</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="go('online')" role="button" tabindex="0" aria-label="Online / Offline">
+          <div class="app-squircle ic-green">🟢<strong id="onlineCount" class="app-count-badge">0</strong></div>
+          <span class="app-icon-label">Online</span>
+        </div>
+        <div class="app-icon-tile clickable manager-only hidden" onclick="go('pending')" role="button" tabindex="0" aria-label="Pending registrations">
+          <div class="app-squircle ic-amber">⏳<strong id="pendingCount" class="app-count-badge">0</strong></div>
+          <span class="app-icon-label">Pending</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="go('sites')" role="button" tabindex="0" aria-label="Sites">
+          <div class="app-squircle ic-cyan">📍<strong id="siteCount" class="app-count-badge">0</strong></div>
+          <span class="app-icon-label">Sites</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="go('dtr')" role="button" tabindex="0" aria-label="DTR">
+          <div class="app-squircle ic-blue">⏰<strong id="dtrCount" class="app-count-badge">0</strong></div>
+          <span class="app-icon-label">DTR</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="go('notices')" role="button" tabindex="0" aria-label="Notifications">
+          <div class="app-squircle ic-rose">🔔<strong id="noticeCount" class="app-count-badge">0</strong></div>
+          <span class="app-icon-label">Notices</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="go('schedule')" role="button" tabindex="0" aria-label="Schedule">
+          <div class="app-squircle ic-sky">📅</div>
+          <span class="app-icon-label">Schedule</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="go('units')" role="button" tabindex="0" aria-label="Units">
+          <div class="app-squircle ic-eesi">🛗</div>
+          <span class="app-icon-label">Units</span>
+        </div>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;">
         <h2 style="margin:0;">📸 Time In / Out Share Feed</h2>
@@ -1062,16 +1137,63 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
       <h2>Timeline</h2>
       <div id="homeTimeline" class="card"><p class="muted">Timeline items will appear here.</p></div>
       <h2>Quick access</h2>
-      <div class="grid">
-        <div class="tile clickable admin-only hidden" onclick="go('admin')"><span class="ic">⚙️</span>Admin</div>
-        <div class="tile clickable manager-only hidden" onclick="go('live-map')"><span class="ic">🗺️</span>Live Map</div>
-        <div class="tile clickable" onclick="go('sites')"><span class="ic">📍</span>Sites</div>
-        <div class="tile clickable" onclick="go('dtr')"><span class="ic">⏰</span>DTR</div>
-        <div class="tile clickable" onclick="openPayrollPage()"><span class="ic">💵</span>Payroll / Payslip</div>
-        <div class="tile clickable" onclick="go('dtr');dtrTab('time_log')"><span class="ic">📸</span>Time In / Out</div>
-        <div class="tile clickable" onclick="go('notes')"><span class="ic">📌</span>Notes &amp; Recs</div>
-        <div class="tile clickable" onclick="go('reports');setTimeout(function(){var b=document.getElementById('reportSearchTab');if(b)b.click();},80)"><span class="ic">🔍</span>Search</div>
-        <div class="tile clickable" onclick="go('leave')"><span class="ic">🌴</span>Leave</div>
+      <div id="homeQuickGrid" class="app-launcher-grid">
+        <div class="app-icon-tile clickable admin-only hidden" onclick="go('admin')" role="button" tabindex="0">
+          <div class="app-squircle ic-slate">⚙️</div>
+          <span class="app-icon-label">Admin</span>
+        </div>
+        <div class="app-icon-tile clickable manager-only hidden" onclick="go('live-map')" role="button" tabindex="0">
+          <div class="app-squircle ic-violet">🗺️</div>
+          <span class="app-icon-label">Live Map</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="go('sites')" role="button" tabindex="0">
+          <div class="app-squircle ic-cyan">📍</div>
+          <span class="app-icon-label">Sites</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="go('units')" role="button" tabindex="0">
+          <div class="app-squircle ic-eesi">🛗</div>
+          <span class="app-icon-label">Units</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="go('dtr')" role="button" tabindex="0">
+          <div class="app-squircle ic-blue">⏰</div>
+          <span class="app-icon-label">DTR</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="openPayrollPage()" role="button" tabindex="0">
+          <div class="app-squircle ic-emerald">💵</div>
+          <span class="app-icon-label">Payroll</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="go('dtr');dtrTab('time_log')" role="button" tabindex="0">
+          <div class="app-squircle ic-teal">📸</div>
+          <span class="app-icon-label">Time Log</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="go('reports')" role="button" tabindex="0">
+          <div class="app-squircle ic-sky">📄</div>
+          <span class="app-icon-label">Reports</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="openPmsQuickShortcut()" role="button" tabindex="0">
+          <div class="app-squircle ic-green">✅</div>
+          <span class="app-icon-label">PMS</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="go('notes')" role="button" tabindex="0">
+          <div class="app-squircle ic-indigo">📌</div>
+          <span class="app-icon-label">Notes</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="go('reports');setTimeout(function(){var b=document.getElementById('reportSearchTab');if(b)b.click();},80)" role="button" tabindex="0">
+          <div class="app-squircle ic-slate">🔍</div>
+          <span class="app-icon-label">Search</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="go('leave')" role="button" tabindex="0">
+          <div class="app-squircle ic-orange">🌴</div>
+          <span class="app-icon-label">Leave</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="openTroubleUnitsFilter()" role="button" tabindex="0">
+          <div class="app-squircle ic-red">🚨</div>
+          <span class="app-icon-label">Alerts</span>
+        </div>
+        <div class="app-icon-tile clickable" onclick="refreshLiveGpsWeather()" role="button" tabindex="0">
+          <div class="app-squircle ic-amber">🌤️</div>
+          <span class="app-icon-label">GPS Weather</span>
+        </div>
       </div>
     </div></section>
 
@@ -1148,6 +1270,7 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
         </div>
       </div>
       <div id="unitsSetupHint" class="card warn hidden"></div>
+      <div id="unitsHealthBar" class="card" style="padding:10px 12px;margin-bottom:10px;"></div>
       <div id="unitsListView"><div id="unitsList"></div></div>
       <input id="unitManualFile" type="file" class="sr-file-input" accept="image/*,.pdf,.doc,.docx,.txt">
     </div></section>
@@ -1464,15 +1587,25 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
       </div>
 
       <div id="payrollEditorCard" class="card">
+        <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;">
+          <div class="field" style="flex:1;min-width:150px;margin-bottom:0;">
+            <label for="payMonthPicker">Target Month</label>
+            <input id="payMonthPicker" type="month" onchange="syncPayrollMonthQuickPicker()">
+          </div>
+          <div class="inline-actions" style="margin:0;">
+            <button id="payQuick15Btn" class="btn small-btn" type="button" onclick="selectPayrollQuickCycle('15th')">📅 15th Payout (DTR 26–10)</button>
+            <button id="payQuick30Btn" class="btn small-btn" type="button" onclick="selectPayrollQuickCycle('30th')">📅 30th Payout (DTR 11–25)</button>
+          </div>
+        </div>
         <div class="row">
           <div class="field"><label for="payEmployee">Employee</label><select id="payEmployee"></select></div>
           <div class="field">
-            <label for="payPeriodPreset">Pay Period</label>
+            <label for="payPeriodPreset">Pay Period &amp; DTR Cutoff Rule</label>
             <select id="payPeriodPreset">
-              <option value="1-15">1st – 15th Pay Period (counts DTR 26 – 10)</option>
-              <option value="16-end">16th – 30th/End Pay Period (counts DTR 11 – 25)</option>
-              <option value="dtr-26-10">Direct DTR Cutoff (26 – 10)</option>
-              <option value="dtr-11-25">Direct DTR Cutoff (11 – 25)</option>
+              <option value="1-15">For 15th Payout · Period 1–15 (DTR 26 – 10)</option>
+              <option value="16-end">For 30th Payout · Period 16–30/End (DTR 11 – 25)</option>
+              <option value="dtr-26-10">Date 26 – 10 (For 15th Payout)</option>
+              <option value="dtr-11-25">Date 11 – 25 (For 30th Payout)</option>
               <option value="custom">Custom Dates</option>
             </select>
           </div>
@@ -1481,7 +1614,8 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
           <div class="field"><label for="payStartDate">Period Start</label><input id="payStartDate" type="date"></div>
           <div class="field"><label for="payEndDate">Period End</label><input id="payEndDate" type="date"></div>
         </div>
-        <div id="payDtrSummary" class="muted" style="font-size:12px;margin:-4px 0 10px;">Select an employee and pay period (1–15 counts DTR 26–10; 16–30 counts DTR 11–25).</div>
+        <div id="payDtrSummary" class="muted" style="font-size:12px;margin:-4px 0 8px;">Date 26 to 10 counts for the 15th payout; date 11 to 25 counts for the 30th payout.</div>
+        <div id="payDtrDailyBreakdown" class="hidden" style="margin-bottom:10px;padding:8px 10px;border-radius:10px;background:rgba(30,108,242,.08);border:1px solid rgba(56,189,248,.22);font-size:12px;"></div>
 
         <div class="row">
           <div class="card" style="margin:0;padding:10px 12px;">
@@ -2324,8 +2458,20 @@ body.light .dtr-all-total-row td{background:rgba(34,197,94,.14)!important;color:
         <button class="gray small-btn" type="button" onclick="closeSiteUnitsOverlay()">✕ Close</button>
       </div>
     </div>
-    <div id="siteUnitsOverlayMeta" class="muted" style="margin-bottom:10px;"></div>
+    <div id="siteUnitsOverlayMeta" class="muted" style="margin-bottom:8px;"></div>
+    <input id="siteUnitsSearchInput" type="search" placeholder="Search unit name, side, floor, or status…" aria-label="Search units in site" style="margin-bottom:10px;" oninput="setSiteUnitsSearch(this.value)">
     <div id="siteUnitsOverlayBody"></div>
+  </div>
+</div>
+
+<div id="unitActionOverlay" class="dialog hidden" style="z-index:340;overflow:auto;" role="dialog" aria-modal="true" aria-labelledby="unitActionTitle">
+  <div class="card" style="width:min(520px,100%);max-height:92vh;overflow-y:auto;">
+    <div class="site-header" style="margin-bottom:8px;">
+      <h2 id="unitActionTitle" style="margin:0;">🛗 Selected Unit</h2>
+      <button class="gray small-btn" type="button" onclick="closeUnitActionOverlay()">✕ Close</button>
+    </div>
+    <div id="unitActionMeta" class="muted" style="margin-bottom:10px;"></div>
+    <div id="unitActionBody"></div>
   </div>
 </div>
 

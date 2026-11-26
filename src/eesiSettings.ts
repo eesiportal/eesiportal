@@ -1431,28 +1431,200 @@ export function startClock(): void {
   clockTimer = setInterval(tick, 1000);
 }
 
-export async function updateLiveWeather(lat = runtime.lastWeatherLat, lon = runtime.lastWeatherLon): Promise<void> {
-  runtime.lastWeatherLat = lat;
-  runtime.lastWeatherLon = lon;
+const weatherPlaceCache = new Map<string, string>();
+let weatherGeoProbeInFlight = false;
+
+function weatherCodeInfo(code: number, isDay = 1): { icon: string; label: string } {
+  const c = Number(code);
+  if (c === 0) return { icon: isDay ? "☀️" : "🌙", label: "Clear sky" };
+  if (c === 1) return { icon: isDay ? "🌤️" : "🌙", label: "Mostly clear" };
+  if (c === 2) return { icon: "⛅", label: "Partly cloudy" };
+  if (c === 3) return { icon: "☁️", label: "Overcast" };
+  if (c === 45 || c === 48) return { icon: "🌫️", label: "Foggy" };
+  if (c >= 51 && c <= 57) return { icon: "🌦️", label: "Drizzle" };
+  if (c >= 61 && c <= 67) return { icon: "🌧️", label: c >= 65 ? "Heavy rain" : "Rain" };
+  if (c >= 80 && c <= 82) return { icon: "🌦️", label: c === 82 ? "Heavy showers" : "Rain showers" };
+  if (c >= 95) return { icon: "⛈️", label: "Thunderstorm" };
+  return { icon: "🌤️", label: "Fair" };
+}
+
+async function resolveWeatherPlaceName(lat: number, lon: number): Promise<string> {
+  const key = `${lat.toFixed(2)},${lon.toFixed(2)}`;
+  if (weatherPlaceCache.has(key)) return weatherPlaceCache.get(key)!;
+  try {
+    const saved = JSON.parse(localStorage.getItem("eesi-weather-places") || "{}");
+    if (saved && typeof saved[key] === "string" && saved[key]) {
+      weatherPlaceCache.set(key, saved[key]);
+      return saved[key];
+    }
+  } catch {}
+
+  let place = "";
+  try {
+    const r = await fetch("/api/geocode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lat, lng: lon }),
+    });
+    if (r.ok) {
+      const data: any = await r.json();
+      const city = String(data?.city || "").trim();
+      const addr = String(data?.formattedAddress || "").trim();
+      if (city) place = city;
+      else if (addr) place = addr.split(",").slice(0, 2).join(", ").trim();
+    }
+  } catch {}
+
+  if (!place) {
+    try {
+      const nom = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(String(lat))}&lon=${encodeURIComponent(String(lon))}&zoom=14`
+      );
+      if (nom.ok) {
+        const j: any = await nom.json();
+        const a = j?.address || {};
+        const sub = a.suburb || a.neighbourhood || a.quarter || a.village || a.barangay || "";
+        const city = a.city || a.town || a.municipality || a.county || a.state || "";
+        place = [sub, city].filter(Boolean).filter((v, i, arr) => arr.indexOf(v) === i).join(", ");
+      }
+    } catch {}
+  }
+
+  if (!place) place = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+  weatherPlaceCache.set(key, place);
+  try {
+    const saved = JSON.parse(localStorage.getItem("eesi-weather-places") || "{}");
+    saved[key] = place;
+    localStorage.setItem("eesi-weather-places", JSON.stringify(saved));
+  } catch {}
+  return place;
+}
+
+export async function updateLiveWeather(
+  latArg?: number,
+  lonArg?: number,
+  opts?: { fromGps?: boolean; accuracy?: number; force?: boolean }
+): Promise<void> {
   const el = $("liveWeather");
+  const cachedGps = hooks.getCachedGps?.();
+  let lat = typeof latArg === "number" && Number.isFinite(latArg) ? latArg : undefined;
+  let lon = typeof lonArg === "number" && Number.isFinite(lonArg) ? lonArg : undefined;
+  let fromGps = Boolean(opts?.fromGps);
+  let acc = typeof opts?.accuracy === "number" ? Math.round(opts.accuracy) : runtime.lastWeatherAcc;
+
+  if (lat == null || lon == null) {
+    if (cachedGps && Number.isFinite(cachedGps.lat) && Number.isFinite(cachedGps.lng)) {
+      lat = cachedGps.lat;
+      lon = cachedGps.lng;
+      fromGps = true;
+      acc = Math.round(cachedGps.acc || acc || 0);
+    } else if (!runtime.hasLiveGpsLock && "geolocation" in navigator && !weatherGeoProbeInFlight) {
+      weatherGeoProbeInFlight = true;
+      if (el && !el.textContent?.includes("°C")) {
+        el.innerHTML = '<div class="muted" style="font-size:13px;">📡 Acquiring your live GPS location for local weather…</div>';
+      }
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          weatherGeoProbeInFlight = false;
+          void updateLiveWeather(pos.coords.latitude, pos.coords.longitude, {
+            fromGps: true,
+            accuracy: pos.coords.accuracy,
+            force: true,
+          });
+        },
+        () => {
+          weatherGeoProbeInFlight = false;
+          if (!runtime.hasLiveGpsLock) {
+            void updateLiveWeather(runtime.lastWeatherLat, runtime.lastWeatherLon, { fromGps: false });
+          }
+        },
+        { enableHighAccuracy: true, maximumAge: 15000, timeout: 8000 }
+      );
+      return;
+    } else {
+      lat = runtime.lastWeatherLat;
+      lon = runtime.lastWeatherLon;
+      fromGps = runtime.hasLiveGpsLock;
+    }
+  }
+
+  const resolvedLat: number = lat ?? runtime.lastWeatherLat;
+  const resolvedLon: number = lon ?? runtime.lastWeatherLon;
+
+  runtime.lastWeatherLat = resolvedLat;
+  runtime.lastWeatherLon = resolvedLon;
+  if (fromGps) {
+    runtime.hasLiveGpsLock = true;
+    if (acc > 0) runtime.lastWeatherAcc = acc;
+  }
+
   if (!el) return;
   try {
-    const r = await fetch(
-      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto`
-    );
-    const j = await r.json();
+    const [weatherRes, placeName] = await Promise.all([
+      fetch(
+        `https://api.open-meteo.com/v1/forecast?latitude=${resolvedLat}&longitude=${resolvedLon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,rain,weather_code,wind_speed_10m,is_day&hourly=precipitation_probability&forecast_days=1&timezone=auto`
+      ),
+      resolveWeatherPlaceName(resolvedLat, resolvedLon),
+    ]);
+    const j = await weatherRes.json();
     const c = j.current || {};
-    const codes: Record<number, string> = {
-      0: "Clear", 1: "Mostly clear", 2: "Partly cloudy", 3: "Overcast", 45: "Fog",
-      51: "Drizzle", 61: "Rain", 63: "Rain", 65: "Heavy rain", 80: "Showers", 95: "Thunderstorm",
-    };
-    el.textContent =
-      (c.temperature_2m != null ? c.temperature_2m + "°C · " : "") +
-      (codes[c.weather_code] || "—") +
-      (c.relative_humidity_2m != null ? " · " + c.relative_humidity_2m + "% humidity" : "");
+    const info = weatherCodeInfo(c.weather_code, c.is_day ?? 1);
+    const temp = c.temperature_2m != null ? `${c.temperature_2m}°C` : "—";
+    const feels = c.apparent_temperature != null ? `Feels ${c.apparent_temperature}°C` : "";
+    const rh = c.relative_humidity_2m != null ? `💧 ${c.relative_humidity_2m}%` : "";
+    const wind = c.wind_speed_10m != null ? `💨 ${c.wind_speed_10m} km/h` : "";
+    let rainChanceStr = "";
+    if (Array.isArray(j.hourly?.precipitation_probability) && Array.isArray(j.hourly?.time) && c.time) {
+      const curHourPrefix = String(c.time).slice(0, 13);
+      const idx = j.hourly.time.findIndex((t: string) => String(t).startsWith(curHourPrefix));
+      const prob = idx >= 0 ? j.hourly.precipitation_probability[idx] : j.hourly.precipitation_probability[0];
+      if (prob != null) rainChanceStr = `☔ ${prob}% rain`;
+    }
+
+    runtime.lastWeatherPlace = placeName;
+    runtime.lastWeatherUpdatedAt = Date.now();
+
+    const gpsTag = runtime.hasLiveGpsLock
+      ? `🟢 Live GPS${runtime.lastWeatherAcc ? ` ±${runtime.lastWeatherAcc}m` : ""}`
+      : "⚠️ Approx (Enable GPS)";
+    const subParts = [
+      `📍 ${placeName} (${gpsTag})`,
+      [rh, wind, rainChanceStr].filter(Boolean).join(" · "),
+    ].filter(Boolean);
+
+    el.innerHTML =
+      `<div>${info.icon} <b>${esc(temp)}</b> · ${esc(info.label)}${feels ? ` <span class="muted" style="font-size:13px;font-weight:500;">(${esc(feels)})</span>` : ""}</div>` +
+      `<div class="muted" style="font-size:12px;margin-top:4px;line-height:1.45;">${subParts.map(esc).join("<br>")}</div>` +
+      `<div style="margin-top:6px;"><button type="button" class="gray small-btn" onclick="refreshLiveGpsWeather()">📡 Sync GPS Weather</button></div>`;
   } catch {
-    el.textContent = "Weather unavailable.";
+    el.innerHTML =
+      `<div>Weather unavailable.</div>` +
+      `<div style="margin-top:6px;"><button type="button" class="gray small-btn" onclick="refreshLiveGpsWeather()">↻ Retry GPS Weather</button></div>`;
   }
+}
+
+export function refreshLiveGpsWeather(): void {
+  const el = $("liveWeather");
+  if (!("geolocation" in navigator)) {
+    void updateLiveWeather(undefined, undefined, { force: true });
+    return;
+  }
+  if (el) el.innerHTML = '<div class="muted" style="font-size:13px;">📡 Locking live GPS for exact local weather…</div>';
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      void updateLiveWeather(pos.coords.latitude, pos.coords.longitude, {
+        fromGps: true,
+        accuracy: pos.coords.accuracy,
+        force: true,
+      });
+      toast("Weather synced to your live GPS location");
+    },
+    () => {
+      void updateLiveWeather(undefined, undefined, { force: true });
+      toast("Could not refresh GPS — check location permission");
+    },
+    { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+  );
 }
 
 /* ==================== PULL TO RELOAD (REMOVED) ==================== */
@@ -1673,5 +1845,5 @@ export function initSettingsWiring(): void {
 
   renderDecor();
   updateLiveWeather();
-  setInterval(() => updateLiveWeather(), 600000);
+  setInterval(() => updateLiveWeather(), 300000);
 }

@@ -47,6 +47,7 @@ import {
   installFromAndroidSheet,
   openPinSetup,
   playSettingSound,
+  refreshLiveGpsWeather,
   renderDecor,
   requestNotificationPermission,
   resetDisplaySettings,
@@ -69,6 +70,7 @@ import {
   fitLiveMapAll,
   fitSiteMapRoute,
   focusLiveEmployee,
+  getCachedUserGpsCoords,
   initAlwaysOnLocation,
   initDataListeners,
   initSiteMapControls,
@@ -197,6 +199,7 @@ import {
   closeScheduleFormOverlay,
   closeSiteMapOverlay,
   closeSiteUnitsOverlay,
+  closeUnitActionOverlay,
   closeTimemarkCamera,
   closeTimemarkEditDrawer,
   closeTimemarkStyledNoteModal,
@@ -241,6 +244,7 @@ import {
   openLeaveSheetPreview,
   openPayrollPage,
   openPmsChecklist,
+  openPmsQuickShortcut,
   openQuickTimeAction,
   openScheduleFormOverlay,
   openSiteOnMap,
@@ -249,6 +253,7 @@ import {
   openTimemarkEditDrawer,
   openTimemarkStyledNoteModal,
   openTimemarkTemplatesDrawer,
+  openTroubleUnitsFilter,
   openUnitManual,
   openUnitPms,
   openUnitReport,
@@ -257,6 +262,7 @@ import {
   printLeaveSheet,
   printPayslip,
   promptTimemarkTitle,
+  quickUpdateUnitStatus,
   refreshLeaveBalances,
   removeAdminMember,
   removePhoto,
@@ -310,12 +316,15 @@ import {
   saveTimemarkStyledNote,
   saveUnit,
   saveUnitManual,
+  selectPayrollQuickCycle,
   selectTimemarkTemplate,
+  selectUnitForActions,
   sendTimeLogNote,
   setAdminRoleFilter,
   setNoticesFilter,
   setScheduleFilter,
   setScheduleSearch,
+  setSiteUnitsSearch,
   setTimeLogMode,
   setTimemarkAccentColor,
   setTimemarkAutoFlip,
@@ -335,6 +344,7 @@ import {
   switchNoteTab,
   switchUnitsTab,
   syncPayrollFromDtr,
+  syncPayrollMonthQuickPicker,
   toggleTimemarkConfigField,
   toggleTimemarkFlash,
   toggleTimemarkGrid,
@@ -726,6 +736,7 @@ function registerHooks(): void {
     renderPayroll,
     evaluateDailySiteGeofence,
     isUserMentionedInSchedule: isCurrentUserMentionedInSchedule,
+    getCachedGps: getCachedUserGpsCoords,
   });
 }
 
@@ -772,6 +783,12 @@ function exposeWindowGlobals(): void {
     toggleUnitSiteCard,
     openSiteUnitsOverlay,
     closeSiteUnitsOverlay,
+    setSiteUnitsSearch,
+    selectUnitForActions,
+    closeUnitActionOverlay,
+    quickUpdateUnitStatus,
+    openPmsQuickShortcut,
+    openTroubleUnitsFilter,
     closeUnitManualOverlay,
     switchUnitsTab,
     openUnitManual,
@@ -932,6 +949,9 @@ function exposeWindowGlobals(): void {
     exportRecommendations,
     openPayrollPage,
     syncPayrollFromDtr,
+    syncPayrollMonthQuickPicker,
+    selectPayrollQuickCycle,
+    refreshLiveGpsWeather,
     savePayslipRecord,
     loadPayslipIntoEditor,
     deletePayslipRecord,
@@ -1217,11 +1237,17 @@ function resetState(): void {
   runtime.replyingToMsg = null;
   runtime.expandedUnitSiteIds = {};
   runtime.selectedUnitsSiteId = null;
+  runtime.selectedUnitId = null;
+  runtime.siteUnitsSearch = "";
   runtime.unitsLocationFilter = "ALL";
   runtime.unitsSideFilter = "ALL";
   runtime.unitsFloorFilter = "ALL";
   runtime.unitsDirFilter = "ALL";
   runtime.unitsShowAllInline = false;
+  runtime.hasLiveGpsLock = false;
+  runtime.lastWeatherPlace = "";
+  runtime.lastWeatherAcc = 0;
+  runtime.lastWeatherUpdatedAt = 0;
   runtime.editingLeaveId = null;
   runtime.adminRoleFilter = "all";
   runtime.selectedSiteId = null;

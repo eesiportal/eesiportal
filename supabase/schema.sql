@@ -149,13 +149,33 @@ CREATE TABLE IF NOT EXISTS public.site_units (
   capacity_floors TEXT,
   notes TEXT,
   created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_by UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 ALTER TABLE public.site_units ADD COLUMN IF NOT EXISTS brand_model TEXT;
 ALTER TABLE public.site_units ADD COLUMN IF NOT EXISTS serial_no TEXT;
 ALTER TABLE public.site_units ADD COLUMN IF NOT EXISTS capacity_floors TEXT;
 ALTER TABLE public.site_units ADD COLUMN IF NOT EXISTS notes TEXT;
 ALTER TABLE public.site_units ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.site_units ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE public.site_units ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+
+CREATE OR REPLACE FUNCTION public.touch_site_units_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.updated_at := NOW();
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_site_units_updated_at ON public.site_units;
+CREATE TRIGGER trg_site_units_updated_at
+  BEFORE UPDATE ON public.site_units
+  FOR EACH ROW
+  EXECUTE FUNCTION public.touch_site_units_updated_at();
 
 CREATE TABLE IF NOT EXISTS public.schedules (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -916,25 +936,46 @@ BEGIN
 
   v_month_start := DATE_TRUNC('month', p_period_start)::DATE;
 
-  -- Pay period 1 to 15 counts DTR from 26 of previous month to 10 of same month
+  -- Pay period 1 to 15 (15th Payout) counts DTR from 26 of previous month to 10 of same month
   IF EXTRACT(DAY FROM p_period_start) = 1
      AND EXTRACT(DAY FROM p_period_end) = 15
      AND v_month_start = DATE_TRUNC('month', p_period_end)::DATE THEN
     RETURN QUERY SELECT
       (v_month_start - INTERVAL '1 month' + INTERVAL '25 days')::DATE,
       (v_month_start + INTERVAL '9 days')::DATE,
-      '1-15 Pay Period -> DTR 26-10'::TEXT;
+      'For 15th Payout -> DTR 26-10'::TEXT;
     RETURN;
   END IF;
 
-  -- Pay period 16 to 30/end of month counts DTR from 11 to 25 of same month
+  -- Direct DTR 26 to 10 counts toward 15th Payout
+  IF EXTRACT(DAY FROM p_period_start) = 26
+     AND EXTRACT(DAY FROM p_period_end) = 10 THEN
+    RETURN QUERY SELECT
+      p_period_start,
+      p_period_end,
+      'DTR 26-10 -> For 15th Payout'::TEXT;
+    RETURN;
+  END IF;
+
+  -- Pay period 16 to 30/end of month (30th Payout) counts DTR from 11 to 25 of same month
   IF EXTRACT(DAY FROM p_period_start) = 16
      AND EXTRACT(DAY FROM p_period_end) BETWEEN 28 AND 31
      AND v_month_start = DATE_TRUNC('month', p_period_end)::DATE THEN
     RETURN QUERY SELECT
       (v_month_start + INTERVAL '10 days')::DATE,
       (v_month_start + INTERVAL '24 days')::DATE,
-      '16-30 Pay Period -> DTR 11-25'::TEXT;
+      'For 30th Payout -> DTR 11-25'::TEXT;
+    RETURN;
+  END IF;
+
+  -- Direct DTR 11 to 25 counts toward 30th Payout
+  IF EXTRACT(DAY FROM p_period_start) = 11
+     AND EXTRACT(DAY FROM p_period_end) = 25
+     AND v_month_start = DATE_TRUNC('month', p_period_end)::DATE THEN
+    RETURN QUERY SELECT
+      p_period_start,
+      p_period_end,
+      'DTR 11-25 -> For 30th Payout'::TEXT;
     RETURN;
   END IF;
 
@@ -1259,6 +1300,8 @@ END $$;
 /* 9. PERFORMANCE INDEXES */
 CREATE INDEX IF NOT EXISTS idx_schedules_date ON public.schedules (scheduled_date);
 CREATE INDEX IF NOT EXISTS idx_site_units_site_id ON public.site_units (site_id);
+CREATE INDEX IF NOT EXISTS idx_site_units_site_status ON public.site_units (site_id, status);
+CREATE INDEX IF NOT EXISTS idx_pms_site_date ON public.pms_checklist_records (site_id, checklist_date DESC);
 CREATE INDEX IF NOT EXISTS idx_dtr_entries_user_date ON public.dtr_entries (user_id, work_date DESC);
 CREATE INDEX IF NOT EXISTS idx_dtr_time_logs_created_at ON public.dtr_time_logs (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_dtr_time_logs_user_date ON public.dtr_time_logs (user_id, work_date DESC, created_at DESC);

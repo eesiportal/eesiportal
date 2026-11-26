@@ -3173,29 +3173,193 @@ export function openSiteUnitsOverlay(siteId: string): void {
   if (!site) return;
   runtime.selectedUnitsSiteId = String(site.id);
   const siteUnits = state.units.filter(u => String(u.site_id) === String(site.id));
+  const query = String(runtime.siteUnitsSearch || "").trim().toLowerCase();
+  const filteredUnits = query
+    ? siteUnits.filter(u => {
+        const tax = extractUnitTaxonomy(u);
+        const hay = [u.unit_name, u.status, u.unit_type, u.brand_model, u.serial_no, tax.side, tax.floorLabel, tax.direction, tax.cleanNotes]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return hay.includes(query);
+      })
+    : siteUnits;
+
   const loc = [site.address, site.city, site.region].filter(Boolean).join(" · ");
   const siteReportsCount = state.reports.filter(r => String(r.site_id) === String(site.id)).length;
   const sitePmsCount = state.pmsRecords.filter(r => String(r.site_id) === String(site.id)).length;
+  const opsCount = siteUnits.filter(u => (u.status || "Operational") === "Operational").length;
+  const issueCount = siteUnits.filter(u => u.status === "Needs Repair" || u.status === "Shutdown").length;
 
   const ttl = $("siteUnitsOverlayTitle");
   if (ttl) ttl.textContent = `🛗 ${site.name} (${siteUnits.length})`;
   const meta = $("siteUnitsOverlayMeta");
   if (meta) {
-    meta.textContent = `📍 ${loc || site.name} · ${siteReportsCount} report(s) · ${sitePmsCount} PMS`;
+    meta.textContent =
+      `📍 ${loc || site.name} · ✅ ${opsCount} Operational` +
+      (issueCount ? ` · ⚠️ ${issueCount} Attention` : "") +
+      ` · ${siteReportsCount} report(s) · ${sitePmsCount} PMS` +
+      (query ? ` · Showing ${filteredUnits.length}/${siteUnits.length}` : "");
+  }
+  const searchInp = $("siteUnitsSearchInput") as HTMLInputElement | null;
+  if (searchInp && searchInp.value !== (runtime.siteUnitsSearch || "")) {
+    searchInp.value = runtime.siteUnitsSearch || "";
   }
   const mapBtn = $("siteUnitsOverlayMapBtn") as HTMLButtonElement | null;
   if (mapBtn) mapBtn.onclick = () => openSiteOnMap(String(site.id));
   const addBtn = $("siteUnitsOverlayAddBtn") as HTMLButtonElement | null;
   if (addBtn) addBtn.onclick = () => openAddUnitForSite(String(site.id));
   const body = $("siteUnitsOverlayBody");
-  if (body) body.innerHTML = buildSiteUnitsHtml(site, siteUnits);
+  if (body) {
+    body.innerHTML = filteredUnits.length
+      ? buildSiteUnitsHtml(site, filteredUnits)
+      : (siteUnits.length
+          ? '<p class="muted" style="margin:10px 0;">No units in this site match your search.</p>'
+          : buildSiteUnitsHtml(site, []));
+  }
 
   $("siteUnitsOverlay")?.classList.remove("hidden");
+}
+
+export function setSiteUnitsSearch(q: string): void {
+  runtime.siteUnitsSearch = q;
+  if (runtime.selectedUnitsSiteId) {
+    openSiteUnitsOverlay(runtime.selectedUnitsSiteId);
+  }
 }
 
 export function closeSiteUnitsOverlay(): void {
   $("siteUnitsOverlay")?.classList.add("hidden");
   runtime.selectedUnitsSiteId = null;
+  runtime.siteUnitsSearch = "";
+  setVal("siteUnitsSearchInput", "");
+}
+
+export function closeUnitActionOverlay(): void {
+  $("unitActionOverlay")?.classList.add("hidden");
+  runtime.selectedUnitId = null;
+  if (!$("siteUnitsOverlay")?.classList.contains("hidden") && runtime.selectedUnitsSiteId) {
+    openSiteUnitsOverlay(runtime.selectedUnitsSiteId);
+  }
+}
+
+export function selectUnitForActions(unitId: string): void {
+  const u = state.units.find(x => String(x.id) === String(unitId));
+  if (!u) return;
+  const site = state.sites.find(s => String(s.id) === String(u.site_id));
+  runtime.selectedUnitId = String(u.id);
+  const tax = extractUnitTaxonomy(u);
+  const stats = getUnitPmsAndReportStats(u);
+  const status = u.status || "Operational";
+  const isDanger = status === "Needs Repair" || status === "Shutdown";
+  const isMaint = status === "Under Maintenance";
+
+  const ttl = $("unitActionTitle");
+  if (ttl) ttl.textContent = `🛗 ${u.unit_name}`;
+  const meta = $("unitActionMeta");
+  if (meta) {
+    meta.textContent = [site?.name || "Work Site", tax.side, tax.floorLabel, tax.direction].filter(Boolean).join(" · ");
+  }
+
+  const body = $("unitActionBody");
+  if (body) {
+    const specsParts = [
+      u.unit_type ? `Type: ${u.unit_type}` : "",
+      u.brand_model ? `Model: ${u.brand_model}` : "",
+      u.serial_no ? `S/N: ${u.serial_no}` : "",
+      u.capacity_floors ? `Capacity / Floors: ${u.capacity_floors}` : "",
+    ].filter(Boolean);
+
+    const statusChoices = ["Operational", "Under Maintenance", "Needs Repair", "Shutdown"];
+    const statusButtonsHtml = statusChoices
+      .map(st => {
+        const active = st === status;
+        const btnCls = active
+          ? (st === "Needs Repair" || st === "Shutdown" ? "red small-btn" : "btn small-btn")
+          : "gray small-btn";
+        return `<button class="${btnCls}" type="button" onclick="quickUpdateUnitStatus('${esc(u.id)}','${esc(st)}',false)">${active ? "✓ " : ""}${esc(st)}</button>`;
+      })
+      .join("");
+
+    const siteIdSafe = esc(site?.id || u.site_id || "");
+    const regionSafe = esc(site?.region || "");
+    const unitTypeSafe = esc(u.unit_type || "elevator");
+    const unitNameSafe = esc(u.unit_name || "");
+    const unitIdSafe = esc(u.id);
+
+    body.innerHTML =
+      `<div class="item" style="margin-top:0;">` +
+        `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">` +
+          `<span class="sess-badge ${isDanger ? "" : isMaint ? "soon" : "now"}" ${isDanger ? 'style="background:var(--red);color:#fff;"' : ""}>${esc(status)}</span>` +
+          `<span class="badge" style="margin-left:0;">${stats.monthPmsCount > 0 ? `✅ PMS This Month (${stats.monthPmsCount})` : "⏳ PMS Due This Month"}</span>` +
+          `<span class="badge" style="margin-left:0;">📄 ${stats.reportCount} Report(s)</span>` +
+          `<span class="badge" style="margin-left:0;">📋 ${stats.totalPmsCount} Total PMS</span>` +
+        `</div>` +
+        (specsParts.length ? `<div class="muted" style="margin-top:8px;font-size:12.5px;">${esc(specsParts.join(" · "))}</div>` : "") +
+        (tax.cleanNotes ? `<div style="margin-top:6px;font-size:12.5px;white-space:pre-wrap;">${esc(tax.cleanNotes)}</div>` : "") +
+      `</div>` +
+      `<div style="margin-top:12px;">` +
+        `<div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">Choose Unit Action</div>` +
+        `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;">` +
+          `<button class="btn" type="button" onclick="closeUnitActionOverlay();openUnitManual('${unitIdSafe}')">📖 Manual</button>` +
+          `<button class="green" type="button" onclick="closeUnitActionOverlay();openUnitPms('${siteIdSafe}','${regionSafe}','${unitTypeSafe}','${unitIdSafe}')">✅ PMS</button>` +
+          `<button class="btn" type="button" onclick="closeUnitActionOverlay();openUnitReport('${siteIdSafe}','${unitNameSafe}','${unitIdSafe}')">📄 Report</button>` +
+          `<button class="gray" type="button" onclick="closeUnitActionOverlay();editUnit('${unitIdSafe}')">✏️ Edit</button>` +
+          `<button class="red" type="button" onclick="closeUnitActionOverlay();deleteUnit('${unitIdSafe}')">🗑 Delete</button>` +
+        `</div>` +
+      `</div>` +
+      `<div class="item" style="margin-top:12px;">` +
+        `<div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;">⚡ Quick Status Update</div>` +
+        `<div class="inline-actions" style="margin-top:0;">${statusButtonsHtml}</div>` +
+        (isDanger
+          ? `<div style="margin-top:8px;"><button class="red small-btn" type="button" onclick="quickUpdateUnitStatus('${unitIdSafe}','${esc(status)}',true)">🚨 Broadcast ${esc(status)} Alert to Ops Team</button></div>`
+          : "") +
+      `</div>`;
+  }
+
+  const overlay = $("unitActionOverlay");
+  overlay?.classList.remove("hidden");
+  applyRandomOpenStyle(overlay?.querySelector<HTMLElement>(".card") || null);
+  triggerAndroidHapticTap();
+
+  if (!$("siteUnitsOverlay")?.classList.contains("hidden") && runtime.selectedUnitsSiteId) {
+    openSiteUnitsOverlay(runtime.selectedUnitsSiteId);
+  }
+}
+
+export async function quickUpdateUnitStatus(unitId: string, nextStatus: string, notifyOps = false): Promise<void> {
+  if (!checkNetwork()) return;
+  const u = state.units.find(x => String(x.id) === String(unitId));
+  if (!u) return;
+  const site = state.sites.find(s => String(s.id) === String(u.site_id));
+  const statusChanged = String(u.status || "Operational") !== nextStatus;
+
+  if (statusChanged) {
+    let { error } = await runtime.client
+      .from("site_units")
+      .update({ status: nextStatus, updated_by: state.userId })
+      .eq("id", unitId);
+    if (error && /updated_by|updated_at|42703|schema cache/i.test(String(error.message || ""))) {
+      ({ error } = await runtime.client.from("site_units").update({ status: nextStatus }).eq("id", unitId));
+    }
+    if (error) { toast("Status update failed: " + error.message); return; }
+  }
+
+  if (notifyOps || (statusChanged && (nextStatus === "Shutdown" || nextStatus === "Needs Repair"))) {
+    try {
+      await runtime.client.from("app_notifications").insert({
+        title: `🚨 Unit Alert: ${u.unit_name} (${nextStatus})`,
+        body: `${state.profile?.full_name || state.email || "Field Technician"} updated ${u.unit_name} at ${site?.name || "Site"} to ${nextStatus}.`,
+      });
+    } catch {}
+  }
+
+  suppressNotifications();
+  await loadUnits();
+  if (!$("unitActionOverlay")?.classList.contains("hidden") && String(runtime.selectedUnitId) === String(unitId)) {
+    selectUnitForActions(unitId);
+  }
+  toast(notifyOps ? `Ops alert sent for ${u.unit_name}` : `${u.unit_name} marked ${nextStatus}`);
 }
 
 export function toggleUnitSiteCard(siteId: string): void {
@@ -3344,15 +3508,6 @@ export function openUnitReport(siteId: string, unitName: string, unitId = ""): v
 
 export function openUnitPms(siteId: string, region: string, unitType: string, unitId = ""): void {
   closeSiteUnitsOverlay();
-  if (isManager()) {
-    runtime.reportsViewMode = "pms-records";
-    $("pmsRecordsTab")?.click();
-    setTimeout(() => {
-      if ($("pmsRecordsSite")) { setVal("pmsRecordsSite", siteId); renderPmsRecords(); }
-    }, 80);
-    go("reports");
-    return;
-  }
   state.reportType = "checklist";
   runtime.reportsViewMode = "checklist";
   document.querySelectorAll<HTMLElement>("#reportTypeTabs .tab").forEach(x => x.classList.toggle("active", x.dataset.reportType === "checklist"));
@@ -3463,7 +3618,11 @@ export async function saveUnit(): Promise<void> {
   };
   let error: any = null;
   if (runtime.editingUnitId) {
-    ({ error } = await runtime.client.from("site_units").update(payload).eq("id", runtime.editingUnitId));
+    const updatePayload = { ...payload, updated_by: state.userId };
+    ({ error } = await runtime.client.from("site_units").update(updatePayload).eq("id", runtime.editingUnitId));
+    if (error && /updated_by|updated_at|42703|schema cache/i.test(String(error.message || ""))) {
+      ({ error } = await runtime.client.from("site_units").update(payload).eq("id", runtime.editingUnitId));
+    }
   } else {
     payload.created_by = state.userId;
     ({ error } = await runtime.client.from("site_units").insert(payload));
@@ -3485,33 +3644,73 @@ export async function deleteUnit(unitId: string): Promise<void> {
   if (!(await confirmDialog(`Are you sure you want to delete ${unitLabel}${siteSuffix}? This action cannot be undone.`, "Confirm Delete Unit"))) return;
   const { error } = await runtime.client.from("site_units").delete().eq("id", unitId);
   if (error) { toast("Failed to delete unit: " + error.message); return; }
+  if (String(runtime.selectedUnitId) === String(unitId)) runtime.selectedUnitId = null;
   suppressNotifications();
   await loadUnits();
   toast("Unit deleted");
 }
 
+function getUnitPmsAndReportStats(u: any): { monthPmsCount: number; totalPmsCount: number; reportCount: number } {
+  const monthPrefix = localDateKey(new Date()).slice(0, 7);
+  const uId = String(u.id || "");
+  const uNameLower = String(u.unit_name || "").trim().toLowerCase();
+  const uBroadType = (u.unit_type === "escalator" || u.unit_type === "moving-walkway") ? "escalator" : "elevator";
+  let monthPmsCount = 0;
+  let totalPmsCount = 0;
+  (state.pmsRecords || []).forEach(r => {
+    if (String(r.site_id) !== String(u.site_id)) return;
+    let parsed: any = {};
+    try { parsed = JSON.parse(r.details || "{}"); } catch {}
+    const recUnitId = parsed?.unitId ? String(parsed.unitId) : "";
+    const recUnitName = String(parsed?.unitName || "").trim().toLowerCase();
+    const matchesUnit = recUnitId
+      ? recUnitId === uId
+      : (recUnitName ? recUnitName === uNameLower : String(r.unit_type || "") === uBroadType);
+    if (!matchesUnit) return;
+    totalPmsCount++;
+    if (String(r.checklist_date || "").startsWith(monthPrefix)) monthPmsCount++;
+  });
+  const reportCount = (state.reports || []).filter(r => {
+    if (String(r.site_id) !== String(u.site_id)) return false;
+    const pu = parseReportUnit(r.details);
+    if (pu.unitId) return String(pu.unitId) === uId;
+    return Boolean(uNameLower) && String(pu.unitName || "").trim().toLowerCase() === uNameLower;
+  }).length;
+  return { monthPmsCount, totalPmsCount, reportCount };
+}
+
 function renderUnitCardRow(u: any, site: any, taxOpt?: ReturnType<typeof extractUnitTaxonomy>): string {
-  const canManage = isManager() || String(u.created_by) === String(state.userId);
-  const statusBadge = u.status === "Operational" ? "now" : (u.status === "Needs Repair" || u.status === "Shutdown" ? "" : "soon");
-  const badgeStyle = (u.status === "Needs Repair" || u.status === "Shutdown") ? ' style="background:var(--red);color:#fff;"' : "";
+  const status = u.status || "Operational";
+  const isDanger = status === "Needs Repair" || status === "Shutdown";
+  const statusBadge = status === "Operational" ? "now" : (isDanger ? "" : "soon");
+  const badgeStyle = isDanger ? ' style="background:var(--red);color:#fff;"' : "";
   const tax = taxOpt || extractUnitTaxonomy(u);
   const dirBadge = tax.direction === "UP"
     ? '<span class="badge" style="background:rgba(16,185,129,.18);color:#10b981;font-weight:700;">⬆️ UP</span>'
     : (tax.direction === "DOWN"
         ? '<span class="badge" style="background:rgba(245,166,35,.18);color:#f59e0b;font-weight:700;">⬇️ DOWN</span>'
         : '<span class="badge">🛗 ELEVATOR</span>');
+  const stats = getUnitPmsAndReportStats(u);
+  const pmsBadge = stats.monthPmsCount > 0
+    ? '<span class="badge" style="background:rgba(16,185,129,.16);color:#10b981;">✅ PMS Done</span>'
+    : '<span class="badge" style="background:rgba(245,158,11,.15);color:#f59e0b;">⏳ PMS Due</span>';
   const specs = [u.unit_type, u.brand_model, u.serial_no ? "S/N: " + u.serial_no : "", tax.floorLabel].filter(Boolean).join(" · ");
-  return '<div class="item" style="margin-top:6px;">' +
-    '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">' +
-    '<div><b>🛗 ' + esc(u.unit_name) + '</b> ' + dirBadge + ' <span class="sess-badge ' + statusBadge + '"' + badgeStyle + ">" + esc(u.status || "Operational") + "</span></div>" +
-    '<span class="muted" style="font-size:12px;">📍 ' + esc(site.name + (site.city ? " · " + site.city : "")) + "</span></div>" +
-    '<div class="muted">' + esc(specs) + "</div>" +
-    (tax.cleanNotes ? '<div style="margin-top:4px;font-size:12px;">' + esc(tax.cleanNotes) + "</div>" : "") +
-    '<div class="inline-actions">' +
-    '<button class="btn small-btn" type="button" onclick="openUnitManual(\'' + esc(u.id) + '\')">📖 Manual</button>' +
-    '<button class="gray small-btn" type="button" onclick="openUnitPms(\'' + esc(site.id) + "','" + esc(site.region) + "','" + esc(u.unit_type) + "','" + esc(u.id) + '\')">✅ PMS</button>' +
-    '<button class="gray small-btn" type="button" onclick="openUnitReport(\'' + esc(site.id) + "','" + esc(u.unit_name) + "','" + esc(u.id) + '\')">📄 Report</button>' +
-    (canManage ? '<button class="gray small-btn" type="button" onclick="editUnit(\'' + esc(u.id) + '\')">Edit</button><button class="red small-btn" type="button" onclick="deleteUnit(\'' + esc(u.id) + '\')">Delete</button>' : "") +
+  const isSelected = String(runtime.selectedUnitId) === String(u.id);
+  const selectedStyle = isSelected
+    ? "margin-top:6px;border:1.5px solid var(--cyan);background:rgba(56,189,248,.10);"
+    : "margin-top:6px;";
+  return '<div class="item clickable" style="' + selectedStyle + '" onclick="selectUnitForActions(\'' + esc(u.id) + '\')" role="button" tabindex="0">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
+      '<div style="min-width:0;flex:1;">' +
+        '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
+          '<b>🛗 ' + esc(u.unit_name) + '</b> ' + dirBadge +
+          ' <span class="sess-badge ' + statusBadge + '"' + badgeStyle + ">" + esc(status) + "</span> " +
+          pmsBadge +
+        "</div>" +
+        '<div class="muted" style="margin-top:3px;">' + esc(specs || site.name) + (stats.reportCount ? ` · 📄 ${stats.reportCount} report(s)` : "") + "</div>" +
+        (tax.cleanNotes ? '<div style="margin-top:3px;font-size:12px;">' + esc(tax.cleanNotes) + "</div>" : "") +
+      "</div>" +
+      '<span class="badge" style="flex-shrink:0;font-weight:700;">Actions ›</span>' +
     "</div></div>";
 }
 
@@ -3585,7 +3784,63 @@ function syncUnitsTaxonomyFilterOptions(regionSites: any[]): void {
   }
 }
 
+function renderUnitsHealthBar(): void {
+  const bar = $("unitsHealthBar");
+  if (!bar) return;
+  const total = state.units.length;
+  const operational = state.units.filter(u => (u.status || "Operational") === "Operational").length;
+  const maintenance = state.units.filter(u => u.status === "Under Maintenance").length;
+  const attention = state.units.filter(u => u.status === "Needs Repair" || u.status === "Shutdown").length;
+  const monthPrefix = localDateKey(new Date()).slice(0, 7);
+  const pmsSitesThisMonth = new Set(
+    (state.pmsRecords || [])
+      .filter(r => String(r.checklist_date || "").startsWith(monthPrefix))
+      .map(r => String(r.site_id))
+  ).size;
+
+  bar.innerHTML =
+    `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between;">` +
+      `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">` +
+        `<span class="badge" style="margin-left:0;">🛗 ${total} Total Units</span>` +
+        `<span class="badge" style="margin-left:0;background:rgba(16,185,129,.18);color:#10b981;">🟢 ${operational} Operational</span>` +
+        (maintenance ? `<span class="badge" style="margin-left:0;background:rgba(245,166,35,.18);color:#f59e0b;">🔧 ${maintenance} Maintenance</span>` : "") +
+        `<span class="badge clickable" style="margin-left:0;${attention ? "background:rgba(239,68,68,.2);color:#ef4444;font-weight:700;" : ""}" onclick="openTroubleUnitsFilter()">🚨 ${attention} Needs Repair / Shutdown</span>` +
+        `<span class="badge" style="margin-left:0;background:rgba(56,189,248,.16);color:#38bdf8;">✅ ${pmsSitesThisMonth} Site(s) PMS Done This Month</span>` +
+      `</div>` +
+      `<span class="muted" style="font-size:11.5px;">Tap a Site → select a Unit → Manual, ✅ PMS, 📄 Report, Edit, Delete</span>` +
+    `</div>`;
+}
+
+export function openPmsQuickShortcut(): void {
+  go("reports");
+  setTimeout(() => {
+    const tab = document.querySelector<HTMLElement>('#reportTypeTabs [data-report-type="checklist"]');
+    tab?.click();
+  }, 50);
+}
+
+export function openTroubleUnitsFilter(): void {
+  runtime.unitsRegion = "ALL";
+  runtime.unitsLocationFilter = "ALL";
+  runtime.unitsSideFilter = "ALL";
+  runtime.unitsFloorFilter = "ALL";
+  runtime.unitsDirFilter = "ALL";
+  runtime.unitsShowAllInline = true;
+  document.querySelectorAll<HTMLElement>("[data-units-region]").forEach(b =>
+    b.classList.toggle("active", b.dataset.unitsRegion === "ALL")
+  );
+  go("units");
+  const attentionUnits = state.units.filter(u => u.status === "Needs Repair" || u.status === "Shutdown");
+  if (!attentionUnits.length) {
+    toast("All registered units are currently Operational or in scheduled Maintenance.");
+  } else {
+    toast(`Found ${attentionUnits.length} unit(s) needing repair or shutdown attention`);
+    setTimeout(() => selectUnitForActions(String(attentionUnits[0].id)), 120);
+  }
+}
+
 export function renderUnits(): void {
+  renderUnitsHealthBar();
   const box = $("unitsList");
   if (!box) return;
 
@@ -3649,7 +3904,7 @@ export function renderUnits(): void {
           '<h2 style="margin:0 0 4px;font-size:16px;">▸ ' + esc(site.name) +
           ' <span class="badge">' + esc(countsLine) + "</span></h2>" +
           '<div class="muted">📍 ' + esc(loc) + ' · ' + siteReportsCount + ' report(s) · ' + sitePmsCount + ' PMS</div>' +
-          '<div class="muted" style="font-size:11px;margin-top:2px;">Tap site to open popup · Organized by Side → Floor → UP / DOWN</div>' +
+          '<div class="muted" style="font-size:11px;margin-top:2px;">Tap site to list units → select a unit for Manual, PMS, Report, Edit, Delete</div>' +
           "</div>" +
           '<button class="gray small-btn" type="button" onclick="openSiteOnMap(\'' + esc(site.id) + '\')">📍 Map</button>' +
           "</div>" +
@@ -7161,10 +7416,26 @@ function computeNightDiffMinutes(timeIn: string, timeOut: string): number {
   return total;
 }
 
-function applyPayPeriodPreset(preset: string): void {
+function getPayrollTargetYearMonth(): { y: number; m: number } {
+  const picked = val("payMonthPicker").trim();
+  const match = picked.match(/^(\d{4})-(\d{2})$/);
+  if (match) return { y: Number(match[1]), m: Number(match[2]) };
   const now = new Date();
-  const y = now.getFullYear();
-  const m = now.getMonth() + 1;
+  return { y: now.getFullYear(), m: now.getMonth() + 1 };
+}
+
+function updatePayQuickCycleButtons(start: string, end: string, preset?: string): void {
+  const win = resolvePayrollDtrWindow(start, end, preset);
+  const b15 = $("payQuick15Btn");
+  const b30 = $("payQuick30Btn");
+  const is15 = win.payoutLabel.startsWith("15th");
+  const is30 = win.payoutLabel.startsWith("30th");
+  if (b15) b15.className = is15 ? "btn small-btn" : "gray small-btn";
+  if (b30) b30.className = is30 ? "btn small-btn" : "gray small-btn";
+}
+
+function applyPayPeriodPreset(preset: string): void {
+  const { y, m } = getPayrollTargetYearMonth();
   const pad = (x: number) => String(x).padStart(2, "0");
   const lastDay = (yr: number, mo: number) => new Date(yr, mo, 0).getDate();
 
@@ -7178,17 +7449,35 @@ function applyPayPeriodPreset(preset: string): void {
     setVal("payStartDate", `${y}-${pad(m)}-11`);
     setVal("payEndDate", `${y}-${pad(m)}-25`);
   } else if (preset === "dtr-26-10") {
-    const p = getDtrCutoffForDate(localDateKey(now));
-    if (p.cycleType === "26-10") {
-      setVal("payStartDate", p.startDate);
-      setVal("payEndDate", p.endDate);
-    } else {
-      const prevMo = m === 1 ? 12 : m - 1;
-      const prevYr = m === 1 ? y - 1 : y;
-      setVal("payStartDate", `${prevYr}-${pad(prevMo)}-26`);
-      setVal("payEndDate", `${y}-${pad(m)}-10`);
-    }
+    const prevMo = m === 1 ? 12 : m - 1;
+    const prevYr = m === 1 ? y - 1 : y;
+    setVal("payStartDate", `${prevYr}-${pad(prevMo)}-26`);
+    setVal("payEndDate", `${y}-${pad(m)}-10`);
   }
+}
+
+export function syncPayrollMonthQuickPicker(): void {
+  let preset = val("payPeriodPreset");
+  if (!preset || preset === "custom") {
+    const s = val("payStartDate");
+    const e = val("payEndDate");
+    const w = resolvePayrollDtrWindow(s, e);
+    preset = w.payoutLabel.startsWith("15th") ? "1-15" : "16-end";
+    setVal("payPeriodPreset", preset);
+  }
+  applyPayPeriodPreset(preset);
+  syncPayrollFromDtr(false);
+}
+
+export function selectPayrollQuickCycle(cycle: "15th" | "30th"): void {
+  if (!val("payMonthPicker")) {
+    const now = new Date();
+    setVal("payMonthPicker", `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
+  }
+  const preset = cycle === "15th" ? "1-15" : "16-end";
+  setVal("payPeriodPreset", preset);
+  applyPayPeriodPreset(preset);
+  syncPayrollFromDtr(true);
 }
 
 export function openPayrollPage(): void {
@@ -7215,6 +7504,14 @@ export function renderPayroll(): void {
     empSel.disabled = !isManager();
   }
 
+  if (!val("payMonthPicker")) {
+    const endDate = val("payEndDate");
+    const ym = /^\d{4}-\d{2}/.test(endDate)
+      ? endDate.slice(0, 7)
+      : (() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; })();
+    setVal("payMonthPicker", ym);
+  }
+
   if (!val("payStartDate") || !val("payEndDate")) {
     const day = new Date().getDate();
     const preset = day <= 15 ? "1-15" : "16-end";
@@ -7222,6 +7519,7 @@ export function renderPayroll(): void {
     applyPayPeriodPreset(preset);
   }
 
+  updatePayQuickCycleButtons(val("payStartDate"), val("payEndDate"), val("payPeriodPreset"));
   updatePayslipPreview();
   renderSavedPayslipsList();
 }
@@ -7231,53 +7529,70 @@ export function syncPayrollFromDtr(showToast = true): void {
   const start = val("payStartDate");
   const end = val("payEndDate");
   const summaryEl = $("payDtrSummary");
+  const breakdownEl = $("payDtrDailyBreakdown");
   if (!uid || !start || !end) {
     if (showToast) toast("Select employee and pay period dates first.");
     return;
   }
 
-  const win = resolvePayrollDtrWindow(start, end, val("payPeriodPreset"));
+  const preset = val("payPeriodPreset");
+  updatePayQuickCycleButtons(start, end, preset);
+  const win = resolvePayrollDtrWindow(start, end, preset);
   const rows = (state.dtrs || []).filter(d => {
     if (String(d.user_id) !== String(uid)) return false;
     const wd = String(d.work_date || "");
     return wd >= win.dtrStart && wd <= win.dtrEnd;
   });
 
-  const dayBuckets = new Map<string, { firstIn: string | null; lastOut: string | null; mins: number; nsRepair: boolean }>();
+  const dayBuckets = new Map<string, { firstIn: string | null; lastOut: string | null; mins: number; nsRepair: boolean; nightMins: number }>();
   let nightMins = 0;
   rows.forEach(d => {
     const day = String(d.work_date || "");
-    const meta = parseDtrJobMeta(d.job, d.approved_by);
+    const meta = parseDtrJobMeta(d.job, d.approved_by, d.nightshift_repair);
     const ruleOpts = { workDate: day, nightshiftRepair: meta.nightshiftRepair };
     const cappedOut = capDtrTimeOut(d.time_in, d.time_out, ruleOpts);
     const mins = calculateDtrMinutes(d.time_in, cappedOut, null, ruleOpts);
-    const bucket = dayBuckets.get(day) || { firstIn: null, lastOut: null, mins: 0, nsRepair: false };
+    const ndMins = computeNightDiffMinutes(d.time_in, cappedOut);
+    const bucket = dayBuckets.get(day) || { firstIn: null, lastOut: null, mins: 0, nsRepair: false, nightMins: 0 };
     if (!bucket.firstIn && d.time_in) bucket.firstIn = d.time_in;
     if (cappedOut && cappedOut !== d.time_in) bucket.lastOut = cappedOut;
     bucket.mins += mins;
+    bucket.nightMins += ndMins;
     if (meta.nightshiftRepair) bucket.nsRepair = true;
     dayBuckets.set(day, bucket);
-    nightMins += computeNightDiffMinutes(d.time_in, cappedOut);
+    nightMins += ndMins;
   });
 
   const todayStr = localDateKey(new Date());
   let regMins = 0;
   let grossDayOtMins = 0;
   let uncoveredLackingMins = 0;
-  dayBuckets.forEach((b, day) => {
-    const bd = calculateShiftBreakdown(b.firstIn, b.lastOut, b.mins, {
-      workDate: day,
-      nightshiftRepair: b.nsRepair,
-    });
-    regMins += bd.regularMins;
-    grossDayOtMins += bd.finalOtMins;
-    const isClosedDay = Boolean(b.lastOut) || day < todayStr;
-    if (b.mins > 0 && isClosedDay) {
-      uncoveredLackingMins += Math.max(0, bd.standardMins - bd.workedMins);
-    }
-  });
-  const otMins = Math.max(0, grossDayOtMins - uncoveredLackingMins);
+  const dailyBreakdownRows: string[] = [];
 
+  [...dayBuckets.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .forEach(([day, b]) => {
+      const bd = calculateShiftBreakdown(b.firstIn, b.lastOut, b.mins, {
+        workDate: day,
+        nightshiftRepair: b.nsRepair,
+      });
+      regMins += bd.regularMins;
+      grossDayOtMins += bd.finalOtMins;
+      const isClosedDay = Boolean(b.lastOut) || day < todayStr;
+      if (b.mins > 0 && isClosedDay) {
+        uncoveredLackingMins += Math.max(0, bd.standardMins - bd.workedMins);
+      }
+      const inOut = [b.firstIn ? fmtTime12h(b.firstIn) : "—", b.lastOut ? fmtTime12h(b.lastOut) : "On Duty"].join(" – ");
+      const flags = [isSundayDate(day) ? "Sun" : "", b.nsRepair ? "Night/Ops" : ""].filter(Boolean).join(" · ");
+      dailyBreakdownRows.push(
+        `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px dashed rgba(148,163,184,.2);flex-wrap:wrap;">` +
+          `<span><b>${esc(fmtDay(day))}</b>${flags ? ` <small class="muted">(${esc(flags)})</small>` : ""} · ${esc(inOut)}</span>` +
+          `<span>Reg: <b>${round2(bd.regularMins / 60)}h</b> · OT: <b>${round2(bd.finalOtMins / 60)}h</b>${b.nightMins ? ` · ND: <b>${round2(b.nightMins / 60)}h</b>` : ""}</span>` +
+        `</div>`
+      );
+    });
+
+  const otMins = Math.max(0, grossDayOtMins - uncoveredLackingMins);
   const otHrs = round2(otMins / 60);
   const nightHrs = round2(nightMins / 60);
   const regHrs = round2(regMins / 60);
@@ -7307,6 +7622,18 @@ export function syncPayrollFromDtr(showToast = true): void {
     summaryEl.textContent = rows.length
       ? `${cutoffPrefix} · Synced ${rows.length} DTR entry(ies) across ${workedDays} day(s): ${regHrs}h regular, ${otHrs}h final OT${lackingNote}, ${nightHrs}h night diff.`
       : `${cutoffPrefix} · No DTR entries found for ${profileName(uid)} between ${cutoffRange} (you can still enter values manually).`;
+  }
+
+  if (breakdownEl) {
+    if (dailyBreakdownRows.length) {
+      breakdownEl.classList.remove("hidden");
+      breakdownEl.innerHTML =
+        `<div style="font-weight:700;margin-bottom:4px;">📋 DTR Cutoff Breakdown (${esc(fmtPayslipDateDisplay(win.dtrStart))} – ${esc(fmtPayslipDateDisplay(win.dtrEnd))})</div>` +
+        dailyBreakdownRows.join("");
+    } else {
+      breakdownEl.classList.add("hidden");
+      breakdownEl.innerHTML = "";
+    }
   }
 
   updatePayslipPreview();
@@ -7377,14 +7704,15 @@ export function updatePayslipPreview(): void {
     netBadge.textContent = "Net Pay: ₱" + d.net_pay.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
   const periodStr = `${fmtPayslipDateDisplay(d.period_start)} to ${fmtPayslipDateDisplay(d.period_end)}`;
+  const win = resolvePayrollDtrWindow(d.period_start, d.period_end, val("payPeriodPreset"));
   const hasMappedCutoff = Boolean(
     d.dtr_cutoff_start &&
     d.dtr_cutoff_end &&
     (d.dtr_cutoff_start !== d.period_start || d.dtr_cutoff_end !== d.period_end)
   );
-  const dtrLabelCell = hasMappedCutoff ? "DTR Cutoff" : "";
-  const dtrRangeCell = hasMappedCutoff
-    ? `${fmtPayslipDateDisplay(d.dtr_cutoff_start || "")} – ${fmtPayslipDateDisplay(d.dtr_cutoff_end || "")}`
+  const dtrLabelCell = win.payoutLabel || (hasMappedCutoff ? "DTR Cutoff" : "");
+  const dtrRangeCell = (win.mapped || hasMappedCutoff)
+    ? `DTR ${fmtPayslipDateDisplay(d.dtr_cutoff_start || win.dtrStart)} – ${fmtPayslipDateDisplay(d.dtr_cutoff_end || win.dtrEnd)}`
     : "";
 
   box.innerHTML =
@@ -7581,6 +7909,9 @@ export function loadPayslipIntoEditor(id: string): void {
   setVal("payPeriodPreset", "custom");
   setVal("payStartDate", String(rec.period_start || ""));
   setVal("payEndDate", String(rec.period_end || ""));
+  if (/^\d{4}-\d{2}/.test(String(rec.period_end || ""))) {
+    setVal("payMonthPicker", String(rec.period_end).slice(0, 7));
+  }
   setVal("payBasicPay", String(rec.basic_pay ?? 0));
   setVal("payOtHrs", String(rec.overtime_hours ?? 0));
   setVal("payOtAmt", String(rec.overtime_amount ?? 0));
@@ -7595,6 +7926,7 @@ export function loadPayslipIntoEditor(id: string): void {
   setVal("payAbuloy", String(rec.abuloy ?? 0));
   const btn = $("savePayslipBtn");
   if (btn) btn.textContent = "💾 Update Payslip";
+  updatePayQuickCycleButtons(String(rec.period_start || ""), String(rec.period_end || ""), "custom");
   updatePayslipPreview();
   $("payslipPreviewCard")?.scrollIntoView({ behavior: "smooth" });
   toast("Loaded payslip for " + (rec.employee_name || "Employee"));
@@ -7633,8 +7965,8 @@ function renderSavedPayslipsList(): void {
     const dtrStart = r.dtr_cutoff_start || (win.mapped ? win.dtrStart : "");
     const dtrEnd = r.dtr_cutoff_end || (win.mapped ? win.dtrEnd : "");
     const dtrTag = dtrStart && dtrEnd && (dtrStart !== r.period_start || dtrEnd !== r.period_end)
-      ? ` · DTR counted: ${fmtPayslipDateDisplay(dtrStart)} to ${fmtPayslipDateDisplay(dtrEnd)}`
-      : "";
+      ? ` · ${win.payoutLabel || "DTR"}: ${fmtPayslipDateDisplay(dtrStart)} to ${fmtPayslipDateDisplay(dtrEnd)}`
+      : (win.payoutLabel ? ` · ${win.payoutLabel}` : "");
     const canDelete = isManager() || String(r.user_id) === String(state.userId);
     return (
       `<div class="item">` +
@@ -8498,6 +8830,9 @@ export function initFeatureWiring(): void {
   });
   $("siteUnitsOverlay")?.addEventListener("click", ev => {
     if (ev.target === $("siteUnitsOverlay")) closeSiteUnitsOverlay();
+  });
+  $("unitActionOverlay")?.addEventListener("click", ev => {
+    if (ev.target === $("unitActionOverlay")) closeUnitActionOverlay();
   });
   $("siteMapOverlay")?.addEventListener("click", ev => {
     if (ev.target === $("siteMapOverlay")) closeSiteMapOverlay();

@@ -208,6 +208,12 @@ export const runtime = {
   locationWatchId: null as number | null,
   lastWeatherLat: 14.5995,
   lastWeatherLon: 120.9842,
+  hasLiveGpsLock: false,
+  lastWeatherPlace: "" as string,
+  lastWeatherAcc: 0,
+  lastWeatherUpdatedAt: 0,
+  selectedUnitId: null as string | null,
+  siteUnitsSearch: "" as string,
   liveMapFilter: "all",
   isOnlineVerified: navigator.onLine,
   dtrTimeLogsTableMissing: false,
@@ -284,6 +290,7 @@ export const hooks: Record<string, (...args: any[]) => any> = {
   updateAccess: () => {},
   updateAnnouncementTicker: () => {},
   isUserMentionedInSchedule: (() => false) as (s: any) => boolean,
+  getCachedGps: (() => null) as () => { lat: number; lng: number; acc: number } | null,
   signOut: async () => {},
   showAuth: () => {},
   startLive: () => {},
@@ -1631,7 +1638,7 @@ export function resolvePayrollDtrWindow(
   periodStart: string,
   periodEnd: string,
   preset?: string
-): { dtrStart: string; dtrEnd: string; ruleLabel: string; mapped: boolean } {
+): { dtrStart: string; dtrEnd: string; ruleLabel: string; payoutLabel: string; mapped: boolean } {
   const sMatch = String(periodStart || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
   const eMatch = String(periodEnd || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
   const pad = (x: number) => String(x).padStart(2, "0");
@@ -1645,24 +1652,48 @@ export function resolvePayrollDtrWindow(
     const ed = Number(eMatch[3]);
     const sameMonth = sy === ey && sm === em;
 
-    // Rule 1: Pay period 1 to 15 counts DTR from 26 of previous month to 10 of current month
+    // Rule 1A: Pay period 1 to 15 (15th Payout) counts DTR from 26 of previous month to 10 of current month
     if ((sameMonth && sd === 1 && ed === 15) || (preset === "1-15" && sd === 1 && ed === 15)) {
       const prevMo = sm === 1 ? 12 : sm - 1;
       const prevYr = sm === 1 ? sy - 1 : sy;
       return {
         dtrStart: `${prevYr}-${pad(prevMo)}-26`,
         dtrEnd: `${sy}-${pad(sm)}-10`,
-        ruleLabel: "1–15 Pay Period → DTR 26–10",
+        ruleLabel: "For 15th Payout (DTR 26–10)",
+        payoutLabel: "15th Payout · DTR 26–10",
         mapped: true,
       };
     }
 
-    // Rule 2: Pay period 16 to 30/end counts DTR from 11 to 25 of current month
+    // Rule 1B: Direct DTR 26 to 10 counts toward the 15th Payout
+    if ((sd === 26 && ed === 10) || preset === "dtr-26-10") {
+      return {
+        dtrStart: periodStart,
+        dtrEnd: periodEnd,
+        ruleLabel: "DTR 26–10 → For 15th Payout",
+        payoutLabel: "15th Payout · DTR 26–10",
+        mapped: true,
+      };
+    }
+
+    // Rule 2A: Pay period 16 to 30/end (30th Payout) counts DTR from 11 to 25 of current month
     if ((sameMonth && sd === 16 && ed >= 28 && ed <= 31) || (preset === "16-end" && sd === 16 && ed >= 28)) {
       return {
         dtrStart: `${sy}-${pad(sm)}-11`,
         dtrEnd: `${sy}-${pad(sm)}-25`,
-        ruleLabel: "16–30 Pay Period → DTR 11–25",
+        ruleLabel: "For 30th Payout (DTR 11–25)",
+        payoutLabel: "30th Payout · DTR 11–25",
+        mapped: true,
+      };
+    }
+
+    // Rule 2B: Direct DTR 11 to 25 counts toward the 30th Payout
+    if ((sameMonth && sd === 11 && ed === 25) || preset === "dtr-11-25") {
+      return {
+        dtrStart: periodStart,
+        dtrEnd: periodEnd,
+        ruleLabel: "DTR 11–25 → For 30th Payout",
+        payoutLabel: "30th Payout · DTR 11–25",
         mapped: true,
       };
     }
@@ -1672,6 +1703,7 @@ export function resolvePayrollDtrWindow(
     dtrStart: periodStart,
     dtrEnd: periodEnd,
     ruleLabel: "Selected date range",
+    payoutLabel: "",
     mapped: false,
   };
 }

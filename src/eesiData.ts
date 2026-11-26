@@ -1490,8 +1490,13 @@ function recordLocalPosition(pos: GeolocationPosition): void {
   lastKnownCoords = { lat, lng, acc, updatedAt: now };
 
   setGpsUiStatus("🟢 Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Auto-refresh 5s");
-  if (Math.abs(lat - runtime.lastWeatherLat) > 0.02 || Math.abs(lng - runtime.lastWeatherLon) > 0.02) {
-    updateLiveWeather(lat, lng);
+  const movedForWeather =
+    !runtime.hasLiveGpsLock ||
+    Math.abs(lat - runtime.lastWeatherLat) > 0.004 ||
+    Math.abs(lng - runtime.lastWeatherLon) > 0.004 ||
+    Date.now() - (runtime.lastWeatherUpdatedAt || 0) > 300000;
+  if (movedForWeather) {
+    void updateLiveWeather(lat, lng, { fromGps: true, accuracy: acc });
   }
   hooks.evaluateDailySiteGeofence?.();
 }
