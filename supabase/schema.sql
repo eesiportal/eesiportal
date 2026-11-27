@@ -1391,5 +1391,17 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS idx_dtr_time_logs_mode_created ON public.dtr_time_logs (mode, created_at DESC);
 
+/* 14. FAST SEPARATED TIME PHOTOS (BY EMPLOYEE) & 24H TIMELINE INDEXES */
+CREATE INDEX IF NOT EXISTS idx_dtr_time_logs_pic_emp_mode_created
+  ON public.dtr_time_logs (user_id, mode, created_at DESC)
+  WHERE image_url IS NOT NULL AND image_url <> '';
+
+CREATE INDEX IF NOT EXISTS idx_dtr_time_logs_pic_date_mode
+  ON public.dtr_time_logs (work_date DESC, mode, created_at DESC)
+  WHERE image_url IS NOT NULL AND image_url <> '';
+
+CREATE INDEX IF NOT EXISTS idx_schedules_created_at_desc ON public.schedules (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reports_created_at_desc ON public.service_delivery_reports (created_at DESC);
+
 NOTIFY pgrst, 'reload schema';
 

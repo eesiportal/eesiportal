@@ -189,7 +189,6 @@ export function go(p: string, opts: { skipScrollReset?: boolean } = {}): void {
   if (!pageEl) { toast("Page not found"); return; }
   document.querySelectorAll(".page").forEach(el => el.classList.add("hidden"));
   pageEl.classList.remove("hidden");
-  applyRandomOpenStyle(pageEl);
   triggerAndroidHapticTap();
   runtime.currentPage = p;
   $("settingsMenu")?.classList.add("hidden");
@@ -212,7 +211,8 @@ export function go(p: string, opts: { skipScrollReset?: boolean } = {}): void {
   else if (p === "live-map") { setTimeout(() => { hooks.renderLiveOnlineMembers?.(); loadLiveMap({ fit: true }); }, 40); }
   else if (p === "profile") renderProfile();
   else if (p === "admin") renderAdmin();
-  if (!opts.skipScrollReset) window.scrollTo(0, 0);
+  if (!opts.skipScrollReset) window.scrollTo({ top: 0, behavior: "auto" });
+  requestAnimationFrame(() => applyRandomOpenStyle(pageEl));
   saveLastView(opts.skipScrollReset ? undefined : 0);
 }
 
@@ -888,6 +888,8 @@ function isScheduleWithinTimelineDuration(s: any, nowMs: number, todayStr: strin
 
 let lastGeofenceAlertKey = "";
 let lastGeofenceAlertAt = 0;
+let lastGeofenceEvalSig = "";
+let geofenceInFlight = false;
 
 export async function evaluateDailySiteGeofence(): Promise<void> {
   const alertEl = $("homeGeofenceAlert");
@@ -900,6 +902,7 @@ export async function evaluateDailySiteGeofence(): Promise<void> {
     }
   };
   if (!state.userId) {
+    lastGeofenceEvalSig = "";
     hideGeofence();
     return;
   }
@@ -907,14 +910,27 @@ export async function evaluateDailySiteGeofence(): Promise<void> {
   const sched = findScheduledWorkForUser(todayStr);
   const userCoords = getCachedUserGpsCoords();
   if (!sched || !sched.siteName || !userCoords) {
+    lastGeofenceEvalSig = "";
     hideGeofence();
     return;
   }
-  const siteCoords = await resolveSiteCoordinatesByName(sched.siteName);
+  const evalSig = `${todayStr}|${sched.siteName}|${userCoords.lat.toFixed(4)},${userCoords.lng.toFixed(4)}|${Math.round(userCoords.acc || 0)}`;
+  if (evalSig === lastGeofenceEvalSig && alertEl.dataset.lastSig) {
+    return;
+  }
+  if (geofenceInFlight) return;
+  geofenceInFlight = true;
+  let siteCoords: { lat: number; lng: number; name: string } | null = null;
+  try {
+    siteCoords = await resolveSiteCoordinatesByName(sched.siteName);
+  } finally {
+    geofenceInFlight = false;
+  }
   if (!siteCoords) {
     hideGeofence();
     return;
   }
+  lastGeofenceEvalSig = evalSig;
   const rawMeters = haversineMeters(userCoords.lat, userCoords.lng, siteCoords.lat, siteCoords.lng);
   const accMargin = Math.min(Math.max(0, userCoords.acc || 0), 200);
   const effectiveMeters = Math.max(0, rawMeters - accMargin);
@@ -1126,6 +1142,7 @@ export function renderHome(): void {
   setTxt("welcome", state.profile?.full_name || state.email || "");
   setTxt("roleLabel", roleLabel(state.role));
   updateAnnouncementTicker();
+  if (runtime.currentPage !== "home") return;
   renderHomeDtrStatus();
   renderHomeTodayShift();
   renderHomeShareFeed();
@@ -1304,10 +1321,16 @@ export function setNoticesFilter(f: "all" | "unread" | "mentions"): void {
 }
 
 export function renderNotices(): void {
-  const box = $("noticeList");
-  if (!box) return;
   const allItems = getNoticeItems();
   const unreadCount = allItems.filter(i => !i.isRead).length;
+  const bell = $("bell");
+  const nextBell = unreadCount ? String(unreadCount) : "";
+  if (bell && bell.textContent !== nextBell) {
+    bell.textContent = nextBell;
+  }
+  if (runtime.currentPage !== "notices") return;
+  const box = $("noticeList");
+  if (!box) return;
   const filter = runtime.noticesFilter || "all";
   document.querySelectorAll<HTMLElement>("#noticeFilterTabs .tab").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.noticeFilter === filter);
@@ -1350,11 +1373,6 @@ export function renderNotices(): void {
   if (box.dataset.lastHtml !== nextHtml) {
     box.dataset.lastHtml = nextHtml;
     box.innerHTML = nextHtml;
-  }
-  const bell = $("bell");
-  const nextBell = unreadCount ? String(unreadCount) : "";
-  if (bell && bell.textContent !== nextBell) {
-    bell.textContent = nextBell;
   }
 }
 
@@ -5010,41 +5028,46 @@ export function renderTimeLog(): void {
   const logs = [...(state.dtrTimeLogs || [])].sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   );
+  let nextHtml = "";
   if (!logs.length) {
-    box.innerHTML =
+    nextHtml =
       '<div class="item" style="text-align:center;">' +
       "<b>📸 Shared Time In / Out Feed</b>" +
       '<div class="muted" style="margin-top:4px;">Select <b>Time In</b> or <b>Time Out</b> above, then capture or upload a timestamped photo. All members can see every uploaded photo &amp; AI reading, receive notifications, and uploaded entries can be deleted anytime.</div></div>';
-    return;
+  } else {
+    nextHtml = logs.map((m: any) => {
+      const mine = String(m.user_id) === String(state.userId);
+      const canDelete = mine || isManager();
+      const isOut = m.mode === "time_out";
+      const modeLabel = isOut ? "🔴 Time Out" : "🟢 Time In";
+      const who = m.sender_name || profileName(m.user_id);
+      const metaBadges = [
+        modeLabel,
+        m.work_date ? "📅 " + fmtDay(m.work_date) : "",
+        m.time_12 || m.time_24 ? "⏰ " + (m.time_12 || m.time_24) : "",
+        m.location ? "📍 " + m.location : "",
+        m.unit ? "🛗 " + m.unit : "",
+      ].filter(Boolean);
+      const safeImg = m.localPreviewUrl ? String(m.localPreviewUrl) : safeUrl(m.image_url);
+      return '<div class="msgr-row ' + (mine ? "mine" : "") + '" style="margin-bottom:10px;">' +
+        '<div class="msgr-bub" style="max-width:92%;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;">' +
+        '<span style="font-weight:700;font-size:12px;">' + esc(who) + "</span>" +
+        (canDelete && !m.isOptimistic ? '<button class="red small-btn" type="button" onclick="deleteTimeLog(\'' + esc(m.id) + '\')">🗑 Delete</button>' : "") +
+        "</div>" +
+        (safeImg ? '<img class="chat-img" loading="lazy" decoding="async" style="margin-top:0;margin-bottom:6px;max-height:220px;object-fit:cover;cursor:pointer;" src="' + esc(safeImg) + '" alt="' + esc(modeLabel) + ' photo"' + (!m.isOptimistic ? ' data-preview-url="' + esc(safeImg) + '" data-preview-label="' + esc(who + " — " + modeLabel) + '"' + (canDelete ? ' data-preview-delete-id="' + esc(m.id) + '"' : "") : "") + ">" : "") +
+        (m.note ? '<div style="white-space:pre-wrap;margin-bottom:4px;">' + esc(m.note) + "</div>" : "") +
+        (m.ai_summary ? '<div style="white-space:pre-wrap;font-size:12px;opacity:.95;">🤖 AI Reading: ' + esc(m.ai_summary) + "</div>" : "") +
+        (metaBadges.length ? '<div style="margin-top:6px;font-size:12px;opacity:.92;">' + metaBadges.map(b => '<span class="badge" style="margin:2px 4px 0 0;">' + esc(b) + "</span>").join("") + "</div>" : "") +
+        '<span class="msgr-time">' + esc(fmtDate(m.created_at)) + (m.isOptimistic ? " · ⚡ Sending…" : (m.dtr_entry_id ? " · ✅ Filled into DTR" : "")) + "</span>" +
+        "</div></div>";
+    }).join("");
   }
-  box.innerHTML = logs.map((m: any) => {
-    const mine = String(m.user_id) === String(state.userId);
-    const canDelete = mine || isManager();
-    const isOut = m.mode === "time_out";
-    const modeLabel = isOut ? "🔴 Time Out" : "🟢 Time In";
-    const who = m.sender_name || profileName(m.user_id);
-    const metaBadges = [
-      modeLabel,
-      m.work_date ? "📅 " + fmtDay(m.work_date) : "",
-      m.time_12 || m.time_24 ? "⏰ " + (m.time_12 || m.time_24) : "",
-      m.location ? "📍 " + m.location : "",
-      m.unit ? "🛗 " + m.unit : "",
-    ].filter(Boolean);
-    const safeImg = m.localPreviewUrl ? String(m.localPreviewUrl) : safeUrl(m.image_url);
-    return '<div class="msgr-row ' + (mine ? "mine" : "") + '" style="margin-bottom:10px;">' +
-      '<div class="msgr-bub" style="max-width:92%;">' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;">' +
-      '<span style="font-weight:700;font-size:12px;">' + esc(who) + "</span>" +
-      (canDelete && !m.isOptimistic ? '<button class="red small-btn" type="button" onclick="deleteTimeLog(\'' + esc(m.id) + '\')">🗑 Delete</button>' : "") +
-      "</div>" +
-      (safeImg ? '<img class="chat-img" style="margin-top:0;margin-bottom:6px;max-height:220px;object-fit:cover;cursor:pointer;" src="' + esc(safeImg) + '" alt="' + esc(modeLabel) + ' photo"' + (!m.isOptimistic ? ' data-preview-url="' + esc(safeImg) + '" data-preview-label="' + esc(who + " — " + modeLabel) + '"' + (canDelete ? ' data-preview-delete-id="' + esc(m.id) + '"' : "") : "") + ">" : "") +
-      (m.note ? '<div style="white-space:pre-wrap;margin-bottom:4px;">' + esc(m.note) + "</div>" : "") +
-      (m.ai_summary ? '<div style="white-space:pre-wrap;font-size:12px;opacity:.95;">🤖 AI Reading: ' + esc(m.ai_summary) + "</div>" : "") +
-      (metaBadges.length ? '<div style="margin-top:6px;font-size:12px;opacity:.92;">' + metaBadges.map(b => '<span class="badge" style="margin:2px 4px 0 0;">' + esc(b) + "</span>").join("") + "</div>" : "") +
-      '<span class="msgr-time">' + esc(fmtDate(m.created_at)) + (m.isOptimistic ? " · ⚡ Sending…" : (m.dtr_entry_id ? " · ✅ Filled into DTR" : "")) + "</span>" +
-      "</div></div>";
-  }).join("");
-  box.scrollTop = box.scrollHeight;
+  if (box.dataset.lastHtml !== nextHtml) {
+    box.dataset.lastHtml = nextHtml;
+    box.innerHTML = nextHtml;
+    box.scrollTop = box.scrollHeight;
+  }
 }
 
 export function setTimePicsView(view: "separated" | "time_in" | "time_out"): void {
@@ -5073,11 +5096,12 @@ function renderTimePicsRepAccessBox(): void {
   box.classList.remove("hidden");
   const reps = (state.profiles || []).filter(p => state.roles[String(p.user_id)]?.app_role === "representative");
   const allowed = runtime.allowedTimePhotoRepIds || [];
-  const allActive = allowed.length === 0;
+  const adminOnly = allowed.includes("__none__");
+  const allActive = !adminOnly && allowed.length === 0;
   const chipsHtml = reps.length
     ? reps.map(r => {
         const uid = String(r.user_id);
-        const checked = !allActive && allowed.includes(uid);
+        const checked = !allActive && !adminOnly && allowed.includes(uid);
         return (
           '<label class="time-pics-rep-chip">' +
           '<input type="checkbox"' + (checked ? " checked" : "") + ' onchange="toggleTimePhotoRepAccess(\'' + esc(uid) + '\')">' +
@@ -5090,22 +5114,28 @@ function renderTimePicsRepAccessBox(): void {
   box.innerHTML =
     '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">' +
     '<div style="font-size:12.5px;font-weight:700;">🛡️ Select Representative(s) Allowed to View Time Photos</div>' +
-    '<button type="button" class="' + (allActive ? "btn" : "gray") + ' small-btn" onclick="toggleTimePhotoRepAccess(\'__all__\')">' + (allActive ? "✅ All Representatives" : "Reset to All Reps") + "</button>" +
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+    '<button type="button" class="' + (allActive ? "btn" : "gray") + ' small-btn" onclick="toggleTimePhotoRepAccess(\'__all__\')">' + (allActive ? "✅ All Reps" : "All Reps") + "</button>" +
+    '<button type="button" class="' + (adminOnly ? "btn" : "gray") + ' small-btn" onclick="toggleTimePhotoRepAccess(\'__none__\')">' + (adminOnly ? "🔒 Admin Only" : "Admin Only") + "</button>" +
     "</div>" +
-    '<div class="muted" style="font-size:11.5px;margin-top:3px;">Administrator always sees this tab. Pick specific Representative(s) below or keep All Representatives enabled.</div>' +
+    "</div>" +
+    '<div class="muted" style="font-size:11.5px;margin-top:3px;">Administrator always sees this tab. Check specific Representative(s), keep All Reps enabled, or lock to Admin Only.</div>' +
     '<div class="time-pics-rep-picker">' + chipsHtml + "</div>";
 }
 
 export async function toggleTimePhotoRepAccess(repUid: string): Promise<void> {
   if (!isAdmin()) { toast("Administrator only."); return; }
-  const current = [...(runtime.allowedTimePhotoRepIds || [])];
+  const current = (runtime.allowedTimePhotoRepIds || []).filter(id => id !== "__none__");
   let nextIds: string[] = [];
   if (repUid === "__all__") {
     nextIds = [];
+  } else if (repUid === "__none__") {
+    nextIds = ["__none__"];
   } else {
     const uid = String(repUid);
     if (current.includes(uid)) {
       nextIds = current.filter(id => id !== uid);
+      if (!nextIds.length) nextIds = ["__none__"];
     } else {
       nextIds = [...current, uid];
     }
@@ -5146,7 +5176,12 @@ export async function toggleTimePhotoRepAccess(repUid: string): Promise<void> {
         is_read: true,
       });
     }
-    toast(nextIds.length ? `Updated access (${nextIds.length} selected representative)` : "Enabled for all Representatives");
+    const statusTxt = nextIds.includes("__none__")
+      ? "Locked Time Photos to Administrator only"
+      : nextIds.length
+        ? `Updated access (${nextIds.length} selected representative)`
+        : "Enabled for all Representatives";
+    toast(statusTxt);
   } catch (err: any) {
     toast("Could not sync representative access: " + (err?.message || err));
   }
@@ -5173,8 +5208,12 @@ export function renderTimePicsGallery(): void {
       if (uid && !empMap.has(uid)) empMap.set(uid, l.sender_name || profileName(uid));
     });
     const sortedEmps = [...empMap.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-    empSel.innerHTML = '<option value="all">All employees</option>' +
+    const optsHtml = '<option value="all">All employees</option>' +
       sortedEmps.map(([uid, name]) => '<option value="' + esc(uid) + '">' + esc(name) + "</option>").join("");
+    if (empSel.dataset.lastHtml !== optsHtml) {
+      empSel.dataset.lastHtml = optsHtml;
+      empSel.innerHTML = optsHtml;
+    }
     if (curEmp === "all" || empMap.has(curEmp)) empSel.value = curEmp;
     else empSel.value = "all";
     runtime.timePicsEmployeeFilter = empSel.value;
@@ -5196,26 +5235,64 @@ export function renderTimePicsGallery(): void {
     })
     .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
 
-  const timeInPics = photoLogs.filter((l: any) => l.mode !== "time_out");
-  const timeOutPics = photoLogs.filter((l: any) => l.mode === "time_out");
+  const viewMode = runtime.timePicsSplitFilter || "separated";
 
-  const renderTileGrid = (items: any[], modeTitle: string, emptyText: string): string => {
-    if (!items.length) return '<p class="muted" style="margin:6px 0 0;font-size:12.5px;">' + esc(emptyText) + "</p>";
+  const empBuckets = new Map<string, { uid: string; name: string; team: string; timeIn: any[]; timeOut: any[] }>();
+  for (const l of photoLogs) {
+    const uid = String(l.user_id || ("name:" + (l.sender_name || "member")));
+    let bucket = empBuckets.get(uid);
+    if (!bucket) {
+      const prof = profileOf(l.user_id);
+      const roleTxt = state.roles[String(l.user_id)]?.app_role ? roleLabel(state.roles[String(l.user_id)].app_role) : "";
+      bucket = {
+        uid,
+        name: prof?.full_name || l.sender_name || profileName(l.user_id),
+        team: [prof?.team, roleTxt].filter(Boolean).join(" · "),
+        timeIn: [],
+        timeOut: [],
+      };
+      empBuckets.set(uid, bucket);
+    }
+    if (l.mode === "time_out") bucket.timeOut.push(l);
+    else bucket.timeIn.push(l);
+  }
+
+  const employeeGroups = [...empBuckets.values()]
+    .filter(g => {
+      if (viewMode === "time_in") return g.timeIn.length > 0;
+      if (viewMode === "time_out") return g.timeOut.length > 0;
+      return g.timeIn.length > 0 || g.timeOut.length > 0;
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const renderPicListRows = (items: any[], modeTitle: string, isOut: boolean, emptyText: string): string => {
+    if (!items.length) {
+      return '<p class="muted" style="margin:4px 0 0;font-size:12px;">' + esc(emptyText) + "</p>";
+    }
     return (
-      '<div class="time-pics-grid">' +
-      items.map((m: any) => {
+      '<div class="time-pics-list">' +
+      items.map((m: any, idx: number) => {
         const imgUrl = m.localPreviewUrl ? String(m.localPreviewUrl) : safeUrl(m.image_url)!;
         const who = m.sender_name || profileName(m.user_id);
-        const first = who.split(/\s+/)[0] || who;
-        const timeStr = m.time_12 || m.time_24 || fmtClockShort(m.created_at);
-        const fullLabel = `${who} — ${modeTitle}${timeStr ? " (" + timeStr + ")" : ""}${m.work_date ? " · " + fmtDay(m.work_date) : ""}`;
+        const timeStr = m.time_12 || m.time_24 || fmtClockShort(m.created_at) || "—";
+        const dateStr = m.work_date ? fmtDay(m.work_date) : fmtDay(String(m.created_at || "").slice(0, 10));
+        const whereStr = [m.location, m.unit].filter(Boolean).join(" · ");
+        const fullLabel = `${who} — ${modeTitle} (${timeStr})${dateStr ? " · " + dateStr : ""}`;
         const canDel = !m.isOptimistic && (String(m.user_id) === String(state.userId) || isManager());
+        const numBadge = '<span class="badge" style="margin-left:0;">#' + (idx + 1) + "</span>";
+        const modeChip = isOut
+          ? '<span style="color:#fca5a5;font-weight:800;">🔴 ' + esc(timeStr) + "</span>"
+          : '<span style="color:#86efac;font-weight:800;">🟢 ' + esc(timeStr) + "</span>";
         return (
-          '<div class="time-pic-tile"' +
+          '<div class="time-pic-row"' +
           (!m.isOptimistic ? ' data-preview-url="' + esc(imgUrl) + '" data-preview-label="' + esc(fullLabel) + '"' + (canDel ? ' data-preview-delete-id="' + esc(m.id) + '"' : "") : "") +
           ">" +
-          '<img src="' + esc(imgUrl) + '" loading="lazy" alt="' + esc(fullLabel) + '">' +
-          '<div class="time-pic-cap">' + esc(first + (timeStr ? " · " + timeStr : "")) + "</div>" +
+          '<img class="time-pic-thumb" src="' + esc(imgUrl) + '" loading="lazy" decoding="async" alt="' + esc(fullLabel) + '">' +
+          '<div class="time-pic-info">' +
+          '<div class="time-pic-title">' + numBadge + " " + modeChip + (m.isOptimistic ? ' <span class="badge">⚡ Syncing</span>' : "") + "</div>" +
+          '<div class="time-pic-sub">📅 ' + esc(dateStr || fmtDate(m.created_at)) + "</div>" +
+          (whereStr ? '<div class="time-pic-sub">📍 ' + esc(whereStr) + "</div>" : "") +
+          "</div>" +
           "</div>"
         );
       }).join("") +
@@ -5223,22 +5300,50 @@ export function renderTimePicsGallery(): void {
     );
   };
 
-  const viewMode = runtime.timePicsSplitFilter || "separated";
-  const inSection =
-    '<div class="time-pics-col in-col">' +
-    '<div class="time-pics-col-head"><b>🟢 Time In Pictures</b><span class="sess-badge now" style="margin:0;">' + timeInPics.length + "</span></div>" +
-    renderTileGrid(timeInPics, "Time In", "No Time In pictures found.") +
-    "</div>";
-  const outSection =
-    '<div class="time-pics-col out-col">' +
-    '<div class="time-pics-col-head"><b>🔴 Time Out Pictures</b><span class="badge" style="margin:0;border-color:rgba(239,68,68,.5);color:#fca5a5;">' + timeOutPics.length + "</span></div>" +
-    renderTileGrid(timeOutPics, "Time Out", "No Time Out pictures found.") +
-    "</div>";
-
   let html = "";
-  if (viewMode === "time_in") html = inSection;
-  else if (viewMode === "time_out") html = outSection;
-  else html = '<div class="time-pics-split">' + inSection + outSection + "</div>";
+  if (!employeeGroups.length) {
+    html = '<p class="muted" style="text-align:center;padding:16px;">No Time In or Time Out pictures match the current filter.</p>';
+  } else {
+    html =
+      '<div class="time-pics-emp-list">' +
+      employeeGroups.map(g => {
+        const inCol =
+          '<div class="time-pics-col in-col">' +
+          '<div class="time-pics-col-head"><b>🟢 Time In Pictures</b><span class="sess-badge now" style="margin:0;">' + g.timeIn.length + "</span></div>" +
+          renderPicListRows(g.timeIn, "Time In", false, "No Time In pictures.") +
+          "</div>";
+        const outCol =
+          '<div class="time-pics-col out-col">' +
+          '<div class="time-pics-col-head"><b>🔴 Time Out Pictures</b><span class="badge" style="margin:0;border-color:rgba(239,68,68,.5);color:#fca5a5;">' + g.timeOut.length + "</span></div>" +
+          renderPicListRows(g.timeOut, "Time Out", true, "No Time Out pictures.") +
+          "</div>";
+        const bodyHtml =
+          viewMode === "time_in"
+            ? inCol
+            : viewMode === "time_out"
+              ? outCol
+              : '<div class="time-pics-split">' + inCol + outCol + "</div>";
+        return (
+          '<div class="time-pics-emp-card">' +
+          '<div class="time-pics-emp-head">' +
+          '<div class="time-pics-emp-who">' +
+          avatarHtml(g.uid, g.name) +
+          '<div style="min-width:0;">' +
+          '<div style="font-weight:800;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(g.name) + "</div>" +
+          (g.team ? '<div class="muted" style="font-size:11.5px;">' + esc(g.team) + "</div>" : "") +
+          "</div>" +
+          "</div>" +
+          '<div class="time-pics-emp-counts">' +
+          (viewMode !== "time_out" ? '<span class="sess-badge now" style="margin:0;">🟢 In: ' + g.timeIn.length + "</span>" : "") +
+          (viewMode !== "time_in" ? '<span class="badge" style="margin:0;border-color:rgba(239,68,68,.5);color:#fca5a5;">🔴 Out: ' + g.timeOut.length + "</span>" : "") +
+          "</div>" +
+          "</div>" +
+          bodyHtml +
+          "</div>"
+        );
+      }).join("") +
+      "</div>";
+  }
 
   if (gallery.dataset.lastHtml !== html) {
     gallery.dataset.lastHtml = html;

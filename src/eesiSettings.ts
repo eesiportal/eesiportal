@@ -1441,7 +1441,7 @@ let lastWeatherUiHtml: {
   label: string;
   placeName: string;
 } | null = null;
-const WEATHER_API_REFRESH_MS = 10000;
+const WEATHER_API_REFRESH_MS = 30000;
 const weatherPlaceCache = new Map<string, string>();
 
 export type TimeSessionSlot = "daytime" | "noontime" | "sunset" | "nighttime" | "midnight";
@@ -1621,8 +1621,8 @@ function renderLiveWeatherCard(): void {
   if (!el) return;
   const atmos = applyAmbientSessionBackground();
   const gpsTag = runtime.hasLiveGpsLock
-    ? `⚡ Live GPS${runtime.lastWeatherAcc ? ` ±${runtime.lastWeatherAcc}m` : ""} · Auto 1ms`
-    : "📡 Auto-syncing GPS (1ms)…";
+    ? `⚡ Live GPS${runtime.lastWeatherAcc ? ` ±${runtime.lastWeatherAcc}m` : ""} · Real-time`
+    : "📡 Syncing live GPS…";
 
   let nextHtml = "";
   if (!lastWeatherUiHtml) {
@@ -1767,9 +1767,25 @@ export async function updateLiveWeather(
   }
 }
 
+export function notifyWeatherOfGpsUpdate(lat: number, lon: number, accuracy?: number): void {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+  const moved =
+    !runtime.hasLiveGpsLock ||
+    Math.abs(lat - runtime.lastWeatherLat) > 0.001 ||
+    Math.abs(lon - runtime.lastWeatherLon) > 0.001;
+  const stale = Date.now() - (runtime.lastWeatherUpdatedAt || 0) >= WEATHER_API_REFRESH_MS;
+  const nextAcc = typeof accuracy === "number" && accuracy > 0 ? Math.round(accuracy) : runtime.lastWeatherAcc;
+  const accChanged = nextAcc > 0 && nextAcc !== runtime.lastWeatherAcc;
+  if (moved || stale) {
+    void updateLiveWeather(lat, lon, { fromGps: true, accuracy: nextAcc, force: moved || stale });
+  } else if (accChanged) {
+    runtime.lastWeatherAcc = nextAcc;
+    renderLiveWeatherCard();
+  }
+}
+
 export function startAutoWeatherSyncLoop(): void {
   clearInterval(weatherAutoSyncTimer);
-  let lastCoordSig = "";
   const syncTick = (forceRun = false) => {
     if (!forceRun && document.hidden) return;
     const cachedGps = hooks.getCachedGps?.();
@@ -1779,25 +1795,15 @@ export function startAutoWeatherSyncLoop(): void {
         Math.abs(cachedGps.lat - runtime.lastWeatherLat) > 0.001 ||
         Math.abs(cachedGps.lng - runtime.lastWeatherLon) > 0.001;
       const stale = Date.now() - (runtime.lastWeatherUpdatedAt || 0) >= WEATHER_API_REFRESH_MS;
-      const coordSig = `${cachedGps.lat.toFixed(5)},${cachedGps.lng.toFixed(5)},${Math.round(cachedGps.acc || 0)}`;
-      if (forceRun || moved || stale || coordSig !== lastCoordSig) {
-        lastCoordSig = coordSig;
-        runtime.lastWeatherLat = cachedGps.lat;
-        runtime.lastWeatherLon = cachedGps.lng;
-        runtime.hasLiveGpsLock = true;
-        if (cachedGps.acc > 0) runtime.lastWeatherAcc = Math.round(cachedGps.acc);
-        if (forceRun || moved || stale) {
-          void updateLiveWeather(cachedGps.lat, cachedGps.lng, {
-            fromGps: true,
-            accuracy: cachedGps.acc,
-            force: moved || stale,
-          });
-        } else {
-          renderLiveWeatherCard();
-        }
+      if (forceRun || moved || stale || !lastWeatherUiHtml) {
+        void updateLiveWeather(cachedGps.lat, cachedGps.lng, {
+          fromGps: true,
+          accuracy: cachedGps.acc,
+          force: forceRun || moved || stale,
+        });
       }
     } else {
-      if ("geolocation" in navigator && !weatherGeoProbeInFlight && Date.now() - lastWeatherGeoProbeAt >= 3000) {
+      if ("geolocation" in navigator && !weatherGeoProbeInFlight && Date.now() - lastWeatherGeoProbeAt >= 15000) {
         weatherGeoProbeInFlight = true;
         lastWeatherGeoProbeAt = Date.now();
         navigator.geolocation.getCurrentPosition(
@@ -1812,7 +1818,7 @@ export function startAutoWeatherSyncLoop(): void {
           () => {
             weatherGeoProbeInFlight = false;
           },
-          { enableHighAccuracy: true, maximumAge: 0, timeout: 4000 }
+          { enableHighAccuracy: true, maximumAge: 5000, timeout: 5000 }
         );
       }
       if (forceRun || (!lastWeatherUiHtml && !weatherFetchInFlight)) {
@@ -1821,7 +1827,7 @@ export function startAutoWeatherSyncLoop(): void {
     }
   };
   syncTick(true);
-  weatherAutoSyncTimer = setInterval(() => syncTick(false), 1);
+  weatherAutoSyncTimer = setInterval(() => syncTick(false), 5000);
 }
 
 /* ==================== PULL TO RELOAD (REMOVED) ==================== */

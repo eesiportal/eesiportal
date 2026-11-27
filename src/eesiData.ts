@@ -33,7 +33,7 @@ import {
   val,
 } from "./eesiTypes";
 import { setOptions, importLibrary } from "@googlemaps/js-api-loader";
-import { triggerAlert, triggerMentionAlert, updateLiveWeather } from "./eesiSettings";
+import { notifyWeatherOfGpsUpdate, triggerAlert, triggerMentionAlert } from "./eesiSettings";
 
 /* ==================== NETWORK STATUS (STRICT ONLINE MODE) ==================== */
 export function updateNetworkStatus(): void {
@@ -996,7 +996,7 @@ export async function loadTimeLogs(): Promise<void> {
       .from("dtr_time_logs")
       .select("id,user_id,sender_name,mode,work_date,time_24,time_12,location,unit,note,ai_summary,image_url,dtr_entry_id,created_at")
       .order("created_at", { ascending: false })
-      .limit(100);
+      .limit(250);
     if (!error) {
       runtime.dtrTimeLogsTableMissing = false;
       applyTimeLogRows(data || []);
@@ -1461,10 +1461,6 @@ export function stopLocationWatch(): void {
     clearInterval(locationHeartbeatTimer);
     locationHeartbeatTimer = null;
   }
-  if (locationUiSyncTimer) {
-    clearInterval(locationUiSyncTimer);
-    locationUiSyncTimer = null;
-  }
 }
 
 export function teardownLive(stopGps = false): void {
@@ -1569,14 +1565,12 @@ export async function reloadEverything(): Promise<void> {
 }
 
 /* ==================== LIVE MAP & ALWAYS-ON GPS LOCATION SHARING ==================== */
-const GPS_REFRESH_INTERVAL_MS = 1500;
+const GPS_REFRESH_INTERVAL_MS = 8000;
 let locationHeartbeatTimer: any = null;
-let locationUiSyncTimer: any = null;
 let locationCoarseWatchId: number | null = null;
 let lastLocationUploadAt = 0;
 let lastUploadedAcc = Number.POSITIVE_INFINITY;
 let lastKnownCoords: { lat: number; lng: number; acc: number; updatedAt: number } | null = null;
-let lastUiCoordSyncedAt = 0;
 let locationLifecycleBound = false;
 let locationUploadInFlight = false;
 let lastGestureRetryAt = 0;
@@ -1629,15 +1623,8 @@ function recordLocalPosition(pos: GeolocationPosition): void {
   }
   lastKnownCoords = { lat, lng, acc, updatedAt: now };
 
-  setGpsUiStatus("⚡ Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Auto-sync 1ms");
-  const movedForWeather =
-    !runtime.hasLiveGpsLock ||
-    Math.abs(lat - runtime.lastWeatherLat) > 0.001 ||
-    Math.abs(lng - runtime.lastWeatherLon) > 0.001 ||
-    Date.now() - (runtime.lastWeatherUpdatedAt || 0) >= 10000;
-  if (movedForWeather) {
-    void updateLiveWeather(lat, lng, { fromGps: true, accuracy: acc, force: true });
-  }
+  setGpsUiStatus("⚡ Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Real-time");
+  notifyWeatherOfGpsUpdate(lat, lng, acc);
   hooks.evaluateDailySiteGeofence?.();
 }
 
@@ -1684,7 +1671,7 @@ async function upsertCoordsToSupabase(lat: number, lng: number, acc: number, for
     }
     lastLocationUploadAt = Date.now();
     lastUploadedAcc = acc || lastUploadedAcc;
-    setGpsUiStatus("⚡ Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Auto-sync 1ms");
+    setGpsUiStatus("⚡ Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Real-time");
     mergeOwnLocationLocally(lat, lng, isoNow);
     return true;
   } catch (err) {
@@ -1744,23 +1731,17 @@ function requestInstantGeoFix(isInitial: boolean): void {
         setGpsUiStatus("📍 Waiting for Location permission in browser/device settings (tap to retry)…");
       } else if (!lastKnownCoords) {
         ensureCoarseWatchFallback();
+        navigator.geolocation.getCurrentPosition(
+          pos => { handleGeoFix(pos, isInitial || lastLocationUploadAt === 0); },
+          () => {},
+          { enableHighAccuracy: false, maximumAge: 15000, timeout: 10000 }
+        );
       }
       if (state.userId && runtime.client && lastKnownCoords && Date.now() - lastLocationUploadAt >= GPS_REFRESH_INTERVAL_MS - 300) {
         void upsertCoordsToSupabase(lastKnownCoords.lat, lastKnownCoords.lng, lastKnownCoords.acc, true);
       }
     },
-    { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
-  );
-
-  navigator.geolocation.getCurrentPosition(
-    pos => { handleGeoFix(pos, isInitial || lastLocationUploadAt === 0); },
-    err => {
-      if (err?.code === 1 && !lastKnownCoords) {
-        lastGeoErrorCode = 1;
-        setGpsUiStatus("📍 Waiting for Location permission in browser/device settings (tap to retry)…");
-      }
-    },
-    { enableHighAccuracy: false, maximumAge: 15000, timeout: 10000 }
+    { enableHighAccuracy: true, maximumAge: 2000, timeout: 12000 }
   );
 }
 
@@ -1770,7 +1751,7 @@ function startLocationWatch(forceRestart = false): void {
     return;
   }
   if (!lastKnownCoords) {
-    setGpsUiStatus("📡 Auto-enabling GPS location (1ms sync)…");
+    setGpsUiStatus("📡 Enabling real-time GPS location…");
   }
 
   if (forceRestart) {
@@ -1798,18 +1779,6 @@ function startLocationWatch(forceRestart = false): void {
     ensureCoarseWatchFallback();
   }
 
-  if (!locationUiSyncTimer) {
-    locationUiSyncTimer = setInterval(() => {
-      if (document.hidden || !lastKnownCoords) return;
-      if (lastUiCoordSyncedAt !== lastKnownCoords.updatedAt) {
-        lastUiCoordSyncedAt = lastKnownCoords.updatedAt;
-        const { lat, lng, acc } = lastKnownCoords;
-        setGpsUiStatus("⚡ Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Auto-sync 1ms");
-        hooks.evaluateDailySiteGeofence?.();
-      }
-    }, 1);
-  }
-
   if (!locationHeartbeatTimer) {
     locationHeartbeatTimer = setInterval(() => {
       if (document.hidden || !navigator.geolocation) return;
@@ -1817,7 +1786,12 @@ function startLocationWatch(forceRestart = false): void {
         startLocationWatch(false);
         return;
       }
-      requestInstantGeoFix(false);
+      // Only re-probe manually if watchPosition hasn't delivered a fix in >12s
+      if (!lastKnownCoords || Date.now() - lastKnownCoords.updatedAt >= 12000) {
+        requestInstantGeoFix(false);
+      } else if (state.userId && runtime.client && Date.now() - lastLocationUploadAt >= GPS_REFRESH_INTERVAL_MS) {
+        void upsertCoordsToSupabase(lastKnownCoords.lat, lastKnownCoords.lng, lastKnownCoords.acc, false);
+      }
     }, GPS_REFRESH_INTERVAL_MS);
   }
 }
@@ -1977,7 +1951,7 @@ const liveMarkers = new Map<
   string,
   { marker: any; isAdvanced: boolean; infoHtml: string; position: { lat: number; lng: number }; fresh?: boolean; name?: string }
 >();
-const LIVE_REFRESH_MS = 2000;
+const LIVE_REFRESH_MS = 5000;
 const LIVE_STALE_MS = 5 * 60 * 1000;
 
 const BASEMAPS: Record<string, "roadmap" | "hybrid" | "terrain"> = {

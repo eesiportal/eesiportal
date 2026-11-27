@@ -365,6 +365,7 @@ export function canViewTimePictures(): boolean {
   if (isAdmin()) return true;
   if (state.role !== "representative") return false;
   const allowed = runtime.allowedTimePhotoRepIds || [];
+  if (allowed.includes("__none__")) return false;
   if (!allowed.length) return true;
   return allowed.includes(String(state.userId || ""));
 }

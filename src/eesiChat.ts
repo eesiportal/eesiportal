@@ -524,7 +524,7 @@ export function renderMessages(): void {
   const t = state.threads.find(x => String(x.id) === String(state.activeThread));
   const nicknames = getPref(String(state.activeThread)).memberNicknames || {};
 
-  box.innerHTML = filtered.map(m => {
+  const nextHtml = filtered.map(m => {
     const mine = String(m.user_id) === String(state.userId);
     const isDeletedAll = !!m.deleted_at;
     const time = fmtDate(m.created_at) + (m.isOptimistic ? " · ⚡" : "");
@@ -537,7 +537,7 @@ export function renderMessages(): void {
       if (url) {
         const isImg = (m.attachment_type || "").startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|heic|heif|avif)(\?|$)/i.test(m.attachment_name || "");
         attach = isImg
-          ? '<img class="chat-img" src="' + esc(url) + '" alt="' + esc(m.attachment_name || "Photo") + '"' + (!m.isOptimistic ? ' data-preview-url="' + esc(url) + '" data-preview-label="' + esc(m.attachment_name || "Photo") + '"' : "") + ">"
+          ? '<img class="chat-img" loading="lazy" decoding="async" src="' + esc(url) + '" alt="' + esc(m.attachment_name || "Photo") + '"' + (!m.isOptimistic ? ' data-preview-url="' + esc(url) + '" data-preview-label="' + esc(m.attachment_name || "Photo") + '"' : "") + ">"
           : '<a href="' + esc(url) + '" target="_blank" rel="noopener" style="color:inherit;">📎 ' + esc(m.attachment_name || "File") + "</a>";
       }
     }
@@ -566,7 +566,11 @@ export function renderMessages(): void {
       '<div style="display:flex;justify-content:flex-end;align-items:center;margin-top:4px;"><small class="msgr-time" style="margin:0;margin-right:auto;">' + esc(time) + edited + "</small></div></div></div>";
   }).join("") || '<p class="muted" style="text-align:center;padding:20px;">No messages yet.</p>';
 
-  box.scrollTop = box.scrollHeight;
+  if (box.dataset.lastHtml !== nextHtml) {
+    box.dataset.lastHtml = nextHtml;
+    box.innerHTML = nextHtml;
+    box.scrollTop = box.scrollHeight;
+  }
   updateSendBtn();
   autoSavePhotos();
 }
