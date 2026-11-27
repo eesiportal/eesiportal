@@ -16,12 +16,14 @@ import {
   buildReportDetailsWithUnit,
   buildSiteMetaAppNoticeBody,
   buildTimeLogAppNoticeBody,
+  buildTimePicAccessAppNoticeBody,
   buildUnitNotesWithManual,
   calculateDtrHours,
   calculateDtrMinutes,
   calculateOtMinutes,
   calculateShiftBreakdown,
   canCommentOnRec,
+  canViewTimePictures,
   capDtrTimeOut,
   checkNetwork,
   closeSheet,
@@ -158,17 +160,22 @@ const SYSTEM_ANNOUNCEMENTS = [
 /* ==================== ACCESS / NAVIGATION ==================== */
 export function updateAccess(): void {
   const canCreateChecklist = !isManager();
+  const canViewPics = canViewTimePictures();
   document.querySelector('[data-report-type="service"]')?.classList.remove("hidden");
   document.querySelector('[data-report-type="delivery"]')?.classList.remove("hidden");
   document.querySelector('[data-report-type="checklist"]')?.classList.toggle("hidden", !canCreateChecklist);
   document.querySelectorAll(".admin-only").forEach(el => el.classList.toggle("hidden", !isAdmin()));
   document.querySelectorAll(".manager-only").forEach(el => el.classList.toggle("hidden", !isManager()));
+  $("dtrTimePicsTab")?.classList.toggle("hidden", !canViewPics);
   document.querySelectorAll<HTMLElement>('[onclick*="go(\'members\')"]').forEach(el => el.classList.toggle("hidden", !isManager()));
   if (!isManager() && ["members", "pending"].includes(runtime.currentPage)) {
     runtime.currentPage = "home";
     $("page-members")?.classList.add("hidden");
     $("page-pending")?.classList.add("hidden");
     $("page-home")?.classList.remove("hidden");
+  }
+  if (!canViewPics && runtime.currentDtrTab === "time_pics") {
+    dtrTab("fill");
   }
   if (isManager() && state.reportType === "checklist") state.reportType = "service";
   renderPmsChecklist();
@@ -196,7 +203,7 @@ export function go(p: string, opts: { skipScrollReset?: boolean } = {}): void {
   else if (p === "sites") { renderSites(); scheduleSiteMapLazyInit(); }
   else if (p === "units") { void ensureAmcbUnitsSeeded(); renderUnitSiteOptions(); renderUnits(); }
   else if (p === "reports") { renderReportSites(); renderReports(); if (runtime.reportsViewMode === "search") runSearch(); }
-  else if (p === "dtr") { renderConnectedPickers(); renderDtr(); autoFillDtrFromSchedule(false); renderTimeLog(); }
+  else if (p === "dtr") { renderConnectedPickers(); renderDtr(); autoFillDtrFromSchedule(false); renderTimeLog(); if (runtime.currentDtrTab === "time_pics") renderTimePicsGallery(); }
   else if (p === "payroll") { renderPayroll(); }
   else if (p === "notes") { renderConnectedPickers(); renderNotes(); renderRecs(); }
   else if (p === "leave") { renderLeave(); renderLeaveBalances(); }
@@ -858,13 +865,17 @@ export function renderHomeDtrStatus(): void {
 }
 
 function isScheduleWithinTimelineDuration(s: any, nowMs: number, todayStr: string): boolean {
+  const oneDayMs = 86400000;
   const dateStr = String(s?.scheduled_date || "").trim();
+  const createdMs = s?.created_at ? new Date(String(s.created_at)).getTime() : NaN;
+  if (Number.isFinite(createdMs) && nowMs - createdMs > oneDayMs && dateStr !== todayStr) {
+    return false;
+  }
   if (!dateStr) return false;
   if (dateStr === todayStr) return true;
   const m = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return false;
   const dayStartMs = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0).getTime();
-  const oneDayMs = 86400000;
   if (Number.isFinite(dayStartMs) && nowMs >= dayStartMs && nowMs < dayStartMs + oneDayMs) {
     return true;
   }
@@ -957,14 +968,20 @@ export async function evaluateDailySiteGeofence(): Promise<void> {
 export function renderHomeShareFeed(): void {
   const box = $("homeShareFeed");
   if (!box) return;
+  const nowMs = Date.now();
+  const TIMELINE_24H_MS = 24 * 60 * 60 * 1000;
   const logs = [...(state.dtrTimeLogs || [])]
+    .filter((l: any) => {
+      const ts = new Date(l.created_at || 0).getTime();
+      return Number.isFinite(ts) && nowMs - ts <= TIMELINE_24H_MS;
+    })
     .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
     .slice(0, 8);
   let html = "";
   if (!logs.length) {
     html =
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
-      '<span class="muted">No Time In / Out uploads yet. Upload a photo so the team sees who timed in or out.</span>' +
+      '<span class="muted">No Time In / Out uploads in the last 24 hours.</span>' +
       '<div class="inline-actions" style="margin-top:0;">' +
       '<button class="green small-btn" type="button" onclick="openQuickTimeAction(\'time_in\')">🟢 Time In</button>' +
       '<button class="red small-btn" type="button" onclick="openQuickTimeAction(\'time_out\')">🔴 Time Out</button>' +
@@ -974,7 +991,7 @@ export function renderHomeShareFeed(): void {
       const isOut = l.mode === "time_out";
       const modeBadge = isOut ? '<span class="badge" style="border-color:rgba(239,68,68,.5);color:#fca5a5;">🔴 Time Out</span>' : '<span class="sess-badge now" style="margin-left:0;">🟢 Time In</span>';
       const who = l.sender_name || profileName(l.user_id);
-      const safeImg = safeUrl(l.image_url);
+      const safeImg = l.localPreviewUrl ? String(l.localPreviewUrl) : safeUrl(l.image_url);
       const timeTxt = l.time_12 || l.time_24 || "";
       const metaStr = [
         timeTxt ? "⏰ " + timeTxt : "",
@@ -989,11 +1006,11 @@ export function renderHomeShareFeed(): void {
         '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
         "<b>" + esc(who) + "</b> " + modeBadge +
         "</div>" +
-        '<div class="muted" style="font-size:12px;margin-top:2px;">' + esc(metaStr || fmtDate(l.created_at)) + "</div>" +
+        '<div class="muted" style="font-size:12px;margin-top:2px;">' + esc(metaStr || fmtDate(l.created_at)) + (l.isOptimistic ? " · ⚡ Syncing" : "") + "</div>" +
         (l.note ? '<div style="font-size:12.5px;margin-top:2px;">' + esc(l.note) + "</div>" : "") +
         "</div>" +
         (safeImg
-          ? '<img src="' + esc(safeImg) + '" alt="Time photo" data-preview-url="' + esc(safeImg) + '" data-preview-label="' + esc(who + " — " + (isOut ? "Time Out" : "Time In")) + '" style="width:52px;height:52px;border-radius:10px;object-fit:cover;flex:0 0 52px;cursor:pointer;border:1px solid rgba(47,140,255,.35);">'
+          ? '<img src="' + esc(safeImg) + '" alt="Time photo"' + (!l.isOptimistic ? ' data-preview-url="' + esc(safeImg) + '" data-preview-label="' + esc(who + " — " + (isOut ? "Time Out" : "Time In")) + '"' : "") + ' style="width:52px;height:52px;border-radius:10px;object-fit:cover;flex:0 0 52px;cursor:pointer;border:1px solid rgba(47,140,255,.35);">'
           : "") +
         "</div>"
       );
@@ -1118,44 +1135,53 @@ export function renderHome(): void {
   if (!box) return;
   const now = new Date();
   const nowMs = now.getTime();
+  const TIMELINE_24H_MS = 24 * 60 * 60 * 1000;
+  const isWithin24h = (dt: unknown): boolean => {
+    const t = new Date(String(dt || "")).getTime();
+    return Number.isFinite(t) && (nowMs - t) <= TIMELINE_24H_MS && t <= nowMs + 60000;
+  };
   const year = now.getFullYear();
   const todayStr = localDateKey(now);
   const upcomingHolidays = [...phHolidays(year), ...phHolidays(year + 1)].filter(h => h.date >= todayStr).slice(0, 6);
 
   const recentItems = [
-    ...state.announcements.map(a => ({
-      date: a.created_at,
-      icon: "📢",
-      title: a.title || "Announcement",
-      detail: a.body || "",
-      label: "Announcement",
-      attr: 'data-act="go-announcements"',
-    })),
+    ...state.announcements
+      .filter(a => isWithin24h(a.created_at))
+      .map(a => ({
+        date: a.created_at,
+        icon: "📢",
+        title: a.title || "Announcement",
+        detail: a.body || "",
+        label: "Announcement (24h)",
+        attr: 'data-act="go-announcements"',
+      })),
     ...visibleSchedules()
       .filter(s => isScheduleWithinTimelineDuration(s, nowMs, todayStr))
       .map(s => ({
-        date: s.scheduled_date + "T" + (s.time_in || "00:00"),
+        date: s.created_at && isWithin24h(s.created_at) ? s.created_at : (s.scheduled_date + "T" + (s.time_in || "00:00")),
         icon: "📅",
         title: s.title || "Schedule",
         detail: [s.region, s.time_in && s.time_out ? `${formatScheduleTimeDisplay(s.time_in)}–${formatScheduleTimeDisplay(s.time_out)}` : (s.time_in ? formatScheduleTimeDisplay(s.time_in) : "")].filter(Boolean).join(" · "),
-        label: "Schedule (1-day)",
+        label: "Schedule (24h)",
         attr: 'data-act="go-schedule"',
       })),
-    ...timelineReports().map(r => {
-      const site = state.sites.find(s => String(s.id) === String(r.site_id));
-      const typeLbl = r.report_type === "delivery" ? "Delivery Report" : "Service Report";
-      const parsedUnit = parseReportUnit(r.details);
-      const bodyText = stripReportPhotos(r.details);
-      return {
-        date: r.created_at || (r.report_date + "T00:00:00"),
-        icon: r.report_type === "delivery" ? "📦" : "📄",
-        title: r.title || typeLbl,
-        detail: [profileName(r.created_by), site ? site.name : "", parsedUnit.unitName, bodyText.slice(0, 140)].filter(Boolean).join(" · "),
-        label: typeLbl,
-        attr: 'data-report-notice="' + esc(r.id) + '"',
-      };
-    }),
-  ].filter(item => item.date).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 10);
+    ...timelineReports()
+      .filter(r => r.created_at ? isWithin24h(r.created_at) : String(r.report_date || "") === todayStr)
+      .map(r => {
+        const site = state.sites.find(s => String(s.id) === String(r.site_id));
+        const typeLbl = r.report_type === "delivery" ? "Delivery Report" : "Service Report";
+        const parsedUnit = parseReportUnit(r.details);
+        const bodyText = stripReportPhotos(r.details);
+        return {
+          date: r.created_at || (r.report_date + "T00:00:00"),
+          icon: r.report_type === "delivery" ? "📦" : "📄",
+          title: r.title || typeLbl,
+          detail: [profileName(r.created_by), site ? site.name : "", parsedUnit.unitName, bodyText.slice(0, 140)].filter(Boolean).join(" · "),
+          label: typeLbl + " (24h)",
+          attr: 'data-report-notice="' + esc(r.id) + '"',
+        };
+      }),
+  ].filter(item => item.date).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 12);
 
   const upcomingHtml = upcomingHolidays.map(h => {
     const diffDays = Math.round((new Date(h.date + "T00:00:00").getTime() - new Date(todayStr + "T00:00:00").getTime()) / 86400000);
@@ -1167,7 +1193,7 @@ export function renderHome(): void {
 
   const recentHtml = recentItems.map(item =>
     '<div class="item clickable" ' + item.attr + '><b>' + item.icon + " " + esc(item.title) + '</b><div class="muted">' + esc(item.label) + " · " + esc(fmtDate(item.date)) + "</div><div>" + esc(item.detail) + "</div></div>"
-  ).join("") || '<p class="muted">No recent timeline items yet.</p>';
+  ).join("") || '<p class="muted">No timeline posts in the last 24 hours.</p>';
 
   const nextHtml =
     '<div style="margin-bottom:14px;">' +
@@ -1176,7 +1202,7 @@ export function renderHome(): void {
     '<button class="gray small-btn" type="button" onclick="openHolidayCalendarSheet(\'all\')">📅 Full Calendar</button>' +
     "</div>" +
     '<div class="item sess-soon">' + upcomingHtml + "</div></div>" +
-    '<div><h3 style="margin:0 0 8px;">🕒 Recent Timeline</h3>' + recentHtml + "</div>";
+    '<div><h3 style="margin:0 0 8px;">🕒 Recent Timeline (24h)</h3>' + recentHtml + "</div>";
   if (box.innerHTML !== nextHtml) box.innerHTML = nextHtml;
 }
 
@@ -4122,17 +4148,20 @@ async function submitReport(): Promise<void> {
   if (btn) btn.disabled = true;
   if (statusEl) statusEl.textContent = "Uploading…";
   try {
-    const urls = runtime.editingReportId ? [...runtime.editingExistingUrls] : [];
-    for (let i = 0; i < runtime.pendingReportFiles.length; i++) {
-      const f = runtime.pendingReportFiles[i].file;
-      if (f.size > 25 * 1024 * 1024) throw new Error(f.name + " is larger than 25MB");
-      const safeName = (f.name || ("file-" + i)).replace(/[^a-zA-Z0-9._-]/g, "_");
-      const path = state.userId + "/" + Date.now() + "-" + i + "-" + Math.random().toString(36).slice(2, 7) + "-" + safeName;
-      const { error: up } = await runtime.client.storage.from("reports").upload(path, f, { upsert: false, contentType: f.type || undefined });
-      if (up) throw up;
-      const { data: pub } = runtime.client.storage.from("reports").getPublicUrl(path);
-      urls.push(pub.publicUrl);
-    }
+    const existingUrls = runtime.editingReportId ? [...runtime.editingExistingUrls] : [];
+    const uploadedUrls = await Promise.all(
+      runtime.pendingReportFiles.map(async (item, i) => {
+        const f = item.prepPromise ? await item.prepPromise : item.file;
+        if (f.size > 25 * 1024 * 1024) throw new Error(f.name + " is larger than 25MB");
+        const safeName = (f.name || ("file-" + i)).replace(/[^a-zA-Z0-9._-]/g, "_");
+        const path = state.userId + "/" + Date.now() + "-" + i + "-" + Math.random().toString(36).slice(2, 7) + "-" + safeName;
+        const { error: up } = await runtime.client.storage.from("reports").upload(path, f, { upsert: false, contentType: f.type || undefined });
+        if (up) throw up;
+        const { data: pub } = runtime.client.storage.from("reports").getPublicUrl(path);
+        return pub.publicUrl;
+      })
+    );
+    const urls = [...existingUrls, ...uploadedUrls];
     const detailsWithUnit = buildReportDetailsWithUnit(unitId, unitName, details);
     const full = detailsWithUnit + (urls.length ? "\n\nPhotos:\n" + urls.join("\n") : "");
     const payload = {
@@ -4750,22 +4779,38 @@ export function autoFillDtrFromSchedule(force = false): void {
   }
 }
 
-export function dtrTab(tab: "fill" | "time_log" | "preview" | "time_in" | "time_out"): void {
-  let normalized: "fill" | "time_log" | "preview" = "fill";
+export function dtrTab(tab: "fill" | "time_log" | "time_pics" | "preview" | "time_in" | "time_out"): void {
+  let normalized: "fill" | "time_log" | "time_pics" | "preview" = "fill";
   if (tab === "time_in" || tab === "time_out") {
     setTimeLogMode(tab);
     normalized = "time_log";
+  } else if (tab === "time_pics") {
+    if (!canViewTimePictures()) {
+      toast("Separated Time Photos tab is only for Administrator & selected Representative.");
+      normalized = "fill";
+    } else {
+      normalized = "time_pics";
+    }
   } else if (tab === "time_log" || tab === "preview") {
     normalized = tab;
   }
   runtime.currentDtrTab = normalized;
   $("dtrFill")?.classList.toggle("hidden", normalized !== "fill");
   $("dtrTimeLog")?.classList.toggle("hidden", normalized !== "time_log");
+  $("dtrTimePics")?.classList.toggle("hidden", normalized !== "time_pics");
   $("dtrPreview")?.classList.toggle("hidden", normalized !== "preview");
   $("dtrFillTab")?.classList.toggle("active", normalized === "fill");
   $("dtrTimeLogTab")?.classList.toggle("active", normalized === "time_log");
+  $("dtrTimePicsTab")?.classList.toggle("active", normalized === "time_pics");
   $("dtrPrevTab")?.classList.toggle("active", normalized === "preview");
-  const activeDtrPanel = normalized === "fill" ? $("dtrFill") : normalized === "time_log" ? $("dtrTimeLog") : $("dtrPreview");
+  const activeDtrPanel =
+    normalized === "fill"
+      ? $("dtrFill")
+      : normalized === "time_log"
+        ? $("dtrTimeLog")
+        : normalized === "time_pics"
+          ? $("dtrTimePics")
+          : $("dtrPreview");
   applyRandomOpenStyle(activeDtrPanel);
   triggerAndroidHapticTap();
   if (normalized === "fill") autoFillDtrFromSchedule(false);
@@ -4775,6 +4820,9 @@ export function dtrTab(tab: "fill" | "time_log" | "preview" | "time_in" | "time_
     autoFillDtrFromSchedule(false);
     renderTimeLog();
     renderDtrLiveStatus();
+  }
+  if (normalized === "time_pics") {
+    renderTimePicsGallery();
   }
   if (normalized === "fill") renderDtrLiveStatus();
   saveLastView();
@@ -4982,21 +5030,226 @@ export function renderTimeLog(): void {
       m.location ? "📍 " + m.location : "",
       m.unit ? "🛗 " + m.unit : "",
     ].filter(Boolean);
-    const safeImg = safeUrl(m.image_url);
+    const safeImg = m.localPreviewUrl ? String(m.localPreviewUrl) : safeUrl(m.image_url);
     return '<div class="msgr-row ' + (mine ? "mine" : "") + '" style="margin-bottom:10px;">' +
       '<div class="msgr-bub" style="max-width:92%;">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;">' +
       '<span style="font-weight:700;font-size:12px;">' + esc(who) + "</span>" +
-      (canDelete ? '<button class="red small-btn" type="button" onclick="deleteTimeLog(\'' + esc(m.id) + '\')">🗑 Delete</button>' : "") +
+      (canDelete && !m.isOptimistic ? '<button class="red small-btn" type="button" onclick="deleteTimeLog(\'' + esc(m.id) + '\')">🗑 Delete</button>' : "") +
       "</div>" +
-      (safeImg ? '<img class="chat-img" style="margin-top:0;margin-bottom:6px;max-height:220px;object-fit:cover;cursor:pointer;" src="' + esc(safeImg) + '" alt="' + esc(modeLabel) + ' photo" data-preview-url="' + esc(safeImg) + '" data-preview-label="' + esc(who + " — " + modeLabel) + '"' + (canDelete ? ' data-preview-delete-id="' + esc(m.id) + '"' : "") + ">" : "") +
+      (safeImg ? '<img class="chat-img" style="margin-top:0;margin-bottom:6px;max-height:220px;object-fit:cover;cursor:pointer;" src="' + esc(safeImg) + '" alt="' + esc(modeLabel) + ' photo"' + (!m.isOptimistic ? ' data-preview-url="' + esc(safeImg) + '" data-preview-label="' + esc(who + " — " + modeLabel) + '"' + (canDelete ? ' data-preview-delete-id="' + esc(m.id) + '"' : "") : "") + ">" : "") +
       (m.note ? '<div style="white-space:pre-wrap;margin-bottom:4px;">' + esc(m.note) + "</div>" : "") +
       (m.ai_summary ? '<div style="white-space:pre-wrap;font-size:12px;opacity:.95;">🤖 AI Reading: ' + esc(m.ai_summary) + "</div>" : "") +
       (metaBadges.length ? '<div style="margin-top:6px;font-size:12px;opacity:.92;">' + metaBadges.map(b => '<span class="badge" style="margin:2px 4px 0 0;">' + esc(b) + "</span>").join("") + "</div>" : "") +
-      '<span class="msgr-time">' + esc(fmtDate(m.created_at)) + (m.dtr_entry_id ? " · ✅ Filled into DTR" : "") + "</span>" +
+      '<span class="msgr-time">' + esc(fmtDate(m.created_at)) + (m.isOptimistic ? " · ⚡ Sending…" : (m.dtr_entry_id ? " · ✅ Filled into DTR" : "")) + "</span>" +
       "</div></div>";
   }).join("");
   box.scrollTop = box.scrollHeight;
+}
+
+export function setTimePicsView(view: "separated" | "time_in" | "time_out"): void {
+  runtime.timePicsSplitFilter = view === "time_in" || view === "time_out" ? view : "separated";
+  document.querySelectorAll<HTMLElement>("#timePicsViewSeg [data-time-pics-view]").forEach(btn =>
+    btn.classList.toggle("active", btn.dataset.timePicsView === runtime.timePicsSplitFilter)
+  );
+  renderTimePicsGallery();
+}
+
+export function clearTimePicsDate(): void {
+  runtime.timePicsDateFilter = "";
+  const dateInp = $("timePicsDateFilter") as HTMLInputElement | null;
+  if (dateInp) dateInp.value = "";
+  renderTimePicsGallery();
+}
+
+function renderTimePicsRepAccessBox(): void {
+  const box = $("timePicsRepAccessBox");
+  if (!box) return;
+  if (!isAdmin()) {
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
+  box.classList.remove("hidden");
+  const reps = (state.profiles || []).filter(p => state.roles[String(p.user_id)]?.app_role === "representative");
+  const allowed = runtime.allowedTimePhotoRepIds || [];
+  const allActive = allowed.length === 0;
+  const chipsHtml = reps.length
+    ? reps.map(r => {
+        const uid = String(r.user_id);
+        const checked = !allActive && allowed.includes(uid);
+        return (
+          '<label class="time-pics-rep-chip">' +
+          '<input type="checkbox"' + (checked ? " checked" : "") + ' onchange="toggleTimePhotoRepAccess(\'' + esc(uid) + '\')">' +
+          "<span>" + esc(r.full_name || r.email || uid) + "</span>" +
+          "</label>"
+        );
+      }).join("")
+    : '<span class="muted" style="font-size:12px;">No Selective Representatives found yet.</span>';
+
+  box.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">' +
+    '<div style="font-size:12.5px;font-weight:700;">🛡️ Select Representative(s) Allowed to View Time Photos</div>' +
+    '<button type="button" class="' + (allActive ? "btn" : "gray") + ' small-btn" onclick="toggleTimePhotoRepAccess(\'__all__\')">' + (allActive ? "✅ All Representatives" : "Reset to All Reps") + "</button>" +
+    "</div>" +
+    '<div class="muted" style="font-size:11.5px;margin-top:3px;">Administrator always sees this tab. Pick specific Representative(s) below or keep All Representatives enabled.</div>' +
+    '<div class="time-pics-rep-picker">' + chipsHtml + "</div>";
+}
+
+export async function toggleTimePhotoRepAccess(repUid: string): Promise<void> {
+  if (!isAdmin()) { toast("Administrator only."); return; }
+  const current = [...(runtime.allowedTimePhotoRepIds || [])];
+  let nextIds: string[] = [];
+  if (repUid === "__all__") {
+    nextIds = [];
+  } else {
+    const uid = String(repUid);
+    if (current.includes(uid)) {
+      nextIds = current.filter(id => id !== uid);
+    } else {
+      nextIds = [...current, uid];
+    }
+  }
+  runtime.allowedTimePhotoRepIds = nextIds;
+  try { localStorage.setItem("eesi-time-pic-reps", JSON.stringify(nextIds)); } catch {}
+  renderTimePicsRepAccessBox();
+  updateAccess();
+
+  if (!checkNetwork()) return;
+  try {
+    let savedToTable = !runtime.appSettingsTableMissing;
+    if (savedToTable) {
+      const { error } = await runtime.client
+        .from("app_settings")
+        .upsert(
+          {
+            key: "time_photo_rep_access",
+            value: { rep_ids: nextIds, updated_at: new Date().toISOString() },
+            updated_by: state.userId,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "key" }
+        );
+      if (error) {
+        if (isMissingTableError(error)) {
+          runtime.appSettingsTableMissing = true;
+          savedToTable = false;
+        } else {
+          throw error;
+        }
+      }
+    }
+    if (!savedToTable) {
+      await runtime.client.from("app_notifications").insert({
+        title: "Time Photo Representative Access",
+        body: buildTimePicAccessAppNoticeBody(nextIds),
+        is_read: true,
+      });
+    }
+    toast(nextIds.length ? `Updated access (${nextIds.length} selected representative)` : "Enabled for all Representatives");
+  } catch (err: any) {
+    toast("Could not sync representative access: " + (err?.message || err));
+  }
+}
+
+export function renderTimePicsGallery(): void {
+  const gallery = $("timePicsGallery");
+  if (!gallery) return;
+  if (!canViewTimePictures()) {
+    gallery.innerHTML = '<p class="muted">Restricted to Administrator and selected Representative(s).</p>';
+    return;
+  }
+  renderTimePicsRepAccessBox();
+
+  const empSel = $("timePicsEmpFilter") as HTMLSelectElement | null;
+  if (empSel) {
+    const curEmp = runtime.timePicsEmployeeFilter || empSel.value || "all";
+    const empMap = new Map<string, string>();
+    (state.profiles || []).forEach(p => {
+      if (p.user_id) empMap.set(String(p.user_id), p.full_name || p.email || String(p.user_id));
+    });
+    (state.dtrTimeLogs || []).forEach(l => {
+      const uid = String(l.user_id || "");
+      if (uid && !empMap.has(uid)) empMap.set(uid, l.sender_name || profileName(uid));
+    });
+    const sortedEmps = [...empMap.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+    empSel.innerHTML = '<option value="all">All employees</option>' +
+      sortedEmps.map(([uid, name]) => '<option value="' + esc(uid) + '">' + esc(name) + "</option>").join("");
+    if (curEmp === "all" || empMap.has(curEmp)) empSel.value = curEmp;
+    else empSel.value = "all";
+    runtime.timePicsEmployeeFilter = empSel.value;
+  }
+
+  const dateFilter = (runtime.timePicsDateFilter || val("timePicsDateFilter") || "").trim();
+  const empFilter = runtime.timePicsEmployeeFilter || "all";
+
+  const photoLogs = [...(state.dtrTimeLogs || [])]
+    .filter((l: any) => {
+      const imgUrl = l.localPreviewUrl ? String(l.localPreviewUrl) : safeUrl(l.image_url);
+      if (!imgUrl) return false;
+      if (empFilter !== "all" && String(l.user_id || "") !== empFilter) return false;
+      if (dateFilter) {
+        const wd = String(l.work_date || "").slice(0, 10) || String(l.created_at || "").slice(0, 10);
+        if (wd !== dateFilter) return false;
+      }
+      return true;
+    })
+    .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+
+  const timeInPics = photoLogs.filter((l: any) => l.mode !== "time_out");
+  const timeOutPics = photoLogs.filter((l: any) => l.mode === "time_out");
+
+  const renderTileGrid = (items: any[], modeTitle: string, emptyText: string): string => {
+    if (!items.length) return '<p class="muted" style="margin:6px 0 0;font-size:12.5px;">' + esc(emptyText) + "</p>";
+    return (
+      '<div class="time-pics-grid">' +
+      items.map((m: any) => {
+        const imgUrl = m.localPreviewUrl ? String(m.localPreviewUrl) : safeUrl(m.image_url)!;
+        const who = m.sender_name || profileName(m.user_id);
+        const first = who.split(/\s+/)[0] || who;
+        const timeStr = m.time_12 || m.time_24 || fmtClockShort(m.created_at);
+        const fullLabel = `${who} — ${modeTitle}${timeStr ? " (" + timeStr + ")" : ""}${m.work_date ? " · " + fmtDay(m.work_date) : ""}`;
+        const canDel = !m.isOptimistic && (String(m.user_id) === String(state.userId) || isManager());
+        return (
+          '<div class="time-pic-tile"' +
+          (!m.isOptimistic ? ' data-preview-url="' + esc(imgUrl) + '" data-preview-label="' + esc(fullLabel) + '"' + (canDel ? ' data-preview-delete-id="' + esc(m.id) + '"' : "") : "") +
+          ">" +
+          '<img src="' + esc(imgUrl) + '" loading="lazy" alt="' + esc(fullLabel) + '">' +
+          '<div class="time-pic-cap">' + esc(first + (timeStr ? " · " + timeStr : "")) + "</div>" +
+          "</div>"
+        );
+      }).join("") +
+      "</div>"
+    );
+  };
+
+  const viewMode = runtime.timePicsSplitFilter || "separated";
+  const inSection =
+    '<div class="time-pics-col in-col">' +
+    '<div class="time-pics-col-head"><b>🟢 Time In Pictures</b><span class="sess-badge now" style="margin:0;">' + timeInPics.length + "</span></div>" +
+    renderTileGrid(timeInPics, "Time In", "No Time In pictures found.") +
+    "</div>";
+  const outSection =
+    '<div class="time-pics-col out-col">' +
+    '<div class="time-pics-col-head"><b>🔴 Time Out Pictures</b><span class="badge" style="margin:0;border-color:rgba(239,68,68,.5);color:#fca5a5;">' + timeOutPics.length + "</span></div>" +
+    renderTileGrid(timeOutPics, "Time Out", "No Time Out pictures found.") +
+    "</div>";
+
+  let html = "";
+  if (viewMode === "time_in") html = inSection;
+  else if (viewMode === "time_out") html = outSection;
+  else html = '<div class="time-pics-split">' + inSection + outSection + "</div>";
+
+  if (gallery.dataset.lastHtml !== html) {
+    gallery.dataset.lastHtml = html;
+    gallery.innerHTML = html;
+  }
+}
+
+function fmtClockShort(iso: unknown): string {
+  if (!iso) return "";
+  const d = new Date(String(iso));
+  return isNaN(d.getTime()) ? "" : d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 async function insertTimeLogEntry(
@@ -5267,85 +5520,119 @@ export async function submitTimeLogPhoto(file: File): Promise<void> {
   if (noteInp) noteInp.value = "";
 
   const statusEl = $("timeLogStatus");
-  if (statusEl) statusEl.textContent = `Uploading & analyzing ${modeLabel} photo with AI…`;
+  if (statusEl) statusEl.textContent = `⚡ Added ${modeLabel} photo — reading & uploading in parallel…`;
+
+  const tempId = "temp-tlog-" + Date.now();
+  const tempBlobUrl = URL.createObjectURL(file);
+  const tempLogEntry: any = {
+    id: tempId,
+    user_id: state.userId,
+    sender_name: senderName,
+    mode,
+    work_date: localDateKey(new Date()),
+    location: selectedSite || null,
+    unit: selectedUnit || null,
+    note: userNote || null,
+    image_url: null,
+    localPreviewUrl: tempBlobUrl,
+    created_at: new Date().toISOString(),
+    isOptimistic: true,
+  };
+  state.dtrTimeLogs = [tempLogEntry, ...(state.dtrTimeLogs || [])];
+  renderTimeLog();
+  renderHomeShareFeed();
+  renderTimePicsGallery();
+  toast(`⚡ ${modeLabel} photo shown — finishing sync…`);
+
+  const removeTempEntry = () => {
+    state.dtrTimeLogs = (state.dtrTimeLogs || []).filter((l: any) => String(l.id) !== tempId);
+  };
 
   try {
-    const imageDataUrl = await compressImageToDataUrl(file, 1024, 1024, 0.82);
-    if (!imageDataUrl || !imageDataUrl.startsWith("data:image/")) {
-      throw new Error("Could not read selected image data.");
-    }
-    const mimeMatch = imageDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/i);
-    const mimeType = mimeMatch ? mimeMatch[1].toLowerCase() : (file.type || "image/jpeg");
-
-    const payloadJson = JSON.stringify({
-      imageBase64: imageDataUrl,
-      imageDataUrl,
-      mimeType,
-      mode,
-      expectedDate: localDateKey(new Date()),
-      userName: senderName,
-      selectedSite,
-      selectedUnit,
-    });
-
-    const endpoints = ["/api/analyze-time-photo", "/.netlify/functions/analyze-time-photo"];
-    let data: Record<string, any> | null = null;
-    let lastErrorMessage = "";
-    let gotHtmlFallback = false;
-
-    for (const endpoint of endpoints) {
-      const resp = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: payloadJson,
-      });
-      const rawText = await resp.text();
-      const trimmed = rawText.trim();
-      const looksLikeHtml = trimmed.startsWith("<") || /<!doctype/i.test(trimmed);
-      let parsed: Record<string, any> | null = null;
-      if (!looksLikeHtml && (trimmed.startsWith("{") || trimmed.startsWith("["))) {
-        try {
-          parsed = JSON.parse(trimmed);
-        } catch {
-          parsed = null;
-        }
-      }
-
-      if (parsed && resp.ok && !parsed.error) {
-        data = parsed;
-        break;
-      }
-
-      if (looksLikeHtml || resp.status === 404 || resp.status === 405) {
-        if (looksLikeHtml) gotHtmlFallback = true;
-        lastErrorMessage = parsed?.error || `Endpoint ${endpoint} unavailable (HTTP ${resp.status}).`;
-        continue;
-      }
-
-      throw new Error(parsed?.error || `Photo analysis failed (HTTP ${resp.status}).`);
-    }
-
-    if (!data) {
-      if (gotHtmlFallback) {
-        throw new Error(
-          "Time-photo AI endpoint returned an HTML page instead of JSON. Ensure the Express server (`npm start`) or Netlify Functions with GEMINI_API_KEY are active."
-        );
-      }
-      throw new Error(lastErrorMessage || "Photo analysis failed");
-    }
-
     const isTimemarkHq = /^timemark-/i.test(file.name || "");
-    const uploadFile = isTimemarkHq && file.size <= 10 * 1024 * 1024
-      ? file
-      : await prepareImageFile(file, 3840, 0.94);
-    const safeName = (uploadFile.name || `${mode}.jpg`).replace(/[^a-zA-Z0-9._-]/g, "_");
-    const storagePath = `${state.userId}/time-logs/${Date.now()}-${mode}-${safeName}`;
-    const { error: upErr } = await runtime.client.storage
-      .from("reports")
-      .upload(storagePath, uploadFile, { upsert: false, contentType: uploadFile.type || "image/jpeg" });
-    if (upErr) throw upErr;
-    const { data: pubData } = runtime.client.storage.from("reports").getPublicUrl(storagePath);
-    const publicImageUrl = pubData.publicUrl;
+
+    const uploadStorageTask = (async () => {
+      const uploadFile = isTimemarkHq && file.size <= 10 * 1024 * 1024
+        ? file
+        : await prepareImageFile(file, 2048, 0.9);
+      const safeName = (uploadFile.name || `${mode}.jpg`).replace(/[^a-zA-Z0-9._-]/g, "_");
+      const storagePath = `${state.userId}/time-logs/${Date.now()}-${mode}-${safeName}`;
+      const { error: upErr } = await runtime.client.storage
+        .from("reports")
+        .upload(storagePath, uploadFile, { upsert: false, contentType: uploadFile.type || "image/jpeg" });
+      if (upErr) throw upErr;
+      const { data: pubData } = runtime.client.storage.from("reports").getPublicUrl(storagePath);
+      return pubData.publicUrl as string;
+    })();
+
+    const aiAnalyzeTask = (async () => {
+      const imageDataUrl = await compressImageToDataUrl(file, 1024, 1024, 0.8);
+      if (!imageDataUrl || !imageDataUrl.startsWith("data:image/")) {
+        throw new Error("Could not read selected image data.");
+      }
+      const mimeMatch = imageDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/i);
+      const mimeType = mimeMatch ? mimeMatch[1].toLowerCase() : (file.type || "image/jpeg");
+
+      const payloadJson = JSON.stringify({
+        imageBase64: imageDataUrl,
+        imageDataUrl,
+        mimeType,
+        mode,
+        expectedDate: localDateKey(new Date()),
+        userName: senderName,
+        selectedSite,
+        selectedUnit,
+      });
+
+      const endpoints = ["/api/analyze-time-photo", "/.netlify/functions/analyze-time-photo"];
+      let parsedData: Record<string, any> | null = null;
+      let lastErrorMessage = "";
+      let gotHtmlFallback = false;
+
+      for (const endpoint of endpoints) {
+        const resp = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: payloadJson,
+        });
+        const rawText = await resp.text();
+        const trimmed = rawText.trim();
+        const looksLikeHtml = trimmed.startsWith("<") || /<!doctype/i.test(trimmed);
+        let parsed: Record<string, any> | null = null;
+        if (!looksLikeHtml && (trimmed.startsWith("{") || trimmed.startsWith("["))) {
+          try {
+            parsed = JSON.parse(trimmed);
+          } catch {
+            parsed = null;
+          }
+        }
+
+        if (parsed && resp.ok && !parsed.error) {
+          parsedData = parsed;
+          break;
+        }
+
+        if (looksLikeHtml || resp.status === 404 || resp.status === 405) {
+          if (looksLikeHtml) gotHtmlFallback = true;
+          lastErrorMessage = parsed?.error || `Endpoint ${endpoint} unavailable (HTTP ${resp.status}).`;
+          continue;
+        }
+
+        throw new Error(parsed?.error || `Photo analysis failed (HTTP ${resp.status}).`);
+      }
+
+      if (!parsedData) {
+        if (gotHtmlFallback) {
+          throw new Error(
+            "Time-photo AI endpoint returned an HTML page instead of JSON. Ensure the Express server (`npm start`) or Netlify Functions with GEMINI_API_KEY are active."
+          );
+        }
+        throw new Error(lastErrorMessage || "Photo analysis failed");
+      }
+      return parsedData;
+    })();
+
+    const [publicImageUrl, data] = await Promise.all([uploadStorageTask, aiAnalyzeTask]);
 
     const time24 = String(data.time24 || "").trim();
     const time12 = String(data.time12 || "").trim();
@@ -5377,8 +5664,8 @@ export async function submitTimeLogPhoto(file: File): Promise<void> {
         try { if (state.userId) localStorage.setItem("eesi-next-timelog-mode:" + state.userId, nextMode); } catch {}
       }
       suppressNotifications();
-      await loadAppNotifications();
-      await loadTimeLogs();
+      removeTempEntry();
+      await Promise.all([loadAppNotifications(), loadTimeLogs()]);
       if (statusEl) {
         statusEl.textContent = `Uploaded to feed (no clear timestamp detected).${tmCfg.autoFlipMode ? ` Next upload ready: ${nextLabel}.` : ""}`;
       }
@@ -5422,8 +5709,8 @@ export async function submitTimeLogPhoto(file: File): Promise<void> {
     }
 
     suppressNotifications();
-    await loadAppNotifications();
-    await loadTimeLogs();
+    removeTempEntry();
+    await Promise.all([loadAppNotifications(), loadTimeLogs()]);
     renderDtrLiveStatus();
     if (statusEl) {
       statusEl.textContent = slotResult.keptLockedTimeOut
@@ -5436,6 +5723,10 @@ export async function submitTimeLogPhoto(file: File): Promise<void> {
         : `✅ ${modeLabel} (${time12 || time24}) saved!${tmCfg.autoFlipMode ? ` Next: ${nextLabel}` : ""}`
     );
   } catch (err: any) {
+    removeTempEntry();
+    renderTimeLog();
+    renderHomeShareFeed();
+    renderTimePicsGallery();
     const msg = err?.message || "Could not analyze photo";
     if (statusEl) statusEl.textContent = "Failed: " + msg;
     toast("Photo analysis error: " + msg);
@@ -8860,24 +9151,32 @@ export function initFeatureWiring(): void {
   });
 
   const rPhotos = $("reportPhotos") as HTMLInputElement | null;
-  rPhotos?.addEventListener("change", async () => {
+  rPhotos?.addEventListener("change", () => {
     const chosen = [...(rPhotos.files || [])];
     rPhotos.value = "";
     if (!chosen.length) return;
+    let added = 0;
     for (const rawFile of chosen) {
       const exists = runtime.pendingReportFiles.some(
         p => p.file.name === rawFile.name && p.file.size === rawFile.size && p.file.lastModified === rawFile.lastModified
       );
       if (exists) continue;
+      added++;
       const isImg = isImageFile(rawFile);
-      const processed = isImg ? await prepareImageFile(rawFile, 1600, 0.85) : rawFile;
-      runtime.pendingReportFiles.push({
-        file: processed,
-        previewUrl: isImg ? URL.createObjectURL(processed) : "",
-      });
+      const item: { file: File; previewUrl: string; prepPromise?: Promise<File> } = {
+        file: rawFile,
+        previewUrl: isImg ? URL.createObjectURL(rawFile) : "",
+      };
+      if (isImg) {
+        item.prepPromise = prepareImageFile(rawFile, 1600, 0.85).then(prepared => {
+          item.file = prepared;
+          return prepared;
+        });
+      }
+      runtime.pendingReportFiles.push(item);
     }
     renderReportAttachmentPreview();
-    toast(chosen.length + " attachment(s) ready");
+    if (added) toast(`⚡ ${added} attachment(s) ready`);
   });
 
   $("submitReportButton")?.addEventListener("click", submitReport);
@@ -8952,24 +9251,32 @@ export function initFeatureWiring(): void {
   });
 
   const pmsFilesInp = $("pmsChecklistFiles") as HTMLInputElement | null;
-  pmsFilesInp?.addEventListener("change", async () => {
+  pmsFilesInp?.addEventListener("change", () => {
     const chosen = [...(pmsFilesInp.files || [])];
     pmsFilesInp.value = "";
     if (!chosen.length) return;
+    let added = 0;
     for (const rawFile of chosen) {
       const exists = runtime.pendingPmsFiles.some(
         p => p.file.name === rawFile.name && p.file.size === rawFile.size && p.file.lastModified === rawFile.lastModified
       );
       if (exists) continue;
+      added++;
       const isImg = isImageFile(rawFile);
-      const processed = isImg ? await prepareImageFile(rawFile, 1600, 0.85) : rawFile;
-      runtime.pendingPmsFiles.push({
-        file: processed,
-        previewUrl: isImg ? URL.createObjectURL(processed) : "",
-      });
+      const item: { file: File; previewUrl: string; prepPromise?: Promise<File> } = {
+        file: rawFile,
+        previewUrl: isImg ? URL.createObjectURL(rawFile) : "",
+      };
+      if (isImg) {
+        item.prepPromise = prepareImageFile(rawFile, 1600, 0.85).then(prepared => {
+          item.file = prepared;
+          return prepared;
+        });
+      }
+      runtime.pendingPmsFiles.push(item);
     }
     renderPmsAttachmentPreview();
-    toast(chosen.length + " PMS attachment(s) ready");
+    if (added) toast(`⚡ ${added} PMS attachment(s) ready`);
   });
 
   $("savePmsRecordButton")?.addEventListener("click", async () => {
@@ -8981,17 +9288,18 @@ export function initFeatureWiring(): void {
     if (btn) btn.disabled = true;
     if (st) st.textContent = "Uploading & saving PMS checklist…";
     try {
-      const urls: string[] = [];
-      for (let i = 0; i < runtime.pendingPmsFiles.length; i++) {
-        const f = runtime.pendingPmsFiles[i].file;
-        if (f.size > 25 * 1024 * 1024) throw new Error(f.name + " is larger than 25MB");
-        const safeName = (f.name || ("pms-" + i)).replace(/[^a-zA-Z0-9._-]/g, "_");
-        const path = `${state.userId}/pms/${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}-${safeName}`;
-        const { error: up } = await runtime.client.storage.from("reports").upload(path, f, { upsert: false, contentType: f.type || undefined });
-        if (up) throw up;
-        const { data: pub } = runtime.client.storage.from("reports").getPublicUrl(path);
-        urls.push(pub.publicUrl);
-      }
+      const urls = await Promise.all(
+        runtime.pendingPmsFiles.map(async (item, i) => {
+          const f = item.prepPromise ? await item.prepPromise : item.file;
+          if (f.size > 25 * 1024 * 1024) throw new Error(f.name + " is larger than 25MB");
+          const safeName = (f.name || ("pms-" + i)).replace(/[^a-zA-Z0-9._-]/g, "_");
+          const path = `${state.userId}/pms/${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}-${safeName}`;
+          const { error: up } = await runtime.client.storage.from("reports").upload(path, f, { upsert: false, contentType: f.type || undefined });
+          if (up) throw up;
+          const { data: pub } = runtime.client.storage.from("reports").getPublicUrl(path);
+          return pub.publicUrl;
+        })
+      );
 
       const all = [...document.querySelectorAll<HTMLInputElement>("#pmsCategories input[type='checkbox']")];
       const passed = all.filter(c => c.checked).length;
@@ -9233,7 +9541,18 @@ export function initFeatureWiring(): void {
       const field = id === "profileFile" ? "avatar_url" : "cover_url";
       const bucket = id === "profileFile" ? "avatars" : "covers";
       const oldUrl = state.profile?.[field] || "";
-      toast("Uploading picture…");
+      const previewBlobUrl = URL.createObjectURL(rawFile);
+      if (id === "profileFile") {
+        const prev = $("profilePreview") as HTMLImageElement | null;
+        if (prev) prev.src = previewBlobUrl;
+      } else {
+        const coverBox = $("coverPreview");
+        if (coverBox) {
+          coverBox.style.backgroundImage = 'url("' + previewBlobUrl + '")';
+          coverBox.innerHTML = "";
+        }
+      }
+      toast("⚡ Picture shown — uploading now…");
       try {
         const prepared = await prepareImageFile(rawFile, id === "profileFile" ? 1024 : 1600, 0.88);
         const path = state.userId + "/" + Date.now() + "-" + prepared.name.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -9251,8 +9570,22 @@ export function initFeatureWiring(): void {
         renderHome();
         renderChatList();
         toast("Picture updated");
-      } catch (err: any) { toast("Upload failed: " + (err?.message || err)); }
+      } catch (err: any) {
+        renderProfile();
+        toast("Upload failed: " + (err?.message || err));
+      } finally {
+        setTimeout(() => URL.revokeObjectURL(previewBlobUrl), 1500);
+      }
     });
+  });
+
+  $("timePicsEmpFilter")?.addEventListener("change", () => {
+    runtime.timePicsEmployeeFilter = val("timePicsEmpFilter") || "all";
+    renderTimePicsGallery();
+  });
+  $("timePicsDateFilter")?.addEventListener("change", () => {
+    runtime.timePicsDateFilter = val("timePicsDateFilter") || "";
+    renderTimePicsGallery();
   });
 
   /* Global action delegation */
@@ -9607,7 +9940,7 @@ export function initFeatureWiring(): void {
     if (!tabBtn) return;
     triggerAndroidHapticTap();
     // Avoid double-animating dedicated tab handlers that already animate their specific panel
-    if (["dtrFillTab", "dtrTimeLogTab", "dtrPrevTab", "notesTab", "recsTab"].includes(tabBtn.id)) return;
+    if (["dtrFillTab", "dtrTimeLogTab", "dtrTimePicsTab", "dtrPrevTab", "notesTab", "recsTab"].includes(tabBtn.id)) return;
     const container = tabBtn.closest(".tabs, .seg");
     const targetPanel =
       (container?.nextElementSibling as HTMLElement | null) ||

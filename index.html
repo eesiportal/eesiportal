@@ -687,6 +687,25 @@ body.compact nav.bottom button span{font-size:16px}
   #app{padding-top:calc(62px + env(safe-area-inset-top))}
 }
 
+/* ===== SEPARATED PICTURE-ONLY TIME IN / OUT GALLERY ===== */
+.time-pics-split{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+@media(max-width:760px){.time-pics-split{grid-template-columns:1fr}}
+.time-pics-col{background:rgba(13,37,77,.62);border:1px solid rgba(56,189,248,.22);border-radius:14px;padding:12px}
+.time-pics-col.in-col{border-color:rgba(34,197,94,.42)}
+.time-pics-col.out-col{border-color:rgba(239,68,68,.42)}
+.time-pics-col-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
+.time-pics-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(122px,1fr));gap:8px}
+.time-pic-tile{position:relative;border-radius:11px;overflow:hidden;border:1px solid rgba(255,255,255,.16);background:#071326;aspect-ratio:1/1;cursor:pointer}
+.time-pic-tile img{width:100%;height:100%;object-fit:cover;display:block}
+.time-pic-cap{position:absolute;left:0;right:0;bottom:0;padding:16px 6px 5px;background:linear-gradient(180deg,transparent,rgba(4,10,24,.92));color:#fff;font-size:10.5px;font-weight:700;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+.time-pics-rep-picker{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.time-pics-rep-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;border:1px solid rgba(56,189,248,.3);background:rgba(30,108,242,.12);font-size:12px;font-weight:600;cursor:pointer}
+.time-pics-rep-chip input{width:auto;margin:0}
+body.light .time-pics-col{background:#ffffff;border-color:rgba(30,108,242,.22)}
+body.light .time-pics-col.in-col{border-color:rgba(22,163,74,.45)}
+body.light .time-pics-col.out-col{border-color:rgba(220,38,38,.45)}
+body.light .time-pics-rep-chip{background:rgba(30,108,242,.08);color:#0f1f3d}
+
 /* ===== LIGHT THEME ONLY ===== */
 body.light{background:linear-gradient(180deg,#f3f7fc,#e4edf8)!important;color:#0f1f3d!important}
 body.light header{background:#ffffff;color:#0f1f3d;border-bottom:1px solid rgba(30,108,242,.22);box-shadow:0 2px 10px rgba(19,35,63,.06)}
@@ -1731,6 +1750,7 @@ body.light .atmos-pill{background:rgba(30,108,242,.1);border-color:rgba(30,108,2
       <div class="dtr-tabs" style="flex-wrap:wrap;">
         <button id="dtrFillTab" class="chip active" type="button" onclick="dtrTab('fill')">✏️ Fill DTR</button>
         <button id="dtrTimeLogTab" class="chip" type="button" onclick="dtrTab('time_log')">📸 Time In / Out</button>
+        <button id="dtrTimePicsTab" class="chip hidden" type="button" onclick="dtrTab('time_pics')">🖼️ Time Photos</button>
         <button id="dtrPrevTab" class="chip" type="button" onclick="dtrTab('preview')">📄 Preview Half-Sheet</button>
         <button id="dtrPayrollBtn" class="chip" type="button" onclick="openPayrollPage()">💵 Payroll / Payslip</button>
       </div>
@@ -1815,6 +1835,27 @@ body.light .atmos-pill{background:rgba(30,108,242,.1);border-color:rgba(30,108,2
           <p id="timeLogStatus" class="muted" role="status" style="margin-bottom:0;"></p>
           <input id="timeLogCam" type="file" class="sr-file-input" accept="image/*" capture="environment">
           <input id="timeLogPhoto" type="file" class="sr-file-input" accept="image/*">
+        </div>
+      </div>
+      <div id="dtrTimePics" class="hidden">
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+            <div>
+              <h2 style="margin:0;">🖼️ Separated Time In &amp; Time Out Pictures</h2>
+              <div class="muted" style="font-size:12px;">Pictures only — visible strictly to Administrator &amp; selected Representative(s).</div>
+            </div>
+            <div class="seg" id="timePicsViewSeg" style="margin:0;">
+              <button type="button" class="active" data-time-pics-view="separated" onclick="setTimePicsView('separated')">⚡ Separated</button>
+              <button type="button" data-time-pics-view="time_in" onclick="setTimePicsView('time_in')">🟢 Time In</button>
+              <button type="button" data-time-pics-view="time_out" onclick="setTimePicsView('time_out')">🔴 Time Out</button>
+            </div>
+          </div>
+          <div id="timePicsRepAccessBox" class="card admin-only hidden" style="padding:10px 12px;margin-bottom:10px;background:rgba(30,108,242,.08);border-color:rgba(56,189,248,.28);"></div>
+          <div class="row" style="margin-bottom:10px;">
+            <div class="field" style="margin-bottom:0;"><label for="timePicsEmpFilter">Employee</label><select id="timePicsEmpFilter"><option value="all">All employees</option></select></div>
+            <div class="field" style="margin-bottom:0;"><label for="timePicsDateFilter">Date (optional)</label><div style="display:flex;gap:6px;"><input id="timePicsDateFilter" type="date"><button class="gray small-btn" type="button" onclick="clearTimePicsDate()">All</button></div></div>
+          </div>
+          <div id="timePicsGallery"></div>
         </div>
       </div>
       <div id="dtrPreview" class="hidden">

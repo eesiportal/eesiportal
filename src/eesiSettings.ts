@@ -1441,7 +1441,7 @@ let lastWeatherUiHtml: {
   label: string;
   placeName: string;
 } | null = null;
-const WEATHER_API_REFRESH_MS = 15000;
+const WEATHER_API_REFRESH_MS = 10000;
 const weatherPlaceCache = new Map<string, string>();
 
 export type TimeSessionSlot = "daytime" | "noontime" | "sunset" | "nighttime" | "midnight";
@@ -1621,8 +1621,8 @@ function renderLiveWeatherCard(): void {
   if (!el) return;
   const atmos = applyAmbientSessionBackground();
   const gpsTag = runtime.hasLiveGpsLock
-    ? `🟢 Live GPS${runtime.lastWeatherAcc ? ` ±${runtime.lastWeatherAcc}m` : ""} · Auto 1s`
-    : "📡 Auto-syncing GPS every 1s…";
+    ? `⚡ Live GPS${runtime.lastWeatherAcc ? ` ±${runtime.lastWeatherAcc}m` : ""} · Auto 1ms`
+    : "📡 Auto-syncing GPS (1ms)…";
 
   let nextHtml = "";
   if (!lastWeatherUiHtml) {
@@ -1769,20 +1769,33 @@ export async function updateLiveWeather(
 
 export function startAutoWeatherSyncLoop(): void {
   clearInterval(weatherAutoSyncTimer);
+  let lastCoordSig = "";
   const syncTick = (forceRun = false) => {
     if (!forceRun && document.hidden) return;
     const cachedGps = hooks.getCachedGps?.();
     if (cachedGps && Number.isFinite(cachedGps.lat) && Number.isFinite(cachedGps.lng)) {
       const moved =
         !runtime.hasLiveGpsLock ||
-        Math.abs(cachedGps.lat - runtime.lastWeatherLat) > 0.0015 ||
-        Math.abs(cachedGps.lng - runtime.lastWeatherLon) > 0.0015;
+        Math.abs(cachedGps.lat - runtime.lastWeatherLat) > 0.001 ||
+        Math.abs(cachedGps.lng - runtime.lastWeatherLon) > 0.001;
       const stale = Date.now() - (runtime.lastWeatherUpdatedAt || 0) >= WEATHER_API_REFRESH_MS;
-      void updateLiveWeather(cachedGps.lat, cachedGps.lng, {
-        fromGps: true,
-        accuracy: cachedGps.acc,
-        force: moved || stale,
-      });
+      const coordSig = `${cachedGps.lat.toFixed(5)},${cachedGps.lng.toFixed(5)},${Math.round(cachedGps.acc || 0)}`;
+      if (forceRun || moved || stale || coordSig !== lastCoordSig) {
+        lastCoordSig = coordSig;
+        runtime.lastWeatherLat = cachedGps.lat;
+        runtime.lastWeatherLon = cachedGps.lng;
+        runtime.hasLiveGpsLock = true;
+        if (cachedGps.acc > 0) runtime.lastWeatherAcc = Math.round(cachedGps.acc);
+        if (forceRun || moved || stale) {
+          void updateLiveWeather(cachedGps.lat, cachedGps.lng, {
+            fromGps: true,
+            accuracy: cachedGps.acc,
+            force: moved || stale,
+          });
+        } else {
+          renderLiveWeatherCard();
+        }
+      }
     } else {
       if ("geolocation" in navigator && !weatherGeoProbeInFlight && Date.now() - lastWeatherGeoProbeAt >= 3000) {
         weatherGeoProbeInFlight = true;
@@ -1799,14 +1812,16 @@ export function startAutoWeatherSyncLoop(): void {
           () => {
             weatherGeoProbeInFlight = false;
           },
-          { enableHighAccuracy: true, maximumAge: 1000, timeout: 4000 }
+          { enableHighAccuracy: true, maximumAge: 0, timeout: 4000 }
         );
       }
-      void updateLiveWeather();
+      if (forceRun || (!lastWeatherUiHtml && !weatherFetchInFlight)) {
+        void updateLiveWeather();
+      }
     }
   };
   syncTick(true);
-  weatherAutoSyncTimer = setInterval(() => syncTick(false), 1000);
+  weatherAutoSyncTimer = setInterval(() => syncTick(false), 1);
 }
 
 /* ==================== PULL TO RELOAD (REMOVED) ==================== */

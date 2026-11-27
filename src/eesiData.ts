@@ -1,5 +1,6 @@
 import {
   $,
+  canViewTimePictures,
   esc,
   face,
   fmtDate,
@@ -11,11 +12,13 @@ import {
   isManager,
   isMissingTableError,
   isSiteMetaNotice,
+  isTimePicAccessNotice,
   isWithinSelfActionWindow,
   parsePayslipFromAppNotice,
   parseSiteMetaFromAppNotice,
   parseStoryFromAppNotice,
   parseTimeLogFromAppNotice,
+  parseTimePicAccessFromAppNotice,
   profileName,
   profileOf,
   rebuildProfileIndex,
@@ -119,7 +122,10 @@ export async function restoreLastView(): Promise<void> {
         b.classList.toggle("active", b.dataset.unitsRegion === runtime.unitsRegion)
       );
     }
-    if (saved.dtrTab) hooks.dtrTab(saved.dtrTab);
+    if (saved.dtrTab) {
+      const safeDtrTab = saved.dtrTab === "time_pics" && !canViewTimePictures() ? "fill" : saved.dtrTab;
+      hooks.dtrTab(safeDtrTab);
+    }
     if (saved.noteTab) hooks.switchNoteTab(saved.noteTab);
     if (saved.reportType) {
       state.reportType = saved.reportType;
@@ -656,6 +662,9 @@ export async function loadAppNotifications(): Promise<void> {
   if (runtime.payslipsTableMissing) {
     syncPayslipsFromAppNotices();
   }
+  if (runtime.appSettingsTableMissing) {
+    syncTimePhotoAccessFromAppNotices();
+  }
   if (!runtime.batchLoading) {
     hooks.renderNotices();
     hooks.renderHome();
@@ -905,6 +914,7 @@ function applyTimeLogRows(rows: any[]): void {
   dtrTimeLogsLoaded = true;
   if (!runtime.batchLoading) {
     hooks.renderTimeLog?.();
+    hooks.renderTimePicsGallery?.();
     hooks.renderHome?.();
   }
   if (incoming.length > 0 && !isWithinSelfActionWindow()) {
@@ -924,6 +934,59 @@ function syncTimeLogsFromAppNotices(): void {
     .map((n: any) => parseTimeLogFromAppNotice(n))
     .filter(Boolean);
   applyTimeLogRows(rows);
+}
+
+function applyAllowedTimePhotoReps(repIds: string[]): void {
+  const normalized = [...new Set((repIds || []).map(x => String(x || "").trim()).filter(Boolean))];
+  runtime.allowedTimePhotoRepIds = normalized;
+  try { localStorage.setItem("eesi-time-pic-reps", JSON.stringify(normalized)); } catch {}
+  if (!runtime.batchLoading) {
+    hooks.updateAccess?.();
+    hooks.renderTimePicsGallery?.();
+  }
+}
+
+function syncTimePhotoAccessFromAppNotices(): void {
+  const notices = (state.appNotifications || [])
+    .filter((n: any) => isTimePicAccessNotice(n))
+    .map((n: any) => parseTimePicAccessFromAppNotice(n))
+    .filter(Boolean) as Array<{ rep_ids: string[]; updated_at: string }>;
+  if (!notices.length) return;
+  notices.sort((a, b) => new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime());
+  applyAllowedTimePhotoReps(notices[0].rep_ids);
+}
+
+export async function loadTimePhotoAccessSetting(): Promise<void> {
+  if (!state.userId) return;
+  if (!runtime.appSettingsTableMissing) {
+    const { data, error } = await runtime.client
+      .from("app_settings")
+      .select("key,value,updated_at")
+      .eq("key", "time_photo_rep_access")
+      .maybeSingle();
+    if (!error) {
+      runtime.appSettingsTableMissing = false;
+      const list = Array.isArray(data?.value?.rep_ids) ? data.value.rep_ids : [];
+      applyAllowedTimePhotoReps(list);
+      return;
+    }
+    if (!isMissingTableError(error)) {
+      console.warn("Could not load app_settings:", error?.message || error);
+      return;
+    }
+    runtime.appSettingsTableMissing = true;
+  }
+  if (!appNotificationsLoaded) {
+    await loadAppNotifications();
+  } else {
+    syncTimePhotoAccessFromAppNotices();
+  }
+  try {
+    const cached = JSON.parse(localStorage.getItem("eesi-time-pic-reps") || "null");
+    if (Array.isArray(cached) && runtime.allowedTimePhotoRepIds.length === 0) {
+      applyAllowedTimePhotoReps(cached);
+    }
+  } catch {}
 }
 
 export async function loadTimeLogs(): Promise<void> {
@@ -1356,6 +1419,7 @@ const RELOADERS: Record<string, () => Promise<any> | any> = {
   user_blocks: () => loadBlockedUsers(),
   stories: () => loadStories(),
   payslips: () => loadPayslips(),
+  app_settings: () => loadTimePhotoAccessSetting(),
   employee_locations: () => { if (isManager()) return loadLiveMap(); },
 };
 const LIVE_TABLES = Object.keys(RELOADERS);
@@ -1396,6 +1460,10 @@ export function stopLocationWatch(): void {
   if (locationHeartbeatTimer) {
     clearInterval(locationHeartbeatTimer);
     locationHeartbeatTimer = null;
+  }
+  if (locationUiSyncTimer) {
+    clearInterval(locationUiSyncTimer);
+    locationUiSyncTimer = null;
   }
 }
 
@@ -1501,12 +1569,14 @@ export async function reloadEverything(): Promise<void> {
 }
 
 /* ==================== LIVE MAP & ALWAYS-ON GPS LOCATION SHARING ==================== */
-const GPS_REFRESH_INTERVAL_MS = 5000;
+const GPS_REFRESH_INTERVAL_MS = 1500;
 let locationHeartbeatTimer: any = null;
+let locationUiSyncTimer: any = null;
 let locationCoarseWatchId: number | null = null;
 let lastLocationUploadAt = 0;
 let lastUploadedAcc = Number.POSITIVE_INFINITY;
 let lastKnownCoords: { lat: number; lng: number; acc: number; updatedAt: number } | null = null;
+let lastUiCoordSyncedAt = 0;
 let locationLifecycleBound = false;
 let locationUploadInFlight = false;
 let lastGestureRetryAt = 0;
@@ -1516,8 +1586,8 @@ function setGpsUiStatus(text: string): void {
   ["locationStatus", "liveMapMyGpsStatus"].forEach(id => {
     const el = $(id);
     if (!el) return;
-    el.classList.remove("hidden");
-    el.textContent = text;
+    if (el.classList.contains("hidden")) el.classList.remove("hidden");
+    if (el.textContent !== text) el.textContent = text;
     if (/allow|blocked|waiting|retry/i.test(text)) {
       el.style.cursor = "pointer";
       el.onclick = () => { void refreshOwnGpsNow(); };
@@ -1559,12 +1629,12 @@ function recordLocalPosition(pos: GeolocationPosition): void {
   }
   lastKnownCoords = { lat, lng, acc, updatedAt: now };
 
-  setGpsUiStatus("🟢 Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Auto-sync 1s");
+  setGpsUiStatus("⚡ Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Auto-sync 1ms");
   const movedForWeather =
     !runtime.hasLiveGpsLock ||
-    Math.abs(lat - runtime.lastWeatherLat) > 0.0015 ||
-    Math.abs(lng - runtime.lastWeatherLon) > 0.0015 ||
-    Date.now() - (runtime.lastWeatherUpdatedAt || 0) >= 15000;
+    Math.abs(lat - runtime.lastWeatherLat) > 0.001 ||
+    Math.abs(lng - runtime.lastWeatherLon) > 0.001 ||
+    Date.now() - (runtime.lastWeatherUpdatedAt || 0) >= 10000;
   if (movedForWeather) {
     void updateLiveWeather(lat, lng, { fromGps: true, accuracy: acc, force: true });
   }
@@ -1574,7 +1644,7 @@ function recordLocalPosition(pos: GeolocationPosition): void {
 async function upsertCoordsToSupabase(lat: number, lng: number, acc: number, force = false): Promise<boolean> {
   if (!state.userId || !runtime.client || locationUploadInFlight) return false;
   const now = Date.now();
-  const hasRecentUpload = lastLocationUploadAt > 0 && now - lastLocationUploadAt < GPS_REFRESH_INTERVAL_MS - 400;
+  const hasRecentUpload = lastLocationUploadAt > 0 && now - lastLocationUploadAt < GPS_REFRESH_INTERVAL_MS - 300;
   const significantlyMoreAccurate = acc > 0 && lastUploadedAcc > 0 && acc <= lastUploadedAcc * 0.65;
   if (!force && hasRecentUpload && !significantlyMoreAccurate) {
     return false;
@@ -1614,7 +1684,7 @@ async function upsertCoordsToSupabase(lat: number, lng: number, acc: number, for
     }
     lastLocationUploadAt = Date.now();
     lastUploadedAcc = acc || lastUploadedAcc;
-    setGpsUiStatus("🟢 Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Auto-sync 1s");
+    setGpsUiStatus("⚡ Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Auto-sync 1ms");
     mergeOwnLocationLocally(lat, lng, isoNow);
     return true;
   } catch (err) {
@@ -1633,7 +1703,7 @@ async function uploadEmployeeCoordinates(pos: GeolocationPosition, isInitial = f
   const { latitude, longitude } = pos.coords;
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
 
-  const dueForRefresh = lastLocationUploadAt === 0 || Date.now() - lastLocationUploadAt >= GPS_REFRESH_INTERVAL_MS - 400;
+  const dueForRefresh = lastLocationUploadAt === 0 || Date.now() - lastLocationUploadAt >= GPS_REFRESH_INTERVAL_MS - 300;
   await upsertCoordsToSupabase(latitude, longitude, acc, isInitial || dueForRefresh);
 }
 
@@ -1675,11 +1745,11 @@ function requestInstantGeoFix(isInitial: boolean): void {
       } else if (!lastKnownCoords) {
         ensureCoarseWatchFallback();
       }
-      if (state.userId && runtime.client && lastKnownCoords && Date.now() - lastLocationUploadAt >= GPS_REFRESH_INTERVAL_MS - 400) {
+      if (state.userId && runtime.client && lastKnownCoords && Date.now() - lastLocationUploadAt >= GPS_REFRESH_INTERVAL_MS - 300) {
         void upsertCoordsToSupabase(lastKnownCoords.lat, lastKnownCoords.lng, lastKnownCoords.acc, true);
       }
     },
-    { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+    { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
   );
 
   navigator.geolocation.getCurrentPosition(
@@ -1700,7 +1770,7 @@ function startLocationWatch(forceRestart = false): void {
     return;
   }
   if (!lastKnownCoords) {
-    setGpsUiStatus("📡 Auto-enabling GPS location…");
+    setGpsUiStatus("📡 Auto-enabling GPS location (1ms sync)…");
   }
 
   if (forceRestart) {
@@ -1720,12 +1790,24 @@ function startLocationWatch(forceRestart = false): void {
           ensureCoarseWatchFallback();
         }
       },
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
     );
   }
 
   if (!lastKnownCoords || lastKnownCoords.acc > 150) {
     ensureCoarseWatchFallback();
+  }
+
+  if (!locationUiSyncTimer) {
+    locationUiSyncTimer = setInterval(() => {
+      if (document.hidden || !lastKnownCoords) return;
+      if (lastUiCoordSyncedAt !== lastKnownCoords.updatedAt) {
+        lastUiCoordSyncedAt = lastKnownCoords.updatedAt;
+        const { lat, lng, acc } = lastKnownCoords;
+        setGpsUiStatus("⚡ Live GPS: " + lat.toFixed(5) + ", " + lng.toFixed(5) + (acc ? " (±" + acc + " m)" : "") + " · Auto-sync 1ms");
+        hooks.evaluateDailySiteGeofence?.();
+      }
+    }, 1);
   }
 
   if (!locationHeartbeatTimer) {
@@ -1762,7 +1844,7 @@ async function refreshOwnGpsNow(): Promise<boolean> {
           { enableHighAccuracy: false, maximumAge: 15000, timeout: 10000 }
         );
       },
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
     );
   });
 
@@ -1895,7 +1977,7 @@ const liveMarkers = new Map<
   string,
   { marker: any; isAdvanced: boolean; infoHtml: string; position: { lat: number; lng: number }; fresh?: boolean; name?: string }
 >();
-const LIVE_REFRESH_MS = 5000;
+const LIVE_REFRESH_MS = 2000;
 const LIVE_STALE_MS = 5 * 60 * 1000;
 
 const BASEMAPS: Record<string, "roadmap" | "hybrid" | "terrain"> = {

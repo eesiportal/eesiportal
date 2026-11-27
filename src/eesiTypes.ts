@@ -164,8 +164,8 @@ export const runtime = {
   APP_REDIRECT_URL: "",
   editingReportId: null as string | null,
   editingExistingUrls: [] as string[],
-  pendingReportFiles: [] as Array<{ file: File; previewUrl: string }>,
-  pendingPmsFiles: [] as Array<{ file: File; previewUrl: string }>,
+  pendingReportFiles: [] as Array<{ file: File; previewUrl: string; prepPromise?: Promise<File> }>,
+  pendingPmsFiles: [] as Array<{ file: File; previewUrl: string; prepPromise?: Promise<File> }>,
   editingAnnouncementId: null as string | null,
   editingScheduleId: null as string | null,
   editingScheduleMeta: null as { seq: number | null; dutyLabel: string; customAssigned: string[] } | null,
@@ -181,9 +181,14 @@ export const runtime = {
   replyingToMsg: null as any,
   currentPage: "home",
   currentNoteTab: "notes" as "notes" | "recs",
-  currentDtrTab: "fill" as "fill" | "time_log" | "preview",
+  currentDtrTab: "fill" as "fill" | "time_log" | "time_pics" | "preview",
   timeLogMode: "time_in" as "time_in" | "time_out",
   timeLogModeManual: false,
+  timePicsSplitFilter: "separated" as "separated" | "time_in" | "time_out",
+  timePicsEmployeeFilter: "all" as string,
+  timePicsDateFilter: "" as string,
+  allowedTimePhotoRepIds: [] as string[],
+  appSettingsTableMissing: false,
   unitsRegion: "ALL",
   unitsLocationFilter: "ALL",
   unitsSideFilter: "ALL",
@@ -310,6 +315,7 @@ export const hooks: Record<string, (...args: any[]) => any> = {
   saveLastView: () => {},
   visibleSchedules: () => [],
   renderTimeLog: () => {},
+  renderTimePicsGallery: () => {},
   loadTimeLogs: async () => {},
   applyWatermark: () => {},
   checkShiftReminders: () => {},
@@ -354,6 +360,13 @@ export function isManager(): boolean {
 }
 export function isAdmin(): boolean {
   return state.role === "admin";
+}
+export function canViewTimePictures(): boolean {
+  if (isAdmin()) return true;
+  if (state.role !== "representative") return false;
+  const allowed = runtime.allowedTimePhotoRepIds || [];
+  if (!allowed.length) return true;
+  return allowed.includes(String(state.userId || ""));
 }
 export function roleLabel(r: string | null | undefined): string {
   return (r && ROLE_LABELS[r]) || r || "—";
@@ -401,7 +414,29 @@ export function isImageFile(f: File): boolean {
   return (f.type || "").startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|heic|heif|avif)$/i.test(f.name || "");
 }
 
-function loadBitmapOrImage(file: File): Promise<{ width: number; height: number; draw: (ctx: CanvasRenderingContext2D, w: number, h: number) => void; close?: () => void }> {
+function loadBitmapOrImage(
+  file: File,
+  resizeOpts?: { resizeWidth?: number; resizeHeight?: number }
+): Promise<{ width: number; height: number; draw: (ctx: CanvasRenderingContext2D, w: number, h: number) => void; close?: () => void }> {
+  if (typeof createImageBitmap === "function" && !/\.heic|\.heif/i.test(file.name || "")) {
+    const opts: ImageBitmapOptions = resizeOpts?.resizeWidth || resizeOpts?.resizeHeight
+      ? { ...resizeOpts, resizeQuality: "medium" }
+      : {};
+    return createImageBitmap(file, opts)
+      .then(bitmap => ({
+        width: bitmap.width || 800,
+        height: bitmap.height || 600,
+        draw: (ctx: CanvasRenderingContext2D, w: number, h: number) => ctx.drawImage(bitmap, 0, 0, w, h),
+        close: () => { try { bitmap.close(); } catch {} },
+      }))
+      .catch(() => loadHtmlImageFallback(file));
+  }
+  return loadHtmlImageFallback(file);
+}
+
+function loadHtmlImageFallback(
+  file: File
+): Promise<{ width: number; height: number; draw: (ctx: CanvasRenderingContext2D, w: number, h: number) => void; close?: () => void }> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
@@ -424,13 +459,17 @@ function loadBitmapOrImage(file: File): Promise<{ width: number; height: number;
 export async function prepareImageFile(file: File, maxDim = 1600, quality = 0.86): Promise<File> {
   if (!isImageFile(file)) return file;
   if (/\.gif$/i.test(file.name) && file.size <= 4 * 1024 * 1024) return file;
+  // Ultra-fast passthrough for standard already-compact JPEG/WebP/PNG files
+  if (file.size <= 2 * 1024 * 1024 && /^image\/(jpeg|png|webp)$/i.test(file.type)) {
+    return file;
+  }
   try {
     const loaded = await loadBitmapOrImage(file);
     try {
       const scale = Math.min(1, maxDim / Math.max(loaded.width, loaded.height));
       const w = Math.max(1, Math.round(loaded.width * scale));
       const h = Math.max(1, Math.round(loaded.height * scale));
-      if (scale === 1 && file.size <= 1.2 * 1024 * 1024 && /^image\/(jpeg|png|webp)$/i.test(file.type)) {
+      if (scale === 1 && file.size <= 2.5 * 1024 * 1024 && /^image\/(jpeg|png|webp)$/i.test(file.type)) {
         return file;
       }
       const canvas = document.createElement("canvas");
@@ -1752,8 +1791,31 @@ export function isPayslipNotice(n: any): boolean {
   return String(n?.body || "").includes("[[PAYSLIP_DATA:");
 }
 
+export function isTimePicAccessNotice(n: any): boolean {
+  return String(n?.body || "").includes("[[TIME_PIC_REPS:");
+}
+
 export function isHiddenSystemNotice(n: any): boolean {
-  return isStoryNotice(n) || isSiteMetaNotice(n) || isPayslipNotice(n);
+  return isStoryNotice(n) || isSiteMetaNotice(n) || isPayslipNotice(n) || isTimePicAccessNotice(n);
+}
+
+export function buildTimePicAccessAppNoticeBody(repIds: string[]): string {
+  return `Time photo access update\n[[TIME_PIC_REPS:${JSON.stringify({ rep_ids: repIds, updated_at: new Date().toISOString() })}]]`;
+}
+
+export function parseTimePicAccessFromAppNotice(n: any): { rep_ids: string[]; updated_at: string } | null {
+  const raw = String(n?.body || "");
+  const match = raw.match(/\[\[TIME_PIC_REPS:([\s\S]*?)\]\]/);
+  if (!match) return null;
+  try {
+    const p = JSON.parse(match[1]);
+    return {
+      rep_ids: Array.isArray(p?.rep_ids) ? p.rep_ids.map((x: any) => String(x)).filter(Boolean) : [],
+      updated_at: String(p?.updated_at || n?.created_at || ""),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function buildPayslipAppNoticeBody(rec: Omit<PayslipRecord, "id">): string {

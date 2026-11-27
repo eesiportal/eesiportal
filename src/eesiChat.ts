@@ -450,26 +450,32 @@ export async function sendMessage(text: string, file: File | null): Promise<void
   if (!text && !file) text = "👍";
   if (!state.activeThread) { toast("Open a chat first"); return; }
 
-  const tempId = "temp-" + Date.now();
+  const tempId = "temp-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
   const replyId = runtime.replyingToMsg ? Number(runtime.replyingToMsg.id) : null;
-  const tempMsg = {
+  const localPreviewUrl = file ? URL.createObjectURL(file) : "";
+  const isImgAttachment = file ? isImageFile(file) : false;
+  const tempMsg: any = {
     id: tempId,
     thread_id: state.activeThread,
     user_id: state.userId,
     sender_name: state.profile?.full_name || state.email,
-    body: text || (file ? "Uploading attachment..." : ""),
+    body: text,
+    attachment_name: file?.name || null,
+    attachment_type: file ? (file.type || (isImgAttachment ? "image/jpeg" : "file")) : null,
+    localPreviewUrl,
     created_at: new Date().toISOString(),
     isOptimistic: true,
     reply_to_id: replyId,
   };
   state.messages.push(tempMsg);
   renderMessages();
+  if (file) cancelReply();
 
   try {
     let attachment: Record<string, any> = {};
     if (file) {
       let uploadFile = file;
-      if (isImageFile(uploadFile)) {
+      if (isImgAttachment) {
         uploadFile = await prepareImageFile(uploadFile, 1600, 0.85);
       }
       if (uploadFile.size > MAX_FILE_MB * 1024 * 1024) throw new Error("File too large — max " + MAX_FILE_MB + "MB");
@@ -477,7 +483,7 @@ export async function sendMessage(text: string, file: File | null): Promise<void
       const { error: upErr } = await runtime.client.storage.from("chat").upload(path, uploadFile, { upsert: false, contentType: uploadFile.type || undefined });
       if (upErr) throw upErr;
       const { data: pub } = runtime.client.storage.from("chat").getPublicUrl(path);
-      attachment = { attachment_url: pub.publicUrl, attachment_name: uploadFile.name, attachment_type: uploadFile.type || (isImageFile(uploadFile) ? "image/jpeg" : "file") };
+      attachment = { attachment_url: pub.publicUrl, attachment_name: uploadFile.name, attachment_type: uploadFile.type || (isImgAttachment ? "image/jpeg" : "file") };
     }
     const payload = {
       thread_id: state.activeThread,
@@ -498,6 +504,8 @@ export async function sendMessage(text: string, file: File | null): Promise<void
     toast("Could not send: " + error.message);
     state.messages = state.messages.filter(m => String(m.id) !== tempId);
     renderMessages();
+  } finally {
+    if (localPreviewUrl) setTimeout(() => URL.revokeObjectURL(localPreviewUrl), 1500);
   }
 }
 
@@ -519,16 +527,17 @@ export function renderMessages(): void {
   box.innerHTML = filtered.map(m => {
     const mine = String(m.user_id) === String(state.userId);
     const isDeletedAll = !!m.deleted_at;
-    const time = fmtDate(m.created_at);
+    const time = fmtDate(m.created_at) + (m.isOptimistic ? " · ⚡" : "");
     const avatar = (!mine && t && t.kind === "group") ? face(profileOf(m.user_id)) : "";
     const displayName = nicknames[m.user_id] || m.sender_name || "Member";
     const sender = mine ? "" : '<div class="muted" style="font-size:11px;margin-bottom:2px;">' + esc(displayName) + "</div>";
     let attach = "";
-    if (!isDeletedAll && m.attachment_url) {
-      const url = safeUrl(m.attachment_url);
+    if (!isDeletedAll && (m.attachment_url || m.localPreviewUrl)) {
+      const url = m.localPreviewUrl ? String(m.localPreviewUrl) : safeUrl(m.attachment_url);
       if (url) {
-        attach = (m.attachment_type || "").startsWith("image/")
-          ? '<img class="chat-img" src="' + esc(url) + '" alt="' + esc(m.attachment_name || "Photo") + '" data-preview-url="' + esc(url) + '" data-preview-label="' + esc(m.attachment_name || "Photo") + '">'
+        const isImg = (m.attachment_type || "").startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|heic|heif|avif)(\?|$)/i.test(m.attachment_name || "");
+        attach = isImg
+          ? '<img class="chat-img" src="' + esc(url) + '" alt="' + esc(m.attachment_name || "Photo") + '"' + (!m.isOptimistic ? ' data-preview-url="' + esc(url) + '" data-preview-label="' + esc(m.attachment_name || "Photo") + '"' : "") + ">"
           : '<a href="' + esc(url) + '" target="_blank" rel="noopener" style="color:inherit;">📎 ' + esc(m.attachment_name || "File") + "</a>";
       }
     }
@@ -1359,29 +1368,50 @@ export async function postStory(): Promise<void> {
     return;
   }
 
-  const btn = $("postStoryBtn") as HTMLButtonElement | null;
-  const st = $("storyComposerStatus");
-  if (btn) btn.disabled = true;
-  if (st) st.textContent = "Publishing My Day story…";
+  let initialMediaType: "image" | "video" | "text" = "text";
+  if (rawFile) {
+    const isVid = (rawFile.type || "").startsWith("video/") || isVideoUrl(rawFile.name);
+    if (isVid) {
+      if (rawFile.size > 45 * 1024 * 1024) { toast("Video reel max size is 45 MB."); return; }
+      initialMediaType = "video";
+    } else if (isImageFile(rawFile)) {
+      initialMediaType = "image";
+    } else {
+      toast("Please select an image or video file.");
+      return;
+    }
+  }
+
+  const senderName = state.profile?.full_name || state.email || "Member";
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const localMediaUrl = rawFile ? URL.createObjectURL(rawFile) : null;
+  const tempStoryId = "temp-story-" + Date.now();
+  const tempStory: any = {
+    id: tempStoryId,
+    user_id: state.userId,
+    sender_name: senderName,
+    caption: caption || null,
+    media_url: null,
+    localMediaUrl,
+    media_type: initialMediaType,
+    bg_style: bgStyle,
+    expires_at: expiresAt,
+    created_at: new Date().toISOString(),
+    isOptimistic: true,
+  };
+
+  if (fileEl) fileEl.value = "";
+  setVal("storyCaption", "");
+  state.stories = [tempStory, ...(state.stories || [])];
+  renderChatList();
+  closeStoryComposer();
+  toast("⚡ My Day story sent!");
   suppressNotifications(5000);
 
   try {
     let mediaUrl: string | null = null;
-    let mediaType: "image" | "video" | "text" = "text";
-
     if (rawFile) {
-      let uploadFile = rawFile;
-      const isVid = (rawFile.type || "").startsWith("video/") || isVideoUrl(rawFile.name);
-      if (!isVid && isImageFile(rawFile)) {
-        uploadFile = await prepareImageFile(rawFile, 1440, 0.86);
-        mediaType = "image";
-      } else if (isVid) {
-        if (rawFile.size > 45 * 1024 * 1024) throw new Error("Video reel max size is 45 MB.");
-        mediaType = "video";
-      } else {
-        throw new Error("Please select an image or video file.");
-      }
-
+      const uploadFile = initialMediaType === "image" ? await prepareImageFile(rawFile, 1440, 0.86) : rawFile;
       const path = `${state.userId}/stories/${Date.now()}-${uploadFile.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
       const { error: upErr } = await runtime.client.storage
         .from("chat")
@@ -1391,9 +1421,6 @@ export async function postStory(): Promise<void> {
       mediaUrl = pub.publicUrl;
     }
 
-    const senderName = state.profile?.full_name || state.email || "Member";
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-
     let savedViaFallback = runtime.storiesTableMissing;
     if (!savedViaFallback) {
       const { error } = await runtime.client.from("stories").insert({
@@ -1401,7 +1428,7 @@ export async function postStory(): Promise<void> {
         sender_name: senderName,
         caption: caption || null,
         media_url: mediaUrl,
-        media_type: mediaType,
+        media_type: initialMediaType,
         bg_style: bgStyle,
         expires_at: expiresAt,
       });
@@ -1416,12 +1443,12 @@ export async function postStory(): Promise<void> {
     }
 
     if (savedViaFallback) {
-      const body = buildStoryAppNoticeBody(caption || (mediaType === "video" ? "Shared a Reel" : "Shared a My Day photo"), {
+      const body = buildStoryAppNoticeBody(caption || (initialMediaType === "video" ? "Shared a Reel" : "Shared a My Day photo"), {
         user_id: state.userId,
         sender_name: senderName,
         caption,
         media_url: mediaUrl,
-        media_type: mediaType,
+        media_type: initialMediaType,
         bg_style: bgStyle,
         expires_at: expiresAt,
       });
@@ -1433,14 +1460,15 @@ export async function postStory(): Promise<void> {
       await loadAppNotifications();
     }
 
+    state.stories = (state.stories || []).filter(s => String(s.id) !== tempStoryId);
     await loadStories();
-    closeStoryComposer();
-    toast("My Day story posted!");
+    renderChatList();
   } catch (err: any) {
-    toast("Story failed: " + (err?.message || err));
-    if (st) st.textContent = "Failed: " + (err?.message || err);
+    state.stories = (state.stories || []).filter(s => String(s.id) !== tempStoryId);
+    renderChatList();
+    toast("Story upload failed: " + (err?.message || err));
   } finally {
-    if (btn) btn.disabled = false;
+    if (localMediaUrl) setTimeout(() => URL.revokeObjectURL(localMediaUrl), 1500);
   }
 }
 
@@ -1472,8 +1500,8 @@ function renderStoryViewerSlide(): void {
     delBtn.setAttribute("data-story-id", String(s.id));
   }
 
+  const u = safeUrl(s.media_url) || (s.localMediaUrl ? String(s.localMediaUrl) : null);
   if (mediaEl) {
-    const u = safeUrl(s.media_url);
     if (u && (s.media_type === "video" || isVideoUrl(u))) {
       mediaEl.innerHTML = `<video src="${esc(u)}" controls autoplay playsinline loop style="width:100%;max-height:62vh;border-radius:12px;background:#000;"></video>`;
     } else if (u) {
@@ -1487,7 +1515,7 @@ function renderStoryViewerSlide(): void {
     }
   }
   if (capEl) {
-    const hasMedia = !!safeUrl(s.media_url);
+    const hasMedia = !!u;
     capEl.textContent = hasMedia && s.caption ? s.caption : "";
     capEl.classList.toggle("hidden", !(hasMedia && s.caption));
   }
